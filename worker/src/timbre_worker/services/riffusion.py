@@ -21,20 +21,20 @@ else:  # pragma: no cover
     TORCH_IMPORT_ERROR = None
 
 try:  # pragma: no cover
-    from riffusion.spectrogram_image_converter import SpectrogramImageConverter
-except Exception as exc:  # noqa: BLE001
-    SpectrogramImageConverter = None  # type: ignore[misc,assignment]
-    SPECTROGRAM_IMPORT_ERROR = exc
-else:  # pragma: no cover
-    SPECTROGRAM_IMPORT_ERROR = None
-
-try:  # pragma: no cover
     import soundfile as sf
 except Exception as exc:  # noqa: BLE001
     sf = None  # type: ignore[assignment]
     SOUND_FILE_IMPORT_ERROR = exc
 else:  # pragma: no cover
     SOUND_FILE_IMPORT_ERROR = None
+
+try:  # pragma: no cover
+    import librosa
+except Exception as exc:  # noqa: BLE001
+    librosa = None  # type: ignore[assignment]
+    LIBROSA_IMPORT_ERROR = exc
+else:  # pragma: no cover
+    LIBROSA_IMPORT_ERROR = None
 
 
 DEFAULT_GUIDANCE_SCALE = 7.0
@@ -64,9 +64,6 @@ class RiffusionService:
         self._placeholder_reasons: Dict[str, str] = {}
         self._pipeline_lock = asyncio.Lock()
         self._device = self._select_device()
-        self._spectrogram_converter: Optional[SpectrogramImageConverter] = (
-            SpectrogramImageConverter() if SpectrogramImageConverter is not None else None
-        )
 
     @property
     def default_model_id(self) -> str:
@@ -326,8 +323,8 @@ class RiffusionService:
     def _missing_dependency_reason(self) -> str:
         if torch is None:
             return f"torch_unavailable:{TORCH_IMPORT_ERROR}"
-        if SpectrogramImageConverter is None:
-            return f"spectrogram_converter_unavailable:{SPECTROGRAM_IMPORT_ERROR}"
+        if librosa is None:
+            return f"librosa_unavailable:{LIBROSA_IMPORT_ERROR}"
         return "unknown"
 
     def _audio_from_images(
@@ -335,17 +332,47 @@ class RiffusionService:
         result: Any,
         default_sample_rate: int,
     ) -> Tuple[np.ndarray, int]:
-        if self._spectrogram_converter is None:
-            raise GenerationFailure(
-                f"spectrogram_converter_unavailable:{SPECTROGRAM_IMPORT_ERROR}"
-            )
-
         images = getattr(result, "images", None)
         if not images:
             raise GenerationFailure("pipeline returned empty audio result")
 
         image = images[0]
-        segment = self._spectrogram_converter.audio_from_spectrogram_image(image)
-        waveform = np.asarray(segment.samples, dtype=np.float32)
-        sample_rate = getattr(segment, "sample_rate", default_sample_rate)
+        if hasattr(image, "convert"):
+            image_array = np.asarray(image.convert("L"), dtype=np.float32)
+        else:
+            array = np.asarray(image, dtype=np.float32)
+            if array.ndim == 3:
+                image_array = array[..., 0]
+            else:
+                image_array = array
+
+        return self._mel_spectrogram_to_audio(image_array, default_sample_rate)
+
+    def _mel_spectrogram_to_audio(
+        self,
+        image_array: np.ndarray,
+        sample_rate: int,
+    ) -> Tuple[np.ndarray, int]:
+        if librosa is None:
+            raise GenerationFailure(f"librosa_unavailable:{LIBROSA_IMPORT_ERROR}")
+
+        image_norm = image_array / 255.0
+        log_mel = image_norm * 80.0 - 80.0
+        mel = librosa.db_to_power(log_mel)
+        mel = np.flipud(mel)
+
+        n_fft = 2048
+        hop_length = 512
+        waveform = librosa.feature.inverse.mel_to_audio(
+            mel,
+            sr=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=n_fft,
+            n_iter=64,
+            power=1.0,
+        )
+        waveform = waveform.astype(np.float32)
+        if waveform.ndim == 1:
+            waveform = np.stack([waveform, waveform], axis=0)
         return waveform, sample_rate

@@ -3,7 +3,7 @@ name = "timbre-worker"
 version = "0.1.0"
 description = "Audio generation service for the Timbre CLI."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = { text = "Proprietary" }
 authors = [{ name = "Timbre Team" }]
 dependencies = [
@@ -33,7 +33,6 @@ inference = [
   "numpy>=1.26",
   "transformers>=4.39",
   "scipy>=1.11",
-  "riffusion>=0.0.4",
   "librosa>=0.10"
 ]
 

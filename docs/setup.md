@@ -16,7 +16,11 @@ cd tamber
 make setup
 ```
 
-`make setup` installs Rust dependencies and synchronises the Python worker’s environment using `uv`.
+`make setup` installs Rust dependencies and synchronises the Python worker’s environment using `uv`. If `uv` reports Python 3.14, pin to a supported runtime first:
+
+```bash
+uv python pin 3.12
+```
 
 ## Running the Services
 

@@ -10,7 +10,11 @@ Hybrid Ratatui (Rust) and FastAPI (Python) system for text-to-music experimentat
 ## Initial Setup
 
 1. Review the direction in `ROADMAP.md`, `PHASE0_PLAN.md`, and `docs/architecture.md`.
-2. Install dependencies via `make setup` (runs `uv sync --project worker` and `cargo fetch`).
+2. Install dependencies via `make setup` (runs `uv sync --project worker` and `cargo fetch`). If `uv` selects Python 3.14, pin to a supported runtime first:
+
+   ```bash
+   uv python pin 3.12
+   ```
 
    ```bash
    make setup
