@@ -53,6 +53,8 @@ uv pip install '.[inference]'
 uv run python ../scripts/riffusion_smoke.py
 ```
 
+The inference extras include `librosa` and `matplotlib` for spectrogram reconstruction; make sure the install succeeds before testing audio.
+
 Ensure PyTorch detects the Metal (MPS) backend where available:
 
 ```python

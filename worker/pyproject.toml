@@ -11,7 +11,8 @@ dependencies = [
   "uvicorn[standard]>=0.27",
   "pydantic>=2.6",
   "pydantic-settings>=2.2",
-  "loguru>=0.7"
+  "loguru>=0.7",
+  "numpy>=1.26"
 ]
 
 [project.optional-dependencies]

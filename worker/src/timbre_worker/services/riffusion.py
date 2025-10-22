@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -56,7 +57,12 @@ class PipelineHandle:
 class RiffusionService:
     """Service responsible for loading Riffusion pipelines and generating audio."""
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        pipeline_loader: Optional[Callable[[str], PipelineHandle]] = None,
+    ):
         self._settings = settings
         self._artifact_root = settings.artifact_root
         self._default_model_id = settings.default_model_id
@@ -64,6 +70,7 @@ class RiffusionService:
         self._placeholder_reasons: Dict[str, str] = {}
         self._pipeline_lock = asyncio.Lock()
         self._device = self._select_device()
+        self._pipeline_loader = pipeline_loader
 
     @property
     def default_model_id(self) -> str:
@@ -128,7 +135,10 @@ class RiffusionService:
             return None, reason
 
         try:
-            pipeline_handle = await asyncio.to_thread(self._load_pipeline, resolved)
+            if self._pipeline_loader is None:
+                pipeline_handle = await asyncio.to_thread(self._load_pipeline, resolved)
+            else:
+                pipeline_handle = await asyncio.to_thread(self._pipeline_loader, resolved)
         except GenerationFailure as exc:
             logger.warning("Pipeline prerequisites missing: %s", exc)
             async with self._pipeline_lock:
@@ -236,6 +246,7 @@ class RiffusionService:
             "sample_rate": sample_rate,
             "guidance_scale": guidance_scale,
             "placeholder": False,
+            "prompt_hash": self._prompt_hash(request.prompt),
         }
         if request.seed is not None:
             extras["seed"] = request.seed
@@ -273,6 +284,7 @@ class RiffusionService:
             "guidance_scale": DEFAULT_GUIDANCE_SCALE,
             "placeholder": True,
             "placeholder_reason": reason,
+            "prompt_hash": self._prompt_hash(prompt),
         }
 
         return artifact_path, extras
@@ -376,3 +388,7 @@ class RiffusionService:
         if waveform.ndim == 1:
             waveform = np.stack([waveform, waveform], axis=0)
         return waveform, sample_rate
+
+    def _prompt_hash(self, prompt: str) -> str:
+        digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
+        return digest.hexdigest()

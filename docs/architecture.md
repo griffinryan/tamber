@@ -40,7 +40,7 @@
 
 ### 3.2 Python Worker (`worker/`)
 - **Framework**: `FastAPI` for HTTP APIs; `uvicorn` ASGI server. WebSocket endpoints reserved for future.
-- **Inference**: `diffusers`-based Riffusion pipeline with PyTorch (`torch>=2.x`) using MPS backend (`mps` device) on Apple Silicon; CPU fallback using `float32` pipeline. Missing dependencies trigger a deterministic placeholder waveform so the CLI still surfaces artifacts.
+- **Inference**: `diffusers`-based Riffusion pipeline with PyTorch (`torch>=2.x`) using MPS backend (`mps` device) on Apple Silicon; CPU fallback using `float32` pipeline. Generated spectrogram images are converted back to stereo waveform via an in-repo `SpectrogramImageConverter` (librosa + matplotlib). Missing dependencies trigger a deterministic placeholder waveform so the CLI still surfaces artifacts.
 - **Job handling**: `JobManager` orchestrates async tasks, updating progress for queued/running jobs and persisting `GenerationArtifact` metadata once complete.
 - **Artifacts**: `soundfile` or `torchaudio` writes WAV to `~/Music/Timbre/<job_id>.wav`. Metadata (prompt, seed, duration) stored in JSON alongside audio.
 - **Config**: `pydantic` models define requests/responses, aligning with Rust `serde` structs.

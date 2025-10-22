@@ -1,9 +1,10 @@
 use crate::{
     config::AppConfig,
-    types::{GenerationArtifact, GenerationStatus, JobState},
+    types::{GenerationArtifact, GenerationMetadata, GenerationStatus, JobState},
 };
 use chrono::{DateTime, Utc};
 use indexmap::{map::Iter, IndexMap};
+use serde_json::Value;
 use std::path::PathBuf;
 
 const MAX_CHAT_ENTRIES: usize = 200;
@@ -122,18 +123,9 @@ impl AppState {
                     job.status = status.clone();
                     job.artifact = Some(artifact.clone());
                     self.focused_job = Some(status.job_id.clone());
-                    self.push_status_line(format!("Job {} completed", status.job_id));
-                    let metadata = &artifact.descriptor.metadata;
-                    self.append_chat(
-                        ChatRole::Worker,
-                        format!(
-                            "Job {} completed ({}, {}s) → {}",
-                            status.job_id,
-                            metadata.model_id,
-                            metadata.duration_seconds,
-                            artifact.local_path.display()
-                        ),
-                    );
+                    let (status_line, chat_line) = completion_messages(&status, &artifact);
+                    self.push_status_line(status_line);
+                    self.append_chat(ChatRole::Worker, chat_line);
                 }
             }
         }
@@ -213,4 +205,135 @@ pub enum AppEvent {
 pub enum AppCommand {
     SubmitPrompt { prompt: String },
     PlayJob { job_id: String },
+}
+
+fn completion_messages(status: &GenerationStatus, artifact: &LocalArtifact) -> (String, String) {
+    let metadata = &artifact.descriptor.metadata;
+    let extras = metadata.extras.as_object();
+
+    let backend =
+        extras.and_then(|map| map.get("backend")).and_then(Value::as_str).unwrap_or("unknown");
+    let placeholder =
+        extras.and_then(|map| map.get("placeholder")).and_then(Value::as_bool).unwrap_or(false);
+    let guidance = extras.and_then(|map| map.get("guidance_scale")).and_then(Value::as_f64);
+    let sample_rate = extras.and_then(|map| map.get("sample_rate")).and_then(Value::as_u64);
+    let placeholder_reason =
+        extras.and_then(|map| map.get("placeholder_reason")).and_then(Value::as_str);
+    let prompt_hash = extras.and_then(|map| map.get("prompt_hash")).and_then(Value::as_str);
+
+    let mut parts: Vec<String> = Vec::new();
+
+    if placeholder {
+        let reason = placeholder_reason.unwrap_or("unknown");
+        parts.push(format!("placeholder via {backend}"));
+        parts.push(format!("reason: {reason}"));
+    } else {
+        parts.push(backend.to_string());
+        if let Some(sr) = sample_rate {
+            parts.push(format!("{sr} Hz"));
+        }
+    }
+
+    parts.push(format!("{}s", metadata.duration_seconds));
+
+    if let Some(cfg) = guidance {
+        parts.push(format!("cfg {:.1}", cfg));
+    }
+
+    if let Some(hash) = prompt_hash {
+        parts.push(format!("hash {hash}"));
+    }
+
+    let detail = parts.join(", ");
+    let status_line = format!("Job {} completed ({detail})", status.job_id);
+    let chat_line =
+        format!("Job {} completed ({detail}) → {}", status.job_id, artifact.local_path.display());
+    (status_line, chat_line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use serde_json::json;
+
+    #[test]
+    fn completion_messages_real_pipeline() {
+        let status = GenerationStatus {
+            job_id: "job123".into(),
+            state: JobState::Succeeded,
+            progress: 1.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        let metadata = GenerationMetadata {
+            prompt: "dreamy pianos".into(),
+            seed: Some(42),
+            model_id: "riffusion-v1".into(),
+            duration_seconds: 8,
+            extras: json!({
+                "backend": "riffusion",
+                "placeholder": false,
+                "guidance_scale": 7.0,
+                "sample_rate": 44100,
+                "prompt_hash": "abc123ef"
+            }),
+        };
+
+        let artifact = LocalArtifact {
+            descriptor: GenerationArtifact {
+                job_id: "job123".into(),
+                artifact_path: "/tmp/job123.wav".into(),
+                metadata,
+            },
+            local_path: PathBuf::from("/tmp/job123/job123.wav"),
+        };
+
+        let (status_line, chat_line) = completion_messages(&status, &artifact);
+        assert!(status_line.contains("riffusion"));
+        assert!(status_line.contains("8s"));
+        assert!(status_line.contains("44100 Hz"));
+        assert!(status_line.contains("hash abc123ef"));
+        assert!(chat_line.contains("→ /tmp/job123/job123.wav"));
+    }
+
+    #[test]
+    fn completion_messages_placeholder_pipeline() {
+        let status = GenerationStatus {
+            job_id: "job456".into(),
+            state: JobState::Succeeded,
+            progress: 1.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        let metadata = GenerationMetadata {
+            prompt: "stormy guitars".into(),
+            seed: None,
+            model_id: "riffusion-v1".into(),
+            duration_seconds: 6,
+            extras: json!({
+                "backend": "riffusion",
+                "placeholder": true,
+                "placeholder_reason": "pipeline_unavailable",
+                "prompt_hash": "deadbeef"
+            }),
+        };
+
+        let artifact = LocalArtifact {
+            descriptor: GenerationArtifact {
+                job_id: "job456".into(),
+                artifact_path: "/tmp/job456.wav".into(),
+                metadata,
+            },
+            local_path: PathBuf::from("/tmp/job456/job456.wav"),
+        };
+
+        let (status_line, chat_line) = completion_messages(&status, &artifact);
+        assert!(status_line.contains("placeholder via riffusion"));
+        assert!(status_line.contains("reason: pipeline_unavailable"));
+        assert!(!status_line.contains("Hz"));
+        assert!(chat_line.contains("hash deadbeef"));
+    }
 }

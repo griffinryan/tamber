@@ -165,6 +165,34 @@ fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'stat
             artifact.local_path.display().to_string(),
             Style::default().fg(Color::Green),
         ));
+        if let Some(extras) = artifact.descriptor.metadata.extras.as_object() {
+            if extras.get("placeholder").and_then(|value| value.as_bool()).unwrap_or(false) {
+                spans.push(Span::raw(" · "));
+                spans.push(Span::styled("placeholder", Style::default().fg(Color::Magenta)));
+                if let Some(reason) =
+                    extras.get("placeholder_reason").and_then(|value| value.as_str())
+                {
+                    spans.push(Span::raw(" · "));
+                    spans.push(Span::styled(
+                        truncate_text(reason, 18),
+                        Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                    ));
+                }
+            } else if let Some(backend) = extras.get("backend").and_then(|value| value.as_str()) {
+                spans.push(Span::raw(" · "));
+                spans.push(Span::styled(
+                    truncate_text(backend, 16),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::DIM),
+                ));
+            }
+            if let Some(hash) = extras.get("prompt_hash").and_then(|value| value.as_str()) {
+                spans.push(Span::raw(" · "));
+                spans.push(Span::styled(
+                    format!("hash {}", truncate_text(hash, 12)),
+                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                ));
+            }
+        }
     }
 
     ListItem::new(Line::from(spans))
