@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -23,12 +23,16 @@ class GenerationRequest(BaseModel):
     scheduler: Optional[str] = Field(default=None, max_length=64)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(tz=UTC)
+
+
 class GenerationStatus(BaseModel):
     job_id: str
     state: JobState
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
     message: Optional[str] = None
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=_utc_now)
 
 
 class GenerationMetadata(BaseModel):

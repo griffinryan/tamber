@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum JobState {
     Queued,
@@ -11,7 +12,13 @@ pub enum JobState {
     Failed,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl JobState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationRequest {
     pub prompt: String,
     pub seed: Option<u64>,
@@ -21,16 +28,24 @@ pub struct GenerationRequest {
     pub scheduler: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationStatus {
     pub job_id: String,
     pub state: JobState,
+    #[serde(default)]
     pub progress: f32,
+    #[serde(default)]
     pub message: Option<String>,
-    pub updated_at: String,
+    pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl GenerationStatus {
+    pub fn is_terminal(&self) -> bool {
+        self.state.is_terminal()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationMetadata {
     pub prompt: String,
     pub seed: Option<u64>,
@@ -40,7 +55,7 @@ pub struct GenerationMetadata {
     pub extras: serde_json::Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationArtifact {
     pub job_id: String,
     pub artifact_path: String,

@@ -1,56 +1,51 @@
-from uuid import uuid4
+from fastapi import APIRouter, HTTPException, Request
 
-from fastapi import APIRouter, HTTPException
+from typing import cast
 
-from .models import (
-    GenerationArtifact,
-    GenerationMetadata,
-    GenerationRequest,
-    GenerationStatus,
-    JobState,
-)
+from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
+from .jobs import JobManager
+from .settings import Settings
 
 router = APIRouter()
 
-_IN_MEMORY_JOBS: dict[str, GenerationStatus] = {}
+
+def get_job_manager(request: Request) -> JobManager:
+    return cast(JobManager, request.app.state.job_manager)
 
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health(request: Request) -> dict[str, str]:
+    settings = cast(Settings, request.app.state.settings)
+    return {
+        "status": "ok",
+        "default_model_id": settings.default_model_id,
+        "artifact_root": str(settings.artifact_root),
+    }
 
 
 @router.post("/generate", response_model=GenerationStatus)
-async def generate(request: GenerationRequest) -> GenerationStatus:
-    job_id = str(uuid4())
-    status = GenerationStatus(job_id=job_id, state=JobState.QUEUED)
-    _IN_MEMORY_JOBS[job_id] = status
-    # TODO: enqueue background worker for actual generation
+async def generate(payload: GenerationRequest, request: Request) -> GenerationStatus:
+    manager = get_job_manager(request)
+    status = await manager.enqueue(payload)
     return status
 
 
 @router.get("/status/{job_id}", response_model=GenerationStatus)
-async def status(job_id: str) -> GenerationStatus:
-    try:
-        return _IN_MEMORY_JOBS[job_id]
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="job not found") from exc
+async def status(job_id: str, request: Request) -> GenerationStatus:
+    manager = get_job_manager(request)
+    status = await manager.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return status
 
 
 @router.get("/artifact/{job_id}", response_model=GenerationArtifact)
-async def artifact(job_id: str) -> GenerationArtifact:
-    status = _IN_MEMORY_JOBS.get(job_id)
+async def artifact(job_id: str, request: Request) -> GenerationArtifact:
+    manager = get_job_manager(request)
+    status = await manager.get_status(job_id)
     if status is None or status.state != JobState.SUCCEEDED:
         raise HTTPException(status_code=404, detail="artifact not available")
-    # Stub artifact metadata
-    metadata = GenerationMetadata(
-        prompt="stub",
-        seed=None,
-        model_id="riffusion-v1",
-        duration_seconds=8,
-    )
-    return GenerationArtifact(
-        job_id=job_id,
-        artifact_path=f"/tmp/{job_id}.wav",
-        metadata=metadata,
-    )
+    artifact = await manager.get_artifact(job_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact not available")
+    return artifact

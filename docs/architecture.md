@@ -33,6 +33,7 @@
 - **Runtime**: `tokio` handles async networking and background tasks.
 - **UI**: Ratatui defines layout panes (chat timeline, prompt editor, status sidebar, library view). `crossterm` manages terminal IO.
 - **State Management**: `AppState` struct tracks active prompt, queued jobs, history, and configuration.
+- **Command Processing**: Background `tokio` tasks submit prompts, poll worker status, copy artifacts into `~/Music/Timbre/<job_id>/`, and push events/notifications back into the UI loop.
 - **Networking**: `reqwest` client submits generation requests and polls status endpoints. Job updates drive UI notifications.
 - **Playback**: `rodio` loads generated WAVs. For MP3 playback (future), integrate `symphonia`.
 - **Logging**: `tracing` + `tracing-subscriber` for structured logs. Configurable verbosity via CLI flags.
@@ -40,10 +41,11 @@
 ### 3.2 Python Worker (`worker/`)
 - **Framework**: `FastAPI` for HTTP APIs; `uvicorn` ASGI server. WebSocket endpoints reserved for future.
 - **Inference**: `diffusers`-based Riffusion pipeline with PyTorch (`torch>=2.x`) using MPS backend (`mps` device) on Apple Silicon; CPU fallback using `float32` pipeline.
-- **Job handling**: In-memory queue tracks job state (queued → running → complete/failed). For Phase 0, synchronous inference executes in request thread; future phases will introduce background tasks/workers.
+- **Job handling**: `JobManager` orchestrates async tasks, updating progress for queued/running jobs and persisting `GenerationArtifact` metadata once complete.
 - **Artifacts**: `soundfile` or `torchaudio` writes WAV to `~/Music/Timbre/<session>/<job_id>.wav`. Metadata (prompt, seed, duration) stored in JSON alongside audio.
 - **Config**: `pydantic` models define requests/responses, aligning with Rust `serde` structs.
-- **Logging**: `loguru` or standard logging with structured output, optionally mirrored to file for diagnostics.
+- **Logging**: `loguru` surfaces structured events; worker annotates failures and dependency fallbacks for observability.
+- **Degradation**: When inference dependencies are missing or fail to load, the service emits deterministic placeholder audio and records the `placeholder_reason` in metadata.
 
 ### 3.3 Shared Schemas
 - **GenerationRequest**: `prompt: str`, `seed: Optional[int]`, `duration_seconds: int`, `model_id: str`, `cfg_scale: Optional[float]`, `scheduler: Optional[str]`.
@@ -64,6 +66,7 @@
   - `config.toml` — user settings (default model, theme, output dir).
   - `history.jsonl` — append-only log of prompts and results.
   - `sessions/<session_id>.json` — optional detailed session state.
+  - Override location with `TIMBRE_CONFIG_PATH`; individual keys also respect env overrides (`TIMBRE_DEFAULT_MODEL`, `TIMBRE_DEFAULT_DURATION`, `TIMBRE_ARTIFACT_DIR`).
 - **Artifact directory** (`~/Music/Timbre/`):
   - `YYYY/MM/DD/<session_id>/take-<n>.wav`
   - `take-<n>.json` containing metadata (prompt, seed, inference time, backend).
