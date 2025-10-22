@@ -1,0 +1,14 @@
+# Rust
+/target
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+worker/.uv/
+uv.lock
+
+# General
+.DS_Store
+*.log
+artifacts/
