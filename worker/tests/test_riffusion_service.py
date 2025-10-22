@@ -59,6 +59,39 @@ async def test_placeholder_audio_varies_by_prompt(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_placeholder_audio_respects_seed(tmp_path: Path) -> None:
+    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings.ensure_directories()
+    service = RiffusionService(settings)
+
+    prompt = "noisy drones"
+    request_seed_a = GenerationRequest(
+        prompt=prompt,
+        duration_seconds=3,
+        model_id="riffusion-v1",
+        seed=1234,
+    )
+    request_seed_b = GenerationRequest(
+        prompt=prompt,
+        duration_seconds=3,
+        model_id="riffusion-v1",
+        seed=5678,
+    )
+
+    artifact_a = await service.generate("job-seed-a", request_seed_a)
+    artifact_b = await service.generate("job-seed-b", request_seed_b)
+
+    data_a = Path(artifact_a.artifact_path).read_bytes()
+    data_b = Path(artifact_b.artifact_path).read_bytes()
+    assert data_a != data_b
+
+    extras_a = artifact_a.metadata.extras
+    extras_b = artifact_b.metadata.extras
+    assert extras_a.get("seed") == 1234
+    assert extras_b.get("seed") == 5678
+
+
+@pytest.mark.asyncio
 async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class _StubGenerator:
         def manual_seed(self, seed: int) -> "_StubGenerator":

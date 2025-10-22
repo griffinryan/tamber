@@ -93,6 +93,7 @@ class RiffusionService:
                 request.prompt,
                 request.duration_seconds,
                 placeholder_reason or "pipeline_unavailable",
+                request.seed,
             )
         else:
             artifact_path, extras = await asyncio.to_thread(
@@ -259,18 +260,20 @@ class RiffusionService:
         prompt: str,
         duration_seconds: int,
         reason: str,
+        seed: Optional[int],
     ) -> Tuple[Path, Dict[str, Any]]:
         sample_rate = 44100
         duration_seconds = max(1, min(duration_seconds, 30))
         total_samples = duration_seconds * sample_rate
         t = np.linspace(0, duration_seconds, total_samples, endpoint=False, dtype=np.float32)
 
-        base_freq = 220 + (abs(hash(prompt)) % 360)
+        seed_value = seed if seed is not None else abs(hash((prompt, duration_seconds))) % (2**32)
+        base_freq_source = (hash(prompt), seed_value)
+        base_freq = 220 + (abs(hash(base_freq_source)) % 360)
         waveform = 0.2 * np.sin(2 * np.pi * base_freq * t)
         waveform += 0.05 * np.sin(2 * np.pi * base_freq * 0.5 * t)
-        waveform += 0.02 * np.random.default_rng(seed=abs(hash(prompt)) % (2**32)).standard_normal(
-            size=total_samples
-        )
+        rng_seed = seed_value % (2**32)
+        waveform += 0.02 * np.random.default_rng(seed=rng_seed).standard_normal(size=total_samples)
         waveform = np.clip(waveform, -1.0, 1.0).astype(np.float32)
 
         artifact_path = self._artifact_path(job_id, placeholder=True)
@@ -286,6 +289,8 @@ class RiffusionService:
             "placeholder_reason": reason,
             "prompt_hash": self._prompt_hash(prompt),
         }
+        if seed is not None:
+            extras["seed"] = seed
 
         return artifact_path, extras
 
