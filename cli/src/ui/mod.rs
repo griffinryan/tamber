@@ -41,27 +41,13 @@ fn run_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut 
 
             let main_chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(
-                    [
-                        Constraint::Min(5),
-                        Constraint::Length(3),
-                    ]
-                    .as_ref(),
-                )
+                .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
                 .split(chunks[0]);
 
-            let history_block = Block::default()
-                .title("Conversation")
-                .borders(Borders::ALL);
+            let history_block = Block::default().title("Conversation").borders(Borders::ALL);
 
-            let history_text = app
-                .history
-                .iter()
-                .rev()
-                .take(10)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n");
+            let history_text =
+                app.history.iter().rev().take(10).cloned().collect::<Vec<_>>().join("\n");
 
             frame.render_widget(Paragraph::new(history_text).block(history_block), main_chunks[0]);
 
@@ -69,16 +55,17 @@ fn run_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut 
                 .title("Prompt")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-            frame.render_widget(Paragraph::new(app.prompt.as_str()).block(prompt_block), main_chunks[1]);
+            frame.render_widget(
+                Paragraph::new(app.prompt.as_str()).block(prompt_block),
+                main_chunks[1],
+            );
 
             let status_block = Block::default().title("Status").borders(Borders::ALL);
-            let status_text = Paragraph::new(
-                if app.status_lines.is_empty() {
-                    "No jobs yet.".into()
-                } else {
-                    app.status_lines.join("\n")
-                },
-            )
+            let status_text = Paragraph::new(if app.status_lines.is_empty() {
+                "No jobs yet.".into()
+            } else {
+                app.status_lines.join("\n")
+            })
             .block(status_block);
             frame.render_widget(status_text, chunks[1]);
         })?;

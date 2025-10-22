@@ -22,16 +22,8 @@ impl Client {
     }
 
     pub async fn health_check(&self) -> Result<()> {
-        let url = self
-            .base_url
-            .join("health")
-            .context("failed to build health URL")?;
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("worker health request failed")?;
+        let url = self.base_url.join("health").context("failed to build health URL")?;
+        let response = self.http.get(url).send().await.context("worker health request failed")?;
         if !response.status().is_success() {
             anyhow::bail!("worker responded with status {}", response.status());
         }

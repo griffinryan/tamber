@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
 from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException
 
 from .models import (
     GenerationArtifact,

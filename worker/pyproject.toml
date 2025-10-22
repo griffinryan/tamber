@@ -37,9 +37,6 @@ inference = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.uv]
-default-group = "default"
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"

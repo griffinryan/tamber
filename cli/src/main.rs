@@ -4,8 +4,8 @@ use std::io;
 use tracing::info;
 
 mod api;
-mod ui;
 mod types;
+mod ui;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,12 +17,8 @@ async fn main() -> Result<()> {
 
     let mut app = ui::App::new();
     match client.health_check().await {
-        Ok(_) => app
-            .status_lines
-            .push(format!("Worker health: ok ({})", client.base_url())),
-        Err(err) => app
-            .status_lines
-            .push(format!("Worker health: error ({err})")),
+        Ok(_) => app.status_lines.push(format!("Worker health: ok ({})", client.base_url())),
+        Err(err) => app.status_lines.push(format!("Worker health: error ({err})")),
     }
 
     let stdout = io::stdout();
@@ -40,6 +36,8 @@ fn setup_tracing() -> Result<()> {
         .with_target(false)
         .compact()
         .try_init()
-        .map_err(|err| anyhow::anyhow!(err))?;
+        .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
+            anyhow::anyhow!("failed to initialise tracing: {err}")
+        })?;
     Ok(())
 }
