@@ -178,12 +178,18 @@ class RiffusionService:
                 custom_pipeline="riffusion",
                 torch_dtype=dtype,
                 safety_checker=None,
+                trust_remote_code=True,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Custom Riffusion pipeline load failed (%s). Falling back to base pipeline.",
+                exc,
+            )
             pipeline = DiffusionPipeline.from_pretrained(
                 resolved_model_id,
                 torch_dtype=dtype,
                 safety_checker=None,
+                trust_remote_code=True,
             )
         pipeline = pipeline.to(self._device)
         if hasattr(pipeline, "set_progress_bar_config"):
@@ -339,7 +345,9 @@ class RiffusionService:
 
     def _missing_dependency_reason(self) -> str:
         if torch is None:
-            return f"torch_unavailable:{TORCH_IMPORT_ERROR}"
+            guidance = "run `uv sync --project worker --extra inference` to install torch/diffusers"
+            detail = TORCH_IMPORT_ERROR or "not installed"
+            return f"torch_unavailable:{detail};{guidance}"
         if librosa is None:
             return f"librosa_unavailable:{LIBROSA_IMPORT_ERROR}"
         return "unknown"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 import types
 from typing import Any, Dict
@@ -160,3 +161,57 @@ async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkey
     assert extras_cfg.get("placeholder") is False
     assert extras_cfg.get("guidance_scale") == pytest.approx(4.5)
     assert calls[-1].get("guidance_scale") == pytest.approx(4.5)
+
+
+def test_load_pipeline_uses_trust_remote_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_kwargs: list[dict[str, Any]] = []
+
+    class _StubTorch:
+        float16 = np.float16
+        float32 = np.float32
+
+        class cuda:  # type: ignore[valid-type]
+            @staticmethod
+            def is_available() -> bool:
+                return False
+
+        class backends:  # type: ignore[valid-type]
+            class mps:  # type: ignore[valid-type]
+                @staticmethod
+                def is_available() -> bool:
+                    return False
+
+    class _StubPipeline:
+        def __init__(self) -> None:
+            self.sample_rate = 44100
+
+        def to(self, _device: str) -> "_StubPipeline":
+            return self
+
+        def set_progress_bar_config(self, disable: bool = True) -> None:  # pragma: no cover - noop
+            return None
+
+    def fake_from_pretrained(model_id: str, **kwargs: Any) -> _StubPipeline:
+        captured_kwargs.append({"model_id": model_id, **kwargs})
+        return _StubPipeline()
+
+    class _StubDiffusionPipeline:
+        @staticmethod
+        def from_pretrained(model_id: str, **kwargs: Any) -> _StubPipeline:
+            return fake_from_pretrained(model_id, **kwargs)
+
+    fake_diffusers = types.ModuleType("diffusers")
+    fake_diffusers.DiffusionPipeline = _StubDiffusionPipeline  # type: ignore[attr-defined]
+
+    monkeypatch.setattr("timbre_worker.services.riffusion.torch", _StubTorch, raising=False)
+    monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
+
+    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings.ensure_directories()
+    service = RiffusionService(settings)
+    handle = service._load_pipeline("riffusion/riffusion-model-v1")
+
+    assert isinstance(handle, PipelineHandle)
+    assert captured_kwargs, "from_pretrained should have been invoked"
+    first_call = captured_kwargs[0]
+    assert first_call.get("trust_remote_code") is True

@@ -60,8 +60,32 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+def ensure_inference_dependencies() -> None:
+    missing: list[str] = []
+    try:  # pragma: no cover - import checked at runtime
+        import torch  # type: ignore[unused-import]
+    except Exception as exc:  # noqa: BLE001
+        missing.append(f"torch ({exc})")
+    try:  # pragma: no cover
+        import diffusers  # type: ignore[unused-import]
+    except Exception as exc:  # noqa: BLE001
+        missing.append(f"diffusers ({exc})")
+
+    if missing:
+        message = "\n".join(
+            [
+                "Missing inference dependencies:",
+                *[f"  - {item}" for item in missing],
+                "Install them with `uv sync --project worker --extra inference` before running the smoke test.",
+            ]
+        )
+        print(message, file=sys.stderr)
+        sys.exit(2)
+
 
 async def run_smoke(args: argparse.Namespace) -> None:
+    ensure_inference_dependencies()
+
     settings = Settings(artifact_root=args.artifact_dir, config_dir=args.config_dir)
     settings.ensure_directories()
 
@@ -94,6 +118,11 @@ async def run_smoke(args: argparse.Namespace) -> None:
     if artifact.metadata.extras.get("placeholder"):
         reason = artifact.metadata.extras.get("placeholder_reason", "unknown")
         print(f"Placeholder audio emitted (reason={reason})", file=sys.stderr)
+        print(
+            "The smoke test requires real inference. Ensure torch/diffusers are installed and the model weights are available.",
+            file=sys.stderr,
+        )
+        sys.exit(3)
     else:
         print("Riffusion pipeline generated real audio.", file=sys.stderr)
 

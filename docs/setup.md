@@ -47,13 +47,12 @@ TIMBRE_WORKER_URL="http://localhost:9000" make cli-run
 When ready to use Riffusion locally, install the optional inference extras (large downloads):
 
 ```bash
-cd worker
-uv pip install '.[inference]'
-# quick health check (prints metadata + placeholder info if deps are missing)
-uv run python ../scripts/riffusion_smoke.py
+uv sync --project worker --extra inference
+# quick health check (exits non-zero if the real pipeline fails to load)
+uv run --project worker python ../scripts/riffusion_smoke.py
 ```
 
-The inference extras include `librosa` and `matplotlib` for spectrogram reconstruction; make sure the install succeeds before testing audio.
+The inference extras include `torch`, `diffusers`, `librosa`, and `matplotlib` for spectrogram reconstruction; make sure the sync finishes successfully before testing audio. The smoke test exits early if placeholder audio is produced.
 
 Ensure PyTorch detects the Metal (MPS) backend where available:
 
