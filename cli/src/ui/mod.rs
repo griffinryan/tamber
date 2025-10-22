@@ -1,5 +1,5 @@
 use crate::{
-    app::{AppCommand, AppEvent, AppState, ChatRole, JobEntry},
+    app::{format_request_summary, AppCommand, AppEvent, AppState, ChatRole, JobEntry},
     types::JobState,
 };
 use anyhow::Result;
@@ -156,6 +156,10 @@ fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'stat
         Span::raw(truncate_text(&job.prompt, 34)),
     ];
 
+    let summary = truncate_text(&format_request_summary(&job.request), 28);
+    spans.push(Span::raw(" · "));
+    spans.push(Span::styled(summary, Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM)));
+
     if let Some(message) = job.status.message.as_deref() {
         spans.push(Span::raw(" · "));
         spans.push(Span::styled(truncate_text(message, 30), Style::default().fg(Color::Gray)));
@@ -199,11 +203,13 @@ fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'stat
 }
 
 fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let content = if app.status_lines.is_empty() {
-        String::from("No activity yet.")
+    let mut lines = vec![format!("Config: {}", app.config_summary())];
+    if app.status_lines.is_empty() {
+        lines.push(String::from("No activity yet."));
     } else {
-        app.status_lines.join("\n")
-    };
+        lines.extend(app.status_lines.iter().cloned());
+    }
+    let content = lines.join("\n");
     let block = Block::default().title("Status").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(content).block(block), area);
 }
@@ -234,15 +240,35 @@ fn handle_key(
             app.input.clear();
         }
         KeyCode::Enter => {
-            let trimmed = app.input.trim();
-            if !trimmed.is_empty() {
-                let prompt = trimmed.to_string();
-                app.append_chat(ChatRole::User, prompt.clone());
-                if command_tx.send(AppCommand::SubmitPrompt { prompt }).is_err() {
-                    app.push_status_line("Failed to submit prompt; worker channel closed".into());
+            let line = app.input.trim().to_string();
+            if line.is_empty() {
+                app.input.clear();
+                return Ok(false);
+            }
+
+            if line.starts_with('/') {
+                match app.handle_command(&line) {
+                    Ok(message) => {
+                        app.push_status_line(message.clone());
+                        app.append_chat(ChatRole::System, message);
+                    }
+                    Err(err) => {
+                        let message = format!("Command error: {err}");
+                        app.push_status_line(message.clone());
+                        app.append_chat(ChatRole::System, message);
+                    }
                 }
                 app.input.clear();
+                return Ok(false);
             }
+
+            let prompt = line;
+            let request = app.build_generation_request(&prompt);
+            app.append_chat(ChatRole::User, prompt.clone());
+            if command_tx.send(AppCommand::SubmitPrompt { prompt, request }).is_err() {
+                app.push_status_line("Failed to submit prompt; worker channel closed".into());
+            }
+            app.input.clear();
         }
         KeyCode::Char(c) => {
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {

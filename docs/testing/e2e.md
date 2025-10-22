@@ -11,10 +11,15 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
 1. Run `make cli-run`.
 2. Observe the status panel: it should show health info and default model.
 3. Enter a prompt (e.g., `dreamy piano over rain`). The conversation pane logs your entry and the job appears in the Jobs panel.
-4. Watch the job transition `Queued → Running → Done`. Progress updates stream every few seconds.
-5. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `p` with the job highlighted to surface the path again.
-6. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the `.[inference]` extras (torch, diffusers, transformers, etc.) and will reflect the prompt more directly.
-7. Inspect `metadata.json` in the job directory to confirm prompt/model/duration values.
+4. Adjust generation settings on the fly with slash commands if desired:
+   - `/duration 12` sets clip length (1–30 seconds).
+   - `/model riffusion-v1` swaps the backend model id.
+   - `/cfg 6.5` or `/cfg off` tunes classifier-free guidance strength.
+   - `/seed 42` (or `/seed off`) locks deterministic runs; `/reset` restores defaults.
+5. Watch the job transition `Queued → Running → Done`. Progress updates stream every few seconds.
+6. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `p` with the job highlighted to surface the path again.
+7. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the `.[inference]` extras (torch, diffusers, transformers, etc.) and will reflect the prompt more directly.
+8. Inspect `metadata.json` in the job directory to confirm prompt/model/duration values.
 
 ## Failure Handling
 - Worker offline: CLI should surface “Worker health check failed”. Verify prompt submission yields an error toast instead of hanging.

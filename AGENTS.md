@@ -25,6 +25,7 @@
 ## TUI Interaction Patterns
 - Run `make cli-run` to open the chat-style interface: left pane shows conversation history (timestamped), right rail lists active jobs and status logs.
 - Submit prompts with `Enter`; use `↑/↓` to focus jobs; press `p` on a completed job to surface the local artifact path for manual playback.
+- Tune generation settings inline with slash commands (e.g., `/duration 12`, `/model riffusion-v1`, `/cfg 6.5`, `/reset`) before sending the next prompt.
 - The CLI polls `/status`, fetches `/artifact/{job_id}`, and copies audio + metadata into `~/Music/Timbre/<job_id>/`; see `metadata.json` for prompt/model details.
 - Status lines surface worker health, queue updates, and errors so issues show without leaving the TUI.
 

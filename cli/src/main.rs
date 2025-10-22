@@ -113,8 +113,8 @@ impl Controller {
 
     async fn handle_command(inner: Arc<ControllerInner>, command: AppCommand) -> Result<()> {
         match command {
-            AppCommand::SubmitPrompt { prompt } => {
-                Controller::submit_prompt(inner, prompt).await?;
+            AppCommand::SubmitPrompt { prompt, request } => {
+                Controller::submit_prompt(inner, prompt, request).await?;
             }
             AppCommand::PlayJob { job_id } => {
                 Controller::play_job(inner, job_id).await?;
@@ -123,23 +123,19 @@ impl Controller {
         Ok(())
     }
 
-    async fn submit_prompt(inner: Arc<ControllerInner>, prompt: String) -> Result<()> {
-        let request = GenerationRequest {
-            prompt: prompt.clone(),
-            seed: None,
-            duration_seconds: inner.config.default_duration_seconds(),
-            model_id: inner.config.default_model_id().to_string(),
-            cfg_scale: None,
-            scheduler: None,
-        };
-
+    async fn submit_prompt(
+        inner: Arc<ControllerInner>,
+        prompt: String,
+        request: GenerationRequest,
+    ) -> Result<()> {
         let status = inner
             .client
             .submit_generation(&request)
             .await
             .context("failed to submit generation request")?;
 
-        let _ = inner.event_tx.send(AppEvent::JobQueued { status: status.clone(), prompt });
+        let _ =
+            inner.event_tx.send(AppEvent::JobQueued { status: status.clone(), prompt, request });
 
         Controller::spawn_poll_task(inner, status.job_id.clone());
         Ok(())
