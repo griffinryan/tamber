@@ -40,12 +40,12 @@
 
 ### 3.2 Python Worker (`worker/`)
 - **Framework**: `FastAPI` for HTTP APIs; `uvicorn` ASGI server. WebSocket endpoints reserved for future.
-- **Inference**: `diffusers`-based Riffusion pipeline with PyTorch (`torch>=2.x`) using MPS backend (`mps` device) on Apple Silicon; CPU fallback using `float32` pipeline.
+- **Inference**: `diffusers`-based Riffusion pipeline with PyTorch (`torch>=2.x`) using MPS backend (`mps` device) on Apple Silicon; CPU fallback using `float32` pipeline. Missing dependencies trigger a deterministic placeholder waveform so the CLI still surfaces artifacts.
 - **Job handling**: `JobManager` orchestrates async tasks, updating progress for queued/running jobs and persisting `GenerationArtifact` metadata once complete.
-- **Artifacts**: `soundfile` or `torchaudio` writes WAV to `~/Music/Timbre/<session>/<job_id>.wav`. Metadata (prompt, seed, duration) stored in JSON alongside audio.
+- **Artifacts**: `soundfile` or `torchaudio` writes WAV to `~/Music/Timbre/<job_id>.wav`. Metadata (prompt, seed, duration) stored in JSON alongside audio.
 - **Config**: `pydantic` models define requests/responses, aligning with Rust `serde` structs.
 - **Logging**: `loguru` surfaces structured events; worker annotates failures and dependency fallbacks for observability.
-- **Degradation**: When inference dependencies are missing or fail to load, the service emits deterministic placeholder audio and records the `placeholder_reason` in metadata.
+- **Tooling**: `python -m timbre_worker.generate` performs single-shot generations for local debugging; `scripts/riffusion_smoke.py` offers a quick pipeline health check.
 
 ### 3.3 Shared Schemas
 - **GenerationRequest**: `prompt: str`, `seed: Optional[int]`, `duration_seconds: int`, `model_id: str`, `cfg_scale: Optional[float]`, `scheduler: Optional[str]`.
@@ -82,7 +82,7 @@
 ## 7. Developer Tooling
 - **Python**: Use `uv` for dependency management. Provide `uv sync`, `uv run` commands for worker.
 - **Rust**: Configure `cargo fmt`, `cargo clippy`, `cargo test`. Optionally use `just` recipes for cross-language tasks.
-- **CI**: GitHub Actions runs lint/test on both languages. Document manual steps for enabling Metal backend (arm64 self-hosted runner required for GPU tests).
+- **CI**: GitHub Actions runs lint/test on both languages using `uv run` for Python tooling. Document manual steps for enabling Metal backend (arm64 self-hosted runner required for GPU tests).
 - **Docs**: Maintain ADRs under `docs/adrs/` capturing decisions (hybrid architecture, transport strategy, backend prioritization). Link relevant sections of this document.
 
 ## 8. Sequence for Phase 0

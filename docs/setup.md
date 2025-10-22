@@ -30,7 +30,7 @@ make worker-serve
 make cli-run
 ```
 
-The CLI currently renders stub panes and enqueues mock jobs; the worker exposes `/health`, `/generate`, and `/status/{job_id}` endpoints with in-memory data.
+With inference dependencies installed the worker loads the real Riffusion pipeline and the CLI polls for live job updates. If dependencies are missing, the worker emits deterministic placeholder audio so the flow remains testable.
 
 To target a worker running on a different host/port, set `TIMBRE_WORKER_URL` before launching the CLI:
 
@@ -45,9 +45,11 @@ When ready to use Riffusion locally, install the optional inference extras (larg
 ```bash
 cd worker
 uv pip install '.[inference]'
+# quick health check (prints metadata + placeholder info if deps are missing)
+uv run python ../scripts/riffusion_smoke.py
 ```
 
-Ensure PyTorch detects the Metal (MPS) backend:
+Ensure PyTorch detects the Metal (MPS) backend where available:
 
 ```python
 >>> import torch
@@ -67,6 +69,12 @@ cd worker
 uv run ruff check src tests
 uv run mypy
 uv run pytest
+
+Run a one-off generation without the HTTP API:
+
+```bash
+uv run --project worker python -m timbre_worker.generate --prompt "nostalgic synthwave skyline"
+```
 ```
 
 Continuous integration runs equivalent commands via `.github/workflows/ci.yml`.

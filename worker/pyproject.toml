@@ -30,7 +30,11 @@ inference = [
   "soundfile>=0.12",
   "torchaudio>=2.2",
   "huggingface-hub>=0.20",
-  "numpy>=1.26"
+  "numpy>=1.26",
+  "transformers>=4.39",
+  "scipy>=1.11",
+  "riffusion>=0.0.4",
+  "librosa>=0.10"
 ]
 
 [build-system]

@@ -21,12 +21,12 @@ else:  # pragma: no cover
     TORCH_IMPORT_ERROR = None
 
 try:  # pragma: no cover
-    from diffusers.pipelines.riffusion import RiffusionPipeline
+    from riffusion.spectrogram_image_converter import SpectrogramImageConverter
 except Exception as exc:  # noqa: BLE001
-    RIFFUSION_IMPORT_ERROR = exc
-    RiffusionPipeline = None  # type: ignore[assignment]
+    SpectrogramImageConverter = None  # type: ignore[misc,assignment]
+    SPECTROGRAM_IMPORT_ERROR = exc
 else:  # pragma: no cover
-    RIFFUSION_IMPORT_ERROR = None
+    SPECTROGRAM_IMPORT_ERROR = None
 
 try:  # pragma: no cover
     import soundfile as sf
@@ -64,6 +64,9 @@ class RiffusionService:
         self._placeholder_reasons: Dict[str, str] = {}
         self._pipeline_lock = asyncio.Lock()
         self._device = self._select_device()
+        self._spectrogram_converter: Optional[SpectrogramImageConverter] = (
+            SpectrogramImageConverter() if SpectrogramImageConverter is not None else None
+        )
 
     @property
     def default_model_id(self) -> str:
@@ -118,7 +121,7 @@ class RiffusionService:
 
         resolved = MODEL_REGISTRY.get(model_id, model_id)
 
-        if torch is None or RiffusionPipeline is None:
+        if torch is None:
             reason = self._missing_dependency_reason()
             async with self._pipeline_lock:
                 self._pipelines[model_id] = None
@@ -129,6 +132,12 @@ class RiffusionService:
 
         try:
             pipeline_handle = await asyncio.to_thread(self._load_pipeline, resolved)
+        except GenerationFailure as exc:
+            logger.warning("Pipeline prerequisites missing: %s", exc)
+            async with self._pipeline_lock:
+                self._pipelines[model_id] = None
+                self._placeholder_reasons[model_id] = str(exc)
+            return None, str(exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load pipeline %s", resolved)
             async with self._pipeline_lock:
@@ -143,7 +152,10 @@ class RiffusionService:
 
     def _load_pipeline(self, resolved_model_id: str) -> PipelineHandle:
         assert torch is not None  # For type checkers
-        assert RiffusionPipeline is not None
+        try:
+            from diffusers import DiffusionPipeline
+        except Exception as exc:  # noqa: BLE001
+            raise GenerationFailure(f"diffusers_unavailable:{exc}") from exc
 
         dtype = torch.float16 if self._device in {"cuda", "mps"} else torch.float32
         logger.info(
@@ -152,13 +164,22 @@ class RiffusionService:
             self._device,
             dtype,
         )
-        pipeline = RiffusionPipeline.from_pretrained(
-            resolved_model_id,
-            torch_dtype=dtype,
-            safety_checker=None,
-        )
+        try:
+            pipeline = DiffusionPipeline.from_pretrained(
+                resolved_model_id,
+                custom_pipeline="riffusion",
+                torch_dtype=dtype,
+                safety_checker=None,
+            )
+        except Exception:
+            pipeline = DiffusionPipeline.from_pretrained(
+                resolved_model_id,
+                torch_dtype=dtype,
+                safety_checker=None,
+            )
         pipeline = pipeline.to(self._device)
-        pipeline.set_progress_bar_config(disable=True)
+        if hasattr(pipeline, "set_progress_bar_config"):
+            pipeline.set_progress_bar_config(disable=True)
 
         sample_rate = getattr(pipeline, "sample_rate", None)
         if sample_rate is None and hasattr(pipeline, "audio_processor"):
@@ -198,14 +219,15 @@ class RiffusionService:
                 generator=generator,
             )
 
-        audio = getattr(result, "audios", None)
-        if audio is None or len(audio) == 0:
-            raise GenerationFailure("pipeline returned empty audio result")
-
-        waveform = np.asarray(audio[0], dtype=np.float32)
-        waveform = self._prepare_waveform(waveform)
-
+        audio_list = getattr(result, "audios", None)
         sample_rate = getattr(result, "sample_rate", None) or handle.sample_rate
+
+        if audio_list:
+            waveform = np.asarray(audio_list[0], dtype=np.float32)
+        else:
+            waveform, sample_rate = self._audio_from_images(result, sample_rate)
+
+        waveform = self._prepare_waveform(waveform)
 
         artifact_path = self._artifact_path(job_id, placeholder=False)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +326,26 @@ class RiffusionService:
     def _missing_dependency_reason(self) -> str:
         if torch is None:
             return f"torch_unavailable:{TORCH_IMPORT_ERROR}"
-        if RiffusionPipeline is None:
-            return f"diffusers_riffusion_unavailable:{RIFFUSION_IMPORT_ERROR}"
+        if SpectrogramImageConverter is None:
+            return f"spectrogram_converter_unavailable:{SPECTROGRAM_IMPORT_ERROR}"
         return "unknown"
+
+    def _audio_from_images(
+        self,
+        result: Any,
+        default_sample_rate: int,
+    ) -> Tuple[np.ndarray, int]:
+        if self._spectrogram_converter is None:
+            raise GenerationFailure(
+                f"spectrogram_converter_unavailable:{SPECTROGRAM_IMPORT_ERROR}"
+            )
+
+        images = getattr(result, "images", None)
+        if not images:
+            raise GenerationFailure("pipeline returned empty audio result")
+
+        image = images[0]
+        segment = self._spectrogram_converter.audio_from_spectrogram_image(image)
+        waveform = np.asarray(segment.samples, dtype=np.float32)
+        sample_rate = getattr(segment, "sample_rate", default_sample_rate)
+        return waveform, sample_rate

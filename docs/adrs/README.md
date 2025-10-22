@@ -1,3 +1,6 @@
 # Architecture Decision Records
 
-Placeholder directory for ADRs. Phase 0 actions will introduce ADR-001 (hybrid architecture) and ADR-002 (transport strategy).
+Architecture Decision Records:
+
+- [ADR-001 – Adopt Hybrid Rust CLI and Python Worker](ADR-001-hybrid-architecture.md)
+- [ADR-002 – HTTP Polling Transport for Phase 0](ADR-002-transport-strategy.md)

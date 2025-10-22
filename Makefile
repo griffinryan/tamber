@@ -1,4 +1,4 @@
-.PHONY: setup worker-serve cli-run lint test fmt
+.PHONY: setup worker-serve cli-run lint test fmt smoke
 
 setup:
 	uv sync --project worker
@@ -9,6 +9,9 @@ worker-serve:
 
 cli-run:
 	cargo run -p timbre-cli
+
+smoke:
+	uv run --project worker python scripts/riffusion_smoke.py
 
 fmt:
 	cargo fmt

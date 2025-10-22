@@ -97,3 +97,9 @@
 2. Assign temporary leads for TUI and backend domains (shared engineer acceptable) to coordinate Workstreams 1–4.
 3. Draft `docs/architecture.md` capturing hybrid design, Hugging Face dependency flow, and transport rationale.
 4. Schedule checkpoint at end of Week 1 to validate repository scaffold and Riffusion smoke test progress.
+
+## Completion Notes
+- `scripts/riffusion_smoke.py` and `python -m timbre_worker.generate` cover the backend smoke tests and CLI entrypoint planned for Workstream 2.
+- JSON schemas, shared types, and HTTP endpoints are live; CLI/worker integration now exchanges real artifacts with placeholder fallback.
+- Documentation updated (`docs/architecture.md`, `docs/setup.md`, `docs/testing/e2e.md`) and ADR-001/ADR-002 recorded the hybrid architecture and transport decisions.
+- CI uses `uv` to mirror contributor workflows, ensuring lint/test parity with `make lint` / `make test`.

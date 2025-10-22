@@ -21,6 +21,8 @@ Hybrid Ratatui (Rust) and FastAPI (Python) system for text-to-music experimentat
    ```bash
    cd worker
    uv pip install '.[inference]'
+   # verify the backend with a one-off smoke run
+   uv run python ../scripts/riffusion_smoke.py
    ```
 
 ## Running the Prototype
@@ -35,7 +37,13 @@ make worker-serve
 make cli-run
 ```
 
-The current implementation uses mock job handling; Workstream 2 will wire up real Riffusion inference.
+With the inference extras installed the worker runs the real Riffusion pipeline; without them it falls back to deterministic placeholder audio so the flow stays testable.
+
+Generate a standalone clip without the HTTP API via:
+
+```bash
+uv run --project worker python -m timbre_worker.generate --prompt "dreamy piano over rain"
+```
 
 The CLI looks for the worker URL via `TIMBRE_WORKER_URL` (defaults to `http://localhost:8000`). Override when targeting remote workers:
 

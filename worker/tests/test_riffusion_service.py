@@ -20,5 +20,8 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
 
     path = Path(artifact.artifact_path)
     assert path.exists()
-    assert artifact.metadata.extras.get("placeholder") is True
+    extras = artifact.metadata.extras
+    assert extras.get("placeholder") is True
+    assert extras.get("placeholder_reason") is not None
+    assert extras.get("backend") == "riffusion"
     assert artifact.metadata.prompt == "soft synthwave"
