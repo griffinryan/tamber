@@ -92,6 +92,32 @@ impl JobEntry {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPane {
+    StatusBar,
+    Conversation,
+    Jobs,
+    Status,
+    Prompt,
+}
+
+#[derive(Debug)]
+pub struct StatusBarState {
+    pub progress: f32,
+    pub message: String,
+    pub last_update: DateTime<Utc>,
+}
+
+impl Default for StatusBarState {
+    fn default() -> Self {
+        Self {
+            progress: 0.0,
+            message: "Ready for the next idea…".to_string(),
+            last_update: Utc::now(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub input: String,
@@ -99,8 +125,13 @@ pub struct AppState {
     pub jobs: IndexMap<String, JobEntry>,
     pub focused_job: Option<String>,
     pub status_lines: Vec<String>,
+    pub status_bar: StatusBarState,
+    pub focused_pane: FocusedPane,
+    pub chat_scroll: usize,
+    pub status_scroll: usize,
     app_config: AppConfig,
     generation_config: GenerationConfig,
+    playback: Option<PlaybackState>,
     planner: CompositionPlanner,
 }
 
@@ -112,6 +143,10 @@ impl AppState {
             jobs: IndexMap::new(),
             focused_job: None,
             status_lines: Vec::new(),
+            status_bar: StatusBarState::default(),
+            focused_pane: FocusedPane::Conversation,
+            chat_scroll: 0,
+            status_scroll: 0,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
             planner: CompositionPlanner::new(),
@@ -184,6 +219,14 @@ impl AppState {
                     self.append_chat(ChatRole::Worker, chat_line);
                 }
             }
+            AppEvent::PollProgress { progress, message } => {
+                self.status_bar.progress = progress.clamp(0.0, 1.0);
+                self.status_bar.message = message;
+                self.status_bar.last_update = Utc::now();
+            }
+            AppEvent::WorkerNudge { message } => {
+                self.append_chat(ChatRole::Worker, message);
+            }
         }
     }
 
@@ -193,6 +236,7 @@ impl AppState {
             let overflow = self.chat.len() - MAX_CHAT_ENTRIES;
             self.chat.drain(0..overflow);
         }
+        self.chat_scroll = 0;
     }
 
     pub fn push_status_line(&mut self, line: String) {
@@ -201,6 +245,7 @@ impl AppState {
             let overflow = self.status_lines.len() - MAX_STATUS_LINES;
             self.status_lines.drain(0..overflow);
         }
+        self.status_scroll = 0;
     }
 
     pub fn jobs_iter(&self) -> Iter<'_, String, JobEntry> {
@@ -345,6 +390,40 @@ impl AppState {
             .and_then(|id| self.jobs.get_full(id))
             .map(|(_, key, value)| (key, value))
     }
+
+    pub fn focus_next(&mut self) {
+        self.focused_pane = match self.focused_pane {
+            FocusedPane::StatusBar => FocusedPane::Conversation,
+            FocusedPane::Conversation => FocusedPane::Jobs,
+            FocusedPane::Jobs => FocusedPane::Status,
+            FocusedPane::Status => FocusedPane::Prompt,
+            FocusedPane::Prompt => FocusedPane::StatusBar,
+        };
+    }
+
+    pub fn focus_previous(&mut self) {
+        self.focused_pane = match self.focused_pane {
+            FocusedPane::StatusBar => FocusedPane::Prompt,
+            FocusedPane::Conversation => FocusedPane::StatusBar,
+            FocusedPane::Jobs => FocusedPane::Conversation,
+            FocusedPane::Status => FocusedPane::Jobs,
+            FocusedPane::Prompt => FocusedPane::Status,
+        };
+    }
+
+    pub fn increment_chat_scroll(&mut self, delta: isize) {
+        let max = self.chat.len().saturating_sub(1);
+        let current = self.chat_scroll as isize;
+        let next = (current + delta).clamp(0, max as isize);
+        self.chat_scroll = next as usize;
+    }
+
+    pub fn increment_status_scroll(&mut self, delta: isize) {
+        let max = self.status_lines.len().saturating_sub(1);
+        let current = self.status_scroll as isize;
+        let next = (current + delta).clamp(0, max as isize);
+        self.status_scroll = next as usize;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -363,6 +442,13 @@ pub enum AppEvent {
     JobCompleted {
         status: GenerationStatus,
         artifact: LocalArtifact,
+    },
+    PollProgress {
+        progress: f32,
+        message: String,
+    },
+    WorkerNudge {
+        message: String,
     },
 }
 

@@ -1,8 +1,11 @@
 use crate::{
-    app::{format_request_summary, AppCommand, AppEvent, AppState, ChatRole, JobEntry},
+    app::{
+        format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, JobEntry,
+    },
     types::{CompositionSection, JobState, SectionEnergy},
 };
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -53,10 +56,17 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
         .split(frame.size());
 
+    let body = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(layout[0]);
+
+    render_status_bar(frame, body[0], app);
+
     let left = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(8), Constraint::Length(3)])
-        .split(layout[0]);
+        .split(body[1]);
 
     render_chat(frame, left[0], app);
     render_prompt(frame, left[1], app);
@@ -73,7 +83,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
 fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     let mut lines: Vec<Line> = Vec::new();
 
-    let entries: Vec<_> = app.chat.iter().rev().take(200).cloned().collect();
+    let start = app.chat_scroll.min(app.chat.len());
+    let entries: Vec<_> = app.chat.iter().rev().skip(start).take(200).cloned().collect();
     for entry in entries.into_iter().rev() {
         let prefix = format!("[{}]", entry.role.label());
         let ts = entry.timestamp.format("%H:%M:%S").to_string();
@@ -97,16 +108,21 @@ fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
         lines.push(Line::from("No messages yet."));
     }
 
-    let block = Block::default().title("Conversation").borders(Borders::ALL);
+    let mut block = Block::default().title("Conversation").borders(Borders::ALL);
+    if matches!(app.focused_pane, FocusedPane::Conversation) {
+        block = block.border_style(glow_style());
+    }
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }
 
 fn render_prompt(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let block = Block::default()
-        .title("Prompt")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let block = Block::default().title("Prompt").borders(Borders::ALL).border_style(
+        match app.focused_pane {
+            FocusedPane::Prompt => glow_style(),
+            _ => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        },
+    );
     let paragraph = Paragraph::new(app.input.clone()).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -115,8 +131,13 @@ fn render_jobs(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     let items: Vec<ListItem> =
         app.jobs_iter().rev().map(|(job_id, job)| job_list_item(app, job_id, job)).collect();
 
+    let mut block = Block::default().title("Jobs").borders(Borders::ALL);
+    if matches!(app.focused_pane, FocusedPane::Jobs) {
+        block = block.border_style(glow_style());
+    }
+
     let list = List::new(items)
-        .block(Block::default().title("Jobs").borders(Borders::ALL))
+        .block(block)
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
     frame.render_widget(list, area);
 }
@@ -196,21 +217,63 @@ fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'stat
 }
 
 fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let mut lines = vec![format!("Config: {}", app.config_summary())];
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![Span::raw(format!("Config: {}", app.config_summary()))]));
     if app.status_lines.is_empty() {
-        lines.push(String::from("No activity yet."));
+        lines.push(Line::from(vec![Span::raw("No activity yet.")]))
     } else {
-        lines.extend(app.status_lines.iter().cloned());
+        let start = app.status_scroll.min(app.status_lines.len());
+        for entry in app.status_lines.iter().skip(start) {
+            lines.push(Line::from(vec![Span::raw(entry.clone())]));
+        }
     }
 
     if let Some((_id, job)) = app.selected_job() {
-        lines.push(String::new());
+        lines.push(Line::default());
         lines.extend(plan_status_lines(job));
     }
 
-    let content = lines.join("\n");
-    let block = Block::default().title("Status").borders(Borders::ALL);
-    frame.render_widget(Paragraph::new(content).block(block), area);
+    let mut block = Block::default().title("Status").borders(Borders::ALL);
+    if matches!(app.focused_pane, FocusedPane::Status) {
+        block = block.border_style(glow_style());
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+fn render_status_bar(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
+    let progress = app.status_bar.progress.clamp(0.0, 1.0);
+    let filled_width = (area.width as f32 * progress).round() as u16;
+    let now = Utc::now();
+    let glow = glow_intensity(app.status_bar.last_update, now);
+
+    let mut lines = Vec::new();
+    let message = format!(" {}", app.status_bar.message);
+    let info_line = Line::from(vec![Span::styled(
+        message,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(if glow > 0.5 { Modifier::ITALIC } else { Modifier::empty() }),
+    )]);
+    lines.push(info_line);
+
+    let bar_line = (0..area.width)
+        .map(|x| {
+            if x < filled_width {
+                Span::styled("█", Style::default().fg(glow_color(glow)))
+            } else {
+                Span::styled("░", Style::default().fg(Color::DarkGray))
+            }
+        })
+        .collect::<Vec<_>>();
+    lines.push(Line::from(bar_line));
+
+    let mut block = Block::default().borders(Borders::ALL).title("Status");
+    if matches!(app.focused_pane, FocusedPane::StatusBar) {
+        block = block.border_style(glow_style());
+    }
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
 }
 
 fn handle_key(
@@ -230,15 +293,29 @@ fn handle_key(
                 }
             }
         }
-        KeyCode::Up => app.select_previous_job(),
-        KeyCode::Down => app.select_next_job(),
-        KeyCode::Backspace => {
+        KeyCode::Up => match app.focused_pane {
+            FocusedPane::Conversation => app.increment_chat_scroll(-(1)),
+            FocusedPane::Status => app.increment_status_scroll(-(1)),
+            FocusedPane::Jobs => app.select_previous_job(),
+            _ => {}
+        },
+        KeyCode::Down => match app.focused_pane {
+            FocusedPane::Conversation => app.increment_chat_scroll(1),
+            FocusedPane::Status => app.increment_status_scroll(1),
+            FocusedPane::Jobs => app.select_next_job(),
+            _ => {}
+        },
+        KeyCode::Left => app.focus_previous(),
+        KeyCode::Right => app.focus_next(),
+        KeyCode::Tab => app.focus_next(),
+        KeyCode::BackTab => app.focus_previous(),
+        KeyCode::Backspace if matches!(app.focused_pane, FocusedPane::Prompt) => {
             app.input.pop();
         }
         KeyCode::Esc => {
             app.input.clear();
         }
-        KeyCode::Enter => {
+        KeyCode::Enter if matches!(app.focused_pane, FocusedPane::Prompt) => {
             let line = app.input.trim().to_string();
             if line.is_empty() {
                 app.input.clear();
@@ -269,7 +346,7 @@ fn handle_key(
             }
             app.input.clear();
         }
-        KeyCode::Char(c) => {
+        KeyCode::Char(c) if matches!(app.focused_pane, FocusedPane::Prompt) => {
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                 app.input.push(c);
             }
@@ -297,15 +374,38 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
-fn plan_status_lines(job: &JobEntry) -> Vec<String> {
+fn plan_status_lines(job: &JobEntry) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let header = format!(
-        "Plan: {} sections · {} BPM · {}",
-        job.plan.sections.len(),
-        job.plan.tempo_bpm,
-        job.plan.key
-    );
-    lines.push(header);
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            "Plan: {} sections · {} BPM · {}",
+            job.plan.sections.len(),
+            job.plan.tempo_bpm,
+            job.plan.key
+        ),
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    )]));
+
+    if let Some(theme) = &job.plan.theme {
+        let instrumentation = if theme.instrumentation.is_empty() {
+            "blended instrumentation".to_string()
+        } else {
+            theme.instrumentation.join(", ")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("Motif: {}", theme.motif), Style::default().fg(Color::LightCyan)),
+            Span::raw(" | "),
+            Span::styled(
+                format!("Instruments: {}", instrumentation),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw(" | "),
+            Span::styled(
+                format!("Rhythm: {}", theme.rhythm),
+                Style::default().fg(Color::LightBlue),
+            ),
+        ]));
+    }
 
     let active_label = job
         .status
@@ -319,7 +419,7 @@ fn plan_status_lines(job: &JobEntry) -> Vec<String> {
     let section_extras = extract_section_extras(job);
 
     for section in &job.plan.sections {
-        lines.push(format_section_line(section, &section_extras, active_label.as_deref()));
+        lines.push(plan_section_line(section, &section_extras, active_label.as_deref()));
     }
 
     lines
@@ -343,38 +443,66 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> 
     map
 }
 
-fn format_section_line(
+fn plan_section_line(
     section: &CompositionSection,
     extras: &HashMap<String, serde_json::Value>,
     active_label: Option<&str>,
-) -> String {
-    let mut label = String::new();
-    if let Some(active) = active_label {
-        if active.eq_ignore_ascii_case(&section.label) {
-            label.push('▶');
-            label.push(' ');
-        }
-    }
+) -> Line<'static> {
+    let is_active =
+        active_label.map(|label| label.eq_ignore_ascii_case(&section.label)).unwrap_or(false);
+
     let energy_label = match section.energy {
         SectionEnergy::Low => "low",
         SectionEnergy::Medium => "medium",
         SectionEnergy::High => "high",
     };
-    label.push_str(&format!(
-        "{} {} · {} · {} bars · {:.1}s",
-        section.section_id, section.label, energy_label, section.bars, section.target_seconds,
+
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled(
+        if is_active { "▶" } else { " " },
+        if is_active { glow_style() } else { Style::default().fg(Color::DarkGray) },
+    ));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        format!("{} {}", section.section_id, section.label),
+        if is_active { glow_style() } else { Style::default().fg(Color::White) },
+    ));
+    spans.push(Span::styled(
+        format!(" · {} · {} bars · {:.1}s", energy_label, section.bars, section.target_seconds),
+        Style::default().fg(Color::Gray),
     ));
 
     if let Some(extra) = extras.get(&section.section_id) {
         if let Some(backend) = extra.get("backend").and_then(|value| value.as_str()) {
-            label.push_str(&format!(" · {}", backend));
+            spans.push(Span::styled(format!(" · {}", backend), Style::default().fg(Color::Cyan)));
+        }
+        if extra.get("continuation").is_some() {
+            spans.push(Span::styled(" · ↺", Style::default().fg(Color::LightMagenta)));
         }
         if extra.get("placeholder").and_then(|value| value.as_bool()).unwrap_or(false) {
-            label.push_str(" · placeholder");
+            spans.push(Span::styled(" · placeholder", Style::default().fg(Color::Magenta)));
         }
     }
 
-    label
+    Line::from(spans)
+}
+
+fn glow_style() -> Style {
+    Style::default().fg(glow_color(1.0)).add_modifier(Modifier::BOLD)
+}
+
+fn glow_intensity(last_update: DateTime<Utc>, now: DateTime<Utc>) -> f32 {
+    let delta_ms = now.signed_duration_since(last_update).num_milliseconds().max(0);
+    let elapsed = delta_ms as f32 / 1000.0;
+    (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0)
+}
+
+fn glow_color(intensity: f32) -> Color {
+    let clamp = |value: f32| value.clamp(0.0, 255.0) as u8;
+    let red = clamp(210.0 + 40.0 * intensity);
+    let green = clamp(140.0 + 30.0 * intensity);
+    let blue = clamp(120.0 + 25.0 * intensity);
+    Color::Rgb(red, green, blue)
 }
 
 #[cfg(test)]
@@ -407,8 +535,9 @@ mod tests {
             }),
         );
 
-        let line = format_section_line(&section, &extras, Some("Theme"));
-        assert!(line.contains("musicgen"));
-        assert!(line.starts_with("▶"));
+        let line = plan_section_line(&section, &extras, Some("Theme"));
+        let rendered = line.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert!(rendered.contains("musicgen"));
+        assert!(rendered.trim_start().starts_with("▶"));
     }
 }

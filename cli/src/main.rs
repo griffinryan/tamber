@@ -27,6 +27,14 @@ use app::{AppCommand, AppEvent, AppState, LocalArtifact};
 use config::AppConfig;
 use types::{CompositionPlan, GenerationArtifact, GenerationRequest, JobState};
 
+const PULSE_MESSAGES: &[&str] = &[
+    "Stirring the sound cauldron…",
+    "Layering motifs with care…",
+    "Polishing transitions, hang tight…",
+    "Dialing in warmth and shimmer…",
+    "Locking sections to the groove…",
+];
+
 #[tokio::main]
 async fn main() -> Result<()> {
     setup_tracing()?;
@@ -198,6 +206,16 @@ impl Controller {
                 }
             };
 
+            let progress_ratio = status.progress.clamp(0.0, 1.0);
+            let pulse_message = pulse_message(attempt);
+            let _ = inner.event_tx.send(AppEvent::PollProgress {
+                progress: progress_ratio,
+                message: pulse_message.to_string(),
+            });
+            let friendly_update =
+                format!("{} ({}%)", pulse_message, (progress_ratio * 100.0).round() as i32);
+            let _ = inner.event_tx.send(AppEvent::WorkerNudge { message: friendly_update });
+
             let _ = inner.event_tx.send(AppEvent::JobUpdated { status: status.clone() });
 
             match status.state {
@@ -213,6 +231,10 @@ impl Controller {
                         guard.insert(job_id.clone(), local.local_path.clone());
                     }
                     let _ = inner.event_tx.send(AppEvent::JobCompleted { status, artifact: local });
+                    let _ = inner.event_tx.send(AppEvent::PollProgress {
+                        progress: 1.0,
+                        message: "Render complete — ready for playback".to_string(),
+                    });
                     break;
                 }
                 JobState::Failed => break,
@@ -242,6 +264,14 @@ impl Controller {
 
         Ok(())
     }
+}
+
+fn pulse_message(attempt: u32) -> &'static str {
+    if PULSE_MESSAGES.is_empty() {
+        return "Working on it…";
+    }
+    let index = (attempt as usize) % PULSE_MESSAGES.len();
+    PULSE_MESSAGES[index]
 }
 
 async fn persist_artifact(
