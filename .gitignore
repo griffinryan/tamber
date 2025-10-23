@@ -3,6 +3,7 @@
 
 # Extras
 .DS_Store
+goal.txt
 
 # Python
 __pycache__/

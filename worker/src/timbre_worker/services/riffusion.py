@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
-from PIL import Image
 from loguru import logger
+from PIL import Image
 
 from ..app.models import (
     CompositionPlan,
@@ -18,6 +18,7 @@ from ..app.models import (
     GenerationRequest,
     SectionEnergy,
     SectionRole,
+    ThemeDescriptor,
 )
 from ..app.settings import Settings
 from .audio_utils import ensure_waveform_channels, write_waveform
@@ -89,6 +90,8 @@ class RiffusionService:
         plan: CompositionPlan,
         model_id: Optional[str] = None,
         render_seconds: Optional[float] = None,
+        theme: ThemeDescriptor | None = None,
+        previous_render: SectionRender | None = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or request.model_id or self._default_model_id
         pipeline_handle, placeholder_reason = await self._ensure_pipeline(model_key)
@@ -112,10 +115,27 @@ class RiffusionService:
         used_placeholder = pipeline_handle is None
         device_token = self._device if pipeline_handle is not None else "placeholder"
 
+        prompt_text = self._compose_prompt(
+            section.prompt,
+            theme=theme,
+            previous=previous_render,
+        )
+
+        init_image = None
+        init_strength = 0.55
+        if previous_render is not None:
+            init_image = self._prepare_init_image(previous_render)
+            if init_image is not None:
+                extras_hint = previous_render.extras.copy()
+            else:
+                extras_hint = None
+        else:
+            extras_hint = None
+
         if pipeline_handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._placeholder_waveform,
-                section.prompt,
+                prompt_text,
                 duration,
                 placeholder_reason or "pipeline_unavailable",
                 section_seed,
@@ -125,10 +145,12 @@ class RiffusionService:
                 waveform, sample_rate, extras = await asyncio.to_thread(
                     self._run_inference,
                     pipeline_handle,
-                    section.prompt,
+                    prompt_text,
                     duration,
                     guidance_scale,
                     section_seed,
+                    init_image,
+                    init_strength,
                 )
             except GenerationFailure as exc:
                 logger.warning(
@@ -141,7 +163,7 @@ class RiffusionService:
                 placeholder_reason = f"inference_error:{exc}"
                 waveform, sample_rate, extras = await asyncio.to_thread(
                     self._placeholder_waveform,
-                    section.prompt,
+                    prompt_text,
                     duration,
                     placeholder_reason,
                     section_seed,
@@ -168,6 +190,24 @@ class RiffusionService:
             extras["placeholder_reason"] = placeholder_reason
         if section_seed is not None:
             extras["seed"] = section_seed
+        if theme is not None:
+            extras["theme"] = theme.model_dump()
+        if init_image is not None:
+            extras.setdefault("continuation", {})
+            extras["continuation"].update(
+                {
+                    "from_section": previous_render.extras.get("section_id")
+                    if previous_render is not None
+                    else None,
+                    "strength": init_strength,
+                }
+            )
+        if extras_hint is not None:
+            extras.setdefault("continuation", {})
+            extras["continuation"].setdefault(
+                "source_metadata",
+                extras_hint,
+            )
         decoder_mode = self._spectrogram_mode if not used_placeholder else "placeholder"
         if decoder_mode is not None:
             extras["spectrogram_decoder"] = decoder_mode
@@ -356,6 +396,8 @@ class RiffusionService:
         duration_seconds: float,
         guidance_scale: float,
         seed: Optional[int],
+        init_image: Optional[Image.Image],
+        init_strength: Optional[float],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         assert torch is not None
 
@@ -363,24 +405,35 @@ class RiffusionService:
         if seed is not None:
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
-        audio_length = max(1, int(round(duration_seconds)))
+        audio_length = max(1.0, float(duration_seconds))
 
         pipeline = handle.pipeline
         try:
-            result = pipeline(
-                prompt=prompt,
-                num_inference_steps=50,
-                guidance_scale=guidance_scale,
-                audio_length_in_s=audio_length,
-                generator=generator,
-            )
+            kwargs = {
+                "prompt": prompt,
+                "num_inference_steps": 50,
+                "guidance_scale": guidance_scale,
+                "audio_length_in_s": audio_length,
+                "generator": generator,
+            }
+            if init_image is not None:
+                kwargs["image"] = init_image
+                if init_strength is not None:
+                    kwargs["strength"] = init_strength
+            result = pipeline(**kwargs)
         except TypeError:
-            result = pipeline(
-                prompt=prompt,
-                num_inference_steps=50,
-                guidance_scale=guidance_scale,
-                generator=generator,
-            )
+            kwargs = {
+                "prompt": prompt,
+                "num_inference_steps": 50,
+                "guidance_scale": guidance_scale,
+                "audio_length_in_s": int(round(audio_length)),
+                "generator": generator,
+            }
+            if init_image is not None:
+                kwargs["image"] = init_image
+                if init_strength is not None:
+                    kwargs["strength"] = init_strength
+            result = pipeline(**kwargs)
 
         audio_list = getattr(result, "audios", None)
         sample_rate = getattr(result, "sample_rate", None) or handle.sample_rate
@@ -503,7 +556,7 @@ class RiffusionService:
 
         override = (self._settings.inference_device or "").strip().lower()
         if override:
-            if override == "cuda" and torch.cuda.is_available():  # pragma: no cover - hardware dependent
+            if override == "cuda" and torch.cuda.is_available():  # pragma: no cover
                 return "cuda", torch.float16
             if (
                 override == "mps"
@@ -520,7 +573,8 @@ class RiffusionService:
 
         if torch.cuda.is_available():  # pragma: no cover - depends on hardware
             return "cuda", torch.float16
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # pragma: no cover
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            # pragma: no cover - hardware dependent
             # Riffusion outputs distort on MPS with float16; prefer float32 even if slower.
             return "mps", torch.float32
         return "cpu", torch.float32
@@ -531,6 +585,37 @@ class RiffusionService:
             detail = TORCH_IMPORT_ERROR or "not installed"
             return f"torch_unavailable:{detail};{guidance}"
         return "unknown"
+
+    def _compose_prompt(
+        self,
+        base_prompt: str,
+        *,
+        theme: ThemeDescriptor | None,
+        previous: SectionRender | None,
+    ) -> str:
+        segments: list[str] = [base_prompt.strip()]
+        if theme is not None:
+            instrumentation = (
+                ", ".join(theme.instrumentation)
+                if theme.instrumentation
+                else "blended instrumentation"
+            )
+            descriptor_parts = [
+                f"Maintain the {theme.motif} motif",
+                f"with {instrumentation}",
+                f"following a {theme.rhythm} feel",
+            ]
+            if theme.texture:
+                descriptor_parts.append(f"and preserve the {theme.texture}")
+            segments.append(" ".join(descriptor_parts) + ".")
+        if previous is not None:
+            prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
+            descriptor = prev_label or "section"
+            segments.append(
+                "Flow smoothly from the previous "
+                f"{descriptor}, evolving its ideas without changing the instrumentation."
+            )
+        return " ".join(segment.strip() for segment in segments if segment.strip())
 
     def _resolve_spectrogram_decoder(
         self,
@@ -561,6 +646,25 @@ class RiffusionService:
             params.sample_rate,
         )
         return decoder
+
+    def _prepare_init_image(self, render: SectionRender) -> Optional[Image.Image]:
+        if render.waveform.size == 0:
+            return None
+        decoder = self._resolve_spectrogram_decoder(render.sample_rate)
+        if decoder is None or not hasattr(decoder, "encode"):
+            return None
+        waveform = ensure_waveform_channels(render.waveform)
+        total_seconds = waveform.shape[0] / render.sample_rate
+        if total_seconds <= 0.5:
+            return None
+        tail_seconds = min(4.0, total_seconds)
+        tail_samples = max(1, int(tail_seconds * render.sample_rate))
+        tail = waveform[-tail_samples:]
+        try:
+            return decoder.encode(tail, render.sample_rate)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to encode continuation spectrogram: %s", exc)
+            return None
 
     def _audio_from_images(
         self,

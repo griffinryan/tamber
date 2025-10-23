@@ -6,15 +6,25 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::Value;
-use std::{collections::HashMap, fs, io, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs,
+    fs::File,
+    io::{self, BufReader},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration as StdDuration,
+};
 use tokio::{
     sync::{
         mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
         Mutex,
     },
-    time::{sleep, Duration},
+    time::{sleep, Duration as TokioDuration},
 };
 use tracing::{error, info};
+
+use rodio::{Decoder, OutputStream, Sink, Source};
 
 mod api;
 mod app;
@@ -27,6 +37,57 @@ use app::{AppCommand, AppEvent, AppState, LocalArtifact};
 use config::AppConfig;
 use types::{CompositionPlan, GenerationArtifact, GenerationRequest, JobState};
 
+const PULSE_MESSAGES: &[&str] = &[
+    "Stirring the sound cauldron…",
+    "Layering motifs with care…",
+    "Polishing transitions, hang tight…",
+    "Dialing in warmth and shimmer…",
+    "Locking sections to the groove…",
+];
+
+struct AudioPlayer {
+    _stream: OutputStream,
+    handle: rodio::OutputStreamHandle,
+    sink: Option<Sink>,
+}
+
+unsafe impl Send for AudioPlayer {}
+unsafe impl Sync for AudioPlayer {}
+
+impl AudioPlayer {
+    fn new() -> Result<Self> {
+        let (stream, handle) =
+            OutputStream::try_default().context("failed to open audio output")?;
+        Ok(Self { _stream: stream, handle, sink: None })
+    }
+
+    fn play(&mut self, path: &Path) -> Result<()> {
+        self.stop();
+        let file =
+            File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+        let decoder = Decoder::new(BufReader::new(file)).context("failed to decode audio")?;
+        let sink = Sink::try_new(&self.handle).context("failed to create audio sink")?;
+        sink.append(decoder);
+        sink.play();
+        self.sink = Some(sink);
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        if let Some(sink) = self.sink.take() {
+            sink.stop();
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        self.sink.as_ref().map(|sink| !sink.empty()).unwrap_or(false)
+    }
+
+    fn reset(&mut self) {
+        self.stop();
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     setup_tracing()?;
@@ -38,7 +99,8 @@ async fn main() -> Result<()> {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (command_tx, command_rx) = unbounded_channel();
 
-    Controller::new(client.clone(), event_tx.clone(), config.clone()).spawn(command_rx);
+    let controller = Controller::new(client.clone(), event_tx.clone(), config.clone())?;
+    controller.spawn(command_rx);
 
     let mut app_state = AppState::new(config.clone());
     seed_health_status(&client, &mut app_state).await;
@@ -109,17 +171,24 @@ struct ControllerInner {
     event_tx: UnboundedSender<AppEvent>,
     config: AppConfig,
     artifact_paths: Mutex<HashMap<String, PathBuf>>,
+    player: Mutex<AudioPlayer>,
 }
 
 impl Controller {
-    fn new(client: api::Client, event_tx: UnboundedSender<AppEvent>, config: AppConfig) -> Self {
+    fn new(
+        client: api::Client,
+        event_tx: UnboundedSender<AppEvent>,
+        config: AppConfig,
+    ) -> Result<Self> {
+        let player = AudioPlayer::new()?;
         let inner = ControllerInner {
             client,
             event_tx,
             config,
             artifact_paths: Mutex::new(HashMap::new()),
+            player: Mutex::new(player),
         };
-        Self { inner: Arc::new(inner) }
+        Ok(Self { inner: Arc::new(inner) })
     }
 
     fn spawn(self, mut command_rx: UnboundedReceiver<AppCommand>) {
@@ -142,6 +211,9 @@ impl Controller {
             AppCommand::PlayJob { job_id } => {
                 Controller::play_job(inner, job_id).await?;
             }
+            AppCommand::StopPlayback => {
+                Controller::stop_playback(inner).await?;
+            }
         }
         Ok(())
     }
@@ -157,6 +229,10 @@ impl Controller {
             .submit_generation(&request)
             .await
             .context("failed to submit generation request")?;
+        {
+            let mut player = inner.player.lock().await;
+            player.reset();
+        }
 
         let _ = inner.event_tx.send(AppEvent::JobQueued {
             status: status.clone(),
@@ -183,7 +259,7 @@ impl Controller {
     async fn poll_job(inner: Arc<ControllerInner>, job_id: String) -> Result<()> {
         let mut attempt = 0u32;
         loop {
-            let delay = Duration::from_millis(400).saturating_mul((attempt + 1).min(5));
+            let delay = TokioDuration::from_millis(400).saturating_mul((attempt + 1).min(5));
             sleep(delay).await;
             attempt = attempt.saturating_add(1);
 
@@ -197,6 +273,16 @@ impl Controller {
                     continue;
                 }
             };
+
+            let progress_ratio = status.progress.clamp(0.0, 1.0);
+            let pulse_message = pulse_message(attempt);
+            let _ = inner.event_tx.send(AppEvent::PollProgress {
+                progress: progress_ratio,
+                message: pulse_message.to_string(),
+            });
+            let friendly_update =
+                format!("{} ({}%)", pulse_message, (progress_ratio * 100.0).round() as i32);
+            let _ = inner.event_tx.send(AppEvent::WorkerNudge { message: friendly_update });
 
             let _ = inner.event_tx.send(AppEvent::JobUpdated { status: status.clone() });
 
@@ -213,6 +299,26 @@ impl Controller {
                         guard.insert(job_id.clone(), local.local_path.clone());
                     }
                     let _ = inner.event_tx.send(AppEvent::JobCompleted { status, artifact: local });
+                    if let Some(path) = inner.artifact_paths.lock().await.get(&job_id).cloned() {
+                        if let Ok(duration) = audio_duration(&path) {
+                            let mut player = inner.player.lock().await;
+                            if let Err(err) = player.play(&path) {
+                                error!("failed to start playback: {err}");
+                            } else {
+                                drop(player);
+                                let _ = inner.event_tx.send(AppEvent::PlaybackStarted {
+                                    job_id: job_id.clone(),
+                                    path,
+                                    duration,
+                                });
+                                Controller::spawn_playback_monitor(inner.clone());
+                            }
+                        }
+                    }
+                    let _ = inner.event_tx.send(AppEvent::PollProgress {
+                        progress: 1.0,
+                        message: "Render complete — ready for playback".to_string(),
+                    });
                     break;
                 }
                 JobState::Failed => break,
@@ -240,8 +346,59 @@ impl Controller {
             path.display()
         )));
 
+        let mut player = inner.player.lock().await;
+        if let Err(err) = player.play(&path) {
+            let _ = inner
+                .event_tx
+                .send(AppEvent::Error(format!("Failed to play {}: {err}", path.display())));
+        } else if let Ok(duration) = audio_duration(&path) {
+            drop(player);
+            let _ = inner.event_tx.send(AppEvent::PlaybackStarted { job_id, path, duration });
+            Controller::spawn_playback_monitor(inner.clone());
+        }
+
         Ok(())
     }
+
+    async fn stop_playback(inner: Arc<ControllerInner>) -> Result<()> {
+        let mut player = inner.player.lock().await;
+        player.stop();
+        let _ = inner.event_tx.send(AppEvent::PlaybackStopped);
+        Ok(())
+    }
+
+    fn spawn_playback_monitor(inner: Arc<ControllerInner>) {
+        tokio::spawn(async move {
+            loop {
+                sleep(TokioDuration::from_millis(500)).await;
+                let playing = {
+                    let player = inner.player.lock().await;
+                    player.is_playing()
+                };
+                let _ = inner.event_tx.send(AppEvent::PlaybackProgress { is_playing: playing });
+                if !playing {
+                    let _ = inner.event_tx.send(AppEvent::PlaybackStopped);
+                    break;
+                }
+            }
+        });
+    }
+}
+
+fn pulse_message(attempt: u32) -> &'static str {
+    if PULSE_MESSAGES.is_empty() {
+        return "Working on it…";
+    }
+    let index = (attempt as usize) % PULSE_MESSAGES.len();
+    PULSE_MESSAGES[index]
+}
+
+fn audio_duration(path: &Path) -> Result<StdDuration> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let decoder = Decoder::new(BufReader::new(file)).context("failed to decode audio")?;
+    decoder
+        .total_duration()
+        .ok_or_else(|| anyhow!("unable to determine duration for {}", path.display()))
 }
 
 async fn persist_artifact(

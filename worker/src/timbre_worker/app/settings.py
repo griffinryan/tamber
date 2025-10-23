@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     config_dir: Path = Field(default_factory=_default_config_dir)
     artifact_root: Path = Field(default_factory=_default_artifact_root)
     default_model_id: str = "riffusion-v1"
-    default_duration_seconds: int = Field(default=8, ge=1, le=30)
+    default_duration_seconds: int = Field(default=24, ge=1, le=30)
     inference_device: str | None = Field(
         default=None,
         description="Override inference device selection (cpu, mps, cuda).",

@@ -7,10 +7,10 @@ from uuid import uuid4
 
 from loguru import logger
 
-from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 from ..services.orchestrator import ComposerOrchestrator
 from ..services.riffusion import GenerationFailure
 from ..services.types import SectionRender
+from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 
 
 class JobManager:

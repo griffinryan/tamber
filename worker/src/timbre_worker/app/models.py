@@ -29,6 +29,14 @@ class SectionEnergy(str, Enum):
     HIGH = "high"
 
 
+class ThemeDescriptor(BaseModel):
+    motif: str = Field(..., min_length=1, max_length=128)
+    instrumentation: list[str] = Field(default_factory=list)
+    rhythm: str = Field(default="steady pulse", min_length=1, max_length=128)
+    dynamic_curve: list[str] = Field(default_factory=list)
+    texture: Optional[str] = Field(default=None, max_length=128)
+
+
 class CompositionSection(BaseModel):
     section_id: str = Field(..., min_length=2, max_length=32)
     role: SectionRole
@@ -49,6 +57,7 @@ class CompositionPlan(BaseModel):
     key: str = Field(default="C major", min_length=3, max_length=32)
     total_bars: int = Field(..., ge=1, le=512)
     total_duration_seconds: float = Field(..., gt=1.0, le=300.0)
+    theme: Optional[ThemeDescriptor] = Field(default=None)
     sections: list[CompositionSection]
 
 

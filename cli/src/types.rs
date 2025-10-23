@@ -86,6 +86,18 @@ pub enum SectionEnergy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ThemeDescriptor {
+    pub motif: String,
+    #[serde(default)]
+    pub instrumentation: Vec<String>,
+    pub rhythm: String,
+    #[serde(default)]
+    pub dynamic_curve: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompositionSection {
     pub section_id: String,
     pub role: SectionRole,
@@ -110,5 +122,7 @@ pub struct CompositionPlan {
     pub key: String,
     pub total_bars: u16,
     pub total_duration_seconds: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeDescriptor>,
     pub sections: Vec<CompositionSection>,
 }
