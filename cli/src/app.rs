@@ -139,6 +139,8 @@ pub struct AppState {
     pub focused_pane: FocusedPane,
     pub chat_scroll: usize,
     pub status_scroll: usize,
+    pub chat_following: bool,
+    pub status_following: bool,
     app_config: AppConfig,
     generation_config: GenerationConfig,
     playback: Option<PlaybackState>,
@@ -157,6 +159,8 @@ impl AppState {
             focused_pane: FocusedPane::Prompt,
             chat_scroll: 0,
             status_scroll: 0,
+            chat_following: true,
+            status_following: true,
             playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
@@ -194,6 +198,9 @@ impl AppState {
                     ChatRole::Worker,
                     format!("Queued job {} ({summary})", status.job_id),
                 );
+                self.focused_pane = FocusedPane::StatusBar;
+                self.status_scroll = 0;
+                self.status_following = true;
             }
             AppEvent::JobUpdated { status } => {
                 if let Some(job) = self.jobs.get_mut(&status.job_id) {
@@ -239,6 +246,8 @@ impl AppState {
                     started_at: Utc::now(),
                     is_playing: true,
                 });
+                self.status_scroll = 0;
+                self.status_following = true;
             }
             AppEvent::PlaybackProgress { is_playing } => {
                 if let Some(playback) = &mut self.playback {
@@ -269,6 +278,7 @@ impl AppState {
             self.chat.drain(0..overflow);
         }
         self.chat_scroll = 0;
+        self.chat_following = true;
     }
 
     pub fn push_status_line(&mut self, line: String) {
@@ -278,6 +288,7 @@ impl AppState {
             self.status_lines.drain(0..overflow);
         }
         self.status_scroll = 0;
+        self.status_following = true;
     }
 
     pub fn jobs_iter(&self) -> Iter<'_, String, JobEntry> {
@@ -444,17 +455,17 @@ impl AppState {
     }
 
     pub fn increment_chat_scroll(&mut self, delta: isize) {
-        let max = self.chat.len().saturating_sub(1);
         let current = self.chat_scroll as isize;
-        let next = (current + delta).clamp(0, max as isize);
+        let next = (current + delta).max(0);
         self.chat_scroll = next as usize;
+        self.chat_following = self.chat_scroll == 0;
     }
 
     pub fn increment_status_scroll(&mut self, delta: isize) {
-        let max = self.status_lines.len().saturating_sub(1);
         let current = self.status_scroll as isize;
-        let next = (current + delta).clamp(0, max as isize);
+        let next = (current + delta).max(0);
         self.status_scroll = next as usize;
+        self.status_following = self.status_scroll == 0;
     }
 
     pub fn playback_progress(

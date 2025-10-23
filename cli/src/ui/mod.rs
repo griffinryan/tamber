@@ -83,9 +83,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
 fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     let mut lines: Vec<Line> = Vec::new();
 
-    let start = app.chat_scroll.min(app.chat.len());
-    let entries: Vec<_> = app.chat.iter().rev().skip(start).take(200).cloned().collect();
-    for entry in entries.into_iter().rev() {
+    for entry in &app.chat {
         let prefix = format!("[{}]", entry.role.label());
         let ts = entry.timestamp.format("%H:%M:%S").to_string();
         lines.push(Line::from(vec![
@@ -112,7 +110,17 @@ fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     if matches!(app.focused_pane, FocusedPane::Conversation) {
         block = block.border_style(glow_style());
     }
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+
+    let total_lines = lines.len();
+    let height = area.height as usize;
+    let max_offset = total_lines.saturating_sub(height);
+    let desired = if app.chat_following {
+        max_offset
+    } else {
+        max_offset.saturating_sub(app.chat_scroll.min(max_offset))
+    };
+    let paragraph =
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }).scroll((desired as u16, 0));
     frame.render_widget(paragraph, area);
 }
 
@@ -267,7 +275,16 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     if matches!(app.focused_pane, FocusedPane::Status) {
         block = block.border_style(glow_style());
     }
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    let total_lines = lines.len();
+    let height = area.height as usize;
+    let max_offset = total_lines.saturating_sub(height);
+    let desired = if app.status_following {
+        max_offset
+    } else {
+        max_offset.saturating_sub(app.status_scroll.min(max_offset))
+    };
+    let paragraph = Paragraph::new(lines).block(block).scroll((desired as u16, 0));
+    frame.render_widget(paragraph, area);
 }
 
 fn render_status_bar(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
@@ -350,14 +367,22 @@ fn handle_key(
             }
         }
         KeyCode::Up => match app.focused_pane {
-            FocusedPane::Conversation => app.increment_chat_scroll(-(1)),
-            FocusedPane::Status => app.increment_status_scroll(-(1)),
+            FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
+            FocusedPane::Conversation => app.increment_chat_scroll(1),
+            FocusedPane::Status => app.increment_status_scroll(1),
             FocusedPane::Jobs => app.select_previous_job(),
             _ => {}
         },
         KeyCode::Down => match app.focused_pane {
-            FocusedPane::Conversation => app.increment_chat_scroll(1),
-            FocusedPane::Status => app.increment_status_scroll(1),
+            FocusedPane::StatusBar => app.focused_pane = FocusedPane::Conversation,
+            FocusedPane::Conversation => app.increment_chat_scroll(-1),
+            FocusedPane::Status => {
+                if app.status_scroll == 0 {
+                    app.focused_pane = FocusedPane::Prompt;
+                } else {
+                    app.increment_status_scroll(-1);
+                }
+            }
             FocusedPane::Jobs => app.select_next_job(),
             _ => {}
         },
@@ -401,6 +426,9 @@ fn handle_key(
                 app.push_status_line("Failed to submit prompt; worker channel closed".into());
             }
             app.input.clear();
+            app.focused_pane = FocusedPane::StatusBar;
+            app.status_scroll = 0;
+            app.status_following = true;
         }
         KeyCode::Char(c) if matches!(app.focused_pane, FocusedPane::Prompt) => {
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
