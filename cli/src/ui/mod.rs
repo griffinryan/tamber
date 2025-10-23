@@ -1,17 +1,14 @@
 use crate::{
     app::{format_request_summary, AppCommand, AppEvent, AppState, ChatRole, JobEntry},
-    types::{CompositionSection, JobState, SectionEnergy, SectionRole},
+    types::{CompositionSection, JobState, SectionEnergy},
 };
 use anyhow::Result;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode},
-};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use std::collections::HashMap;
@@ -19,18 +16,6 @@ use std::time::Duration;
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender};
 
 pub fn run<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut AppState,
-    event_rx: &mut UnboundedReceiver<AppEvent>,
-    command_tx: UnboundedSender<AppCommand>,
-) -> Result<()> {
-    enable_raw_mode()?;
-    let result = run_loop(terminal, app, event_rx, command_tx);
-    disable_raw_mode()?;
-    result
-}
-
-fn run_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut AppState,
     event_rx: &mut UnboundedReceiver<AppEvent>,
@@ -86,27 +71,34 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
 }
 
 fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let mut lines: Vec<Line> = app
-        .chat
-        .iter()
-        .rev()
-        .take(200)
-        .map(|entry| {
-            let prefix = format!("[{}]", entry.role.label());
-            let ts = entry.timestamp.format("%H:%M:%S").to_string();
-            Line::from(vec![
-                Span::styled(ts, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
-                Span::raw(" "),
-                Span::styled(prefix, chat_style(&entry.role)),
-                Span::raw(" "),
-                Span::raw(entry.content.clone()),
-            ])
-        })
-        .collect();
-    lines.reverse();
+    let mut lines: Vec<Line> = Vec::new();
+
+    let entries: Vec<_> = app.chat.iter().rev().take(200).cloned().collect();
+    for entry in entries.into_iter().rev() {
+        let prefix = format!("[{}]", entry.role.label());
+        let ts = entry.timestamp.format("%H:%M:%S").to_string();
+        lines.push(Line::from(vec![
+            Span::styled(ts, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+            Span::raw(" "),
+            Span::styled(prefix, chat_style(&entry.role)),
+        ]));
+
+        for line in entry.content.lines() {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {line}"),
+                Style::default().fg(Color::White),
+            )]));
+        }
+
+        lines.push(Line::from(Span::raw("")));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from("No messages yet."));
+    }
 
     let block = Block::default().title("Conversation").borders(Borders::ALL);
-    let paragraph = Paragraph::new(lines).block(block);
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }
 
@@ -388,6 +380,7 @@ fn format_section_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::SectionRole;
     use serde_json::json;
 
     #[test]

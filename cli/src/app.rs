@@ -1,10 +1,7 @@
 use crate::{
     config::AppConfig,
     planner::CompositionPlanner,
-    types::{
-        CompositionPlan, GenerationArtifact, GenerationMetadata, GenerationRequest,
-        GenerationStatus, JobState,
-    },
+    types::{CompositionPlan, GenerationArtifact, GenerationRequest, GenerationStatus, JobState},
 };
 use chrono::{DateTime, Utc};
 use indexmap::{map::Iter, IndexMap};
@@ -467,6 +464,7 @@ fn plan_summary(plan: &CompositionPlan) -> String {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
+    use crate::types::GenerationMetadata;
     use chrono::Utc;
     use serde_json::json;
 

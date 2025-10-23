@@ -10,6 +10,7 @@ __pycache__/
 .venv/
 worker/.uv/
 uv.lock
+.python-version
 
 # General
 .DS_Store

@@ -5,6 +5,9 @@ setup:
 	cargo fetch
 
 worker-serve:
+	uv run --project worker uvicorn timbre_worker.app.main:app --port 8000
+
+worker-serve-reload:
 	uv run --project worker uvicorn timbre_worker.app.main:app --reload --port 8000
 
 cli-run:

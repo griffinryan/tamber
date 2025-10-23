@@ -1,4 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::Value;
 use std::{collections::HashMap, fs, io, path::PathBuf, sync::Arc};
@@ -38,13 +43,22 @@ async fn main() -> Result<()> {
     let mut app_state = AppState::new(config.clone());
     seed_health_status(&client, &mut app_state).await;
 
-    let stdout = io::stdout();
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    enable_raw_mode()?;
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+    terminal.hide_cursor()?;
 
-    ui::run(&mut terminal, &mut app_state, &mut event_rx, command_tx.clone())?;
+    let ui_result = ui::run(&mut terminal, &mut app_state, &mut event_rx, command_tx.clone());
 
-    Ok(())
+    terminal.show_cursor()?;
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+
+    ui_result
 }
 
 async fn seed_health_status(client: &api::Client, app: &mut AppState) {
