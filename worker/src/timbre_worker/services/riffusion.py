@@ -71,6 +71,7 @@ class RiffusionService:
         self._spectrogram_decoder: Optional[SpectrogramImageDecoder] = None
         self._spectrogram_params = SpectrogramParams()
         self._spectrogram_error: Optional[str] = None
+        self._spectrogram_mode: Optional[str] = None
 
     @property
     def default_model_id(self) -> str:
@@ -78,6 +79,7 @@ class RiffusionService:
 
     async def warmup(self) -> None:
         await self._ensure_pipeline(self._default_model_id)
+        self._resolve_spectrogram_decoder(44100)
 
     async def render_section(
         self,
@@ -166,6 +168,9 @@ class RiffusionService:
             extras["placeholder_reason"] = placeholder_reason
         if section_seed is not None:
             extras["seed"] = section_seed
+        decoder_mode = self._spectrogram_mode if not used_placeholder else "placeholder"
+        if decoder_mode is not None:
+            extras["spectrogram_decoder"] = decoder_mode
         extras["prompt_hash"] = self._prompt_hash(section.prompt)
 
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
@@ -549,6 +554,12 @@ class RiffusionService:
 
         self._spectrogram_decoder = decoder
         self._spectrogram_error = None
+        self._spectrogram_mode = getattr(decoder._inverse_mel, "decoder_mode", "unknown")
+        logger.info(
+            "Spectrogram decoder initialised (mode=%s, sample_rate=%s)",
+            self._spectrogram_mode,
+            params.sample_rate,
+        )
         return decoder
 
     def _audio_from_images(

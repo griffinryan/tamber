@@ -6,6 +6,7 @@ subset of its spectrogram decoding utilities in a form that returns NumPy wavefo
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
@@ -71,19 +72,7 @@ class SpectrogramImageDecoder:
         self._device = torch.device("cpu")
         self._dtype = torch.float32
 
-        self._inverse_mel = torchaudio.transforms.InverseMelScale(
-            n_stft=params.n_fft // 2 + 1,
-            n_mels=params.num_frequencies,
-            sample_rate=params.sample_rate,
-            f_min=params.min_frequency,
-            f_max=params.max_frequency,
-            max_iter=params.max_mel_iters,
-            tolerance_loss=1e-5,
-            tolerance_change=1e-8,
-            norm=params.mel_scale_norm,
-            mel_scale=params.mel_scale_type,
-        ).to(self._device)
-
+        self._inverse_mel = self._build_inverse_mel(params)
         self._griffin_lim = torchaudio.transforms.GriffinLim(
             n_fft=params.n_fft,
             n_iter=params.num_griffin_lim_iters,
@@ -102,6 +91,41 @@ class SpectrogramImageDecoder:
         mel = self._spectrogram_from_image(image)
         waveform = self._waveform_from_mel(mel)
         return waveform, self._params.sample_rate
+
+    def _build_inverse_mel(self, params: SpectrogramParams) -> torch.nn.Module:
+        """Construct an InverseMelScale compatible with the installed torchaudio."""
+
+        inverse_cls = torchaudio.transforms.InverseMelScale
+        signature = inspect.signature(inverse_cls.__init__)
+        kwargs: dict[str, object] = {
+            "n_stft": params.n_fft // 2 + 1,
+            "n_mels": params.num_frequencies,
+            "sample_rate": params.sample_rate,
+            "f_min": params.min_frequency,
+            "f_max": params.max_frequency,
+            "norm": params.mel_scale_norm,
+            "mel_scale": params.mel_scale_type,
+        }
+
+        if "max_iter" in signature.parameters:
+            kwargs.update(
+                {
+                    "max_iter": params.max_mel_iters,
+                    "tolerance_loss": 1e-5,
+                    "tolerance_change": 1e-8,
+                    "sgdargs": None,
+                }
+            )
+            mode = "legacy"
+        elif "driver" in signature.parameters:
+            kwargs["driver"] = "gels"
+            mode = "gels"
+        else:
+            mode = "unknown"
+
+        module = inverse_cls(**kwargs).to(self._device)
+        setattr(module, "decoder_mode", mode)
+        return module
 
     def _spectrogram_from_image(self, image: ImageLike) -> np.ndarray:
         if isinstance(image, Image.Image):
@@ -153,4 +177,3 @@ def spectrogram_decoder_available() -> bool:
     """Return True if the torchaudio-backed decoder can be constructed."""
 
     return torchaudio is not None
-
