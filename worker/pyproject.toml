@@ -33,8 +33,7 @@ inference = [
   "huggingface-hub>=0.20",
   "numpy>=1.26",
   "transformers>=4.39",
-  "scipy>=1.11",
-  "librosa>=0.10"
+  "scipy>=1.11"
 ]
 
 [build-system]

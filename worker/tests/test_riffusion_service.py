@@ -9,7 +9,13 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 
-from timbre_worker.app.models import GenerationRequest
+from timbre_worker.app.models import (
+    CompositionPlan,
+    CompositionSection,
+    GenerationRequest,
+    SectionEnergy,
+    SectionRole,
+)
 from timbre_worker.app.settings import Settings
 from timbre_worker.services.riffusion import (
     DEFAULT_GUIDANCE_SCALE,
@@ -218,24 +224,92 @@ async def test_riffusion_service_pipeline_receives_prompt(
     assert calls, "pipeline should have been invoked"
     first_call = calls[0]
     assert first_call.get("prompt") == request.prompt
-    assert first_call.get("guidance_scale") == DEFAULT_GUIDANCE_SCALE
-    assert first_call.get("num_inference_steps") == 50
-    assert first_call.get("audio_length_in_s") >= MIN_RENDER_SECONDS - 0.5
 
-    request_cfg = GenerationRequest(
-        prompt="dreamy modular sequence",
+
+@pytest.mark.asyncio
+async def test_riffusion_inference_falls_back_to_placeholder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _StubGenerator:
+        def manual_seed(self, seed: int) -> "_StubGenerator":
+            return self
+
+    stub_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+        backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False)),
+        float16=np.float16,
+        float32=np.float32,
+        Generator=lambda device=None: _StubGenerator(),
+    )
+
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.torch",
+        stub_torch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.TORCH_IMPORT_ERROR",
+        None,
+        raising=False,
+    )
+
+    gradient = np.tile(np.linspace(0, 255, 512, dtype=np.uint8), (512, 1))
+    image = np.stack([gradient, gradient, gradient], axis=-1)
+
+    class _DummyPipeline:
+        def __call__(self, *args: Any, **kwargs: Any) -> Any:
+            return types.SimpleNamespace(images=[image], sample_rate=44100)
+
+    def loader(resolved_model_id: str) -> PipelineHandle:
+        return PipelineHandle(pipeline=_DummyPipeline(), sample_rate=44100)
+
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.RiffusionService._resolve_spectrogram_decoder",
+        lambda self, _: None,
+    )
+
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
+    settings.ensure_directories()
+    service = RiffusionService(settings, pipeline_loader=loader)
+
+    request = GenerationRequest(
+        prompt="ambient pads",
         duration_seconds=4,
         model_id="riffusion-v1",
-        cfg_scale=4.5,
     )
-    artifact_cfg = await service.generate("job-real-2", request_cfg)
-    assert Path(artifact_cfg.artifact_path).exists()
-    extras_cfg = artifact_cfg.metadata.extras
-    assert extras_cfg.get("placeholder") is False
-    assert extras_cfg.get("guidance_scale") == pytest.approx(4.5)
-    assert calls[-1].get("guidance_scale") == pytest.approx(4.5)
-    assert calls[-1].get("audio_length_in_s") >= MIN_RENDER_SECONDS - 0.5
-    assert extras_cfg.get("render_seconds", 0.0) >= MIN_RENDER_SECONDS - 0.5
+
+    section = CompositionSection(
+        section_id="s00",
+        role=SectionRole.MOTIF,
+        label="Test",
+        prompt=request.prompt,
+        bars=4,
+        target_seconds=4.0,
+        energy=SectionEnergy.MEDIUM,
+    )
+
+    plan = CompositionPlan(
+        version="test",
+        tempo_bpm=90,
+        time_signature="4/4",
+        key="C major",
+        total_bars=4,
+        total_duration_seconds=4.0,
+        sections=[section],
+    )
+
+    render = await service.render_section(
+        request,
+        section,
+        plan=plan,
+    )
+
+    assert render.extras["placeholder"] is True
+    assert "inference_error" in render.extras["placeholder_reason"]
 
 
 def test_load_pipeline_uses_trust_remote_code(

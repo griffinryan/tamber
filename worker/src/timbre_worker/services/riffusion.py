@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
+from PIL import Image
 from loguru import logger
 
 from ..app.models import (
@@ -20,6 +21,7 @@ from ..app.models import (
 )
 from ..app.settings import Settings
 from .audio_utils import ensure_waveform_channels, write_waveform
+from .riffusion_spectrogram import SpectrogramImageDecoder, SpectrogramParams
 from .types import SectionRender
 
 try:  # pragma: no cover - optional dependency imports are validated at runtime
@@ -29,14 +31,6 @@ except Exception as exc:  # noqa: BLE001
     TORCH_IMPORT_ERROR = exc
 else:  # pragma: no cover
     TORCH_IMPORT_ERROR = None
-
-try:  # pragma: no cover
-    import librosa
-except Exception as exc:  # noqa: BLE001
-    librosa = None  # type: ignore[assignment]
-    LIBROSA_IMPORT_ERROR = exc
-else:  # pragma: no cover
-    LIBROSA_IMPORT_ERROR = None
 
 
 DEFAULT_GUIDANCE_SCALE = 7.0
@@ -74,6 +68,9 @@ class RiffusionService:
         self._allow_inference = settings.riffusion_allow_inference
         self._device, self._dtype = self._select_device_and_dtype()
         self._pipeline_loader = pipeline_loader
+        self._spectrogram_decoder: Optional[SpectrogramImageDecoder] = None
+        self._spectrogram_params = SpectrogramParams()
+        self._spectrogram_error: Optional[str] = None
 
     @property
     def default_model_id(self) -> str:
@@ -110,6 +107,9 @@ class RiffusionService:
             str(self._dtype) if self._dtype is not None and pipeline_handle is not None else None
         )
 
+        used_placeholder = pipeline_handle is None
+        device_token = self._device if pipeline_handle is not None else "placeholder"
+
         if pipeline_handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._placeholder_waveform,
@@ -119,22 +119,39 @@ class RiffusionService:
                 section_seed,
             )
         else:
-            waveform, sample_rate, extras = await asyncio.to_thread(
-                self._run_inference,
-                pipeline_handle,
-                section.prompt,
-                duration,
-                guidance_scale,
-                section_seed,
-            )
+            try:
+                waveform, sample_rate, extras = await asyncio.to_thread(
+                    self._run_inference,
+                    pipeline_handle,
+                    section.prompt,
+                    duration,
+                    guidance_scale,
+                    section_seed,
+                )
+            except GenerationFailure as exc:
+                logger.warning(
+                    "Riffusion inference failed for section %s (%s); using placeholder audio",
+                    section.section_id,
+                    exc,
+                )
+                used_placeholder = True
+                device_token = "placeholder"
+                placeholder_reason = f"inference_error:{exc}"
+                waveform, sample_rate, extras = await asyncio.to_thread(
+                    self._placeholder_waveform,
+                    section.prompt,
+                    duration,
+                    placeholder_reason,
+                    section_seed,
+                )
         actual_seconds = len(ensure_waveform_channels(waveform)) / float(sample_rate)
 
         extras.update(
             {
                 "backend": "riffusion",
-                "device": self._device if pipeline_handle is not None else "placeholder",
+                "device": device_token,
                 "guidance_scale": guidance_scale,
-                "placeholder": pipeline_handle is None,
+                "placeholder": used_placeholder,
                 "section_id": section.section_id,
                 "section_label": section.label,
                 "section_role": section.role.value,
@@ -309,22 +326,12 @@ class RiffusionService:
         try:
             pipeline = DiffusionPipeline.from_pretrained(
                 resolved_model_id,
-                custom_pipeline="riffusion",
                 torch_dtype=dtype,
                 safety_checker=None,
                 trust_remote_code=True,
             )
-        except Exception as exc:
-            logger.warning(
-                "Custom Riffusion pipeline load failed (%s). Falling back to base pipeline.",
-                exc,
-            )
-            pipeline = DiffusionPipeline.from_pretrained(
-                resolved_model_id,
-                torch_dtype=dtype,
-                safety_checker=None,
-                trust_remote_code=True,
-            )
+        except Exception as exc:  # noqa: BLE001
+            raise GenerationFailure(f"pipeline_load_failed:{exc}") from exc
         pipeline = pipeline.to(self._device)
         if hasattr(pipeline, "set_progress_bar_config"):
             pipeline.set_progress_bar_config(disable=True)
@@ -518,9 +525,31 @@ class RiffusionService:
             guidance = "run `uv sync --project worker --extra inference` to install torch/diffusers"
             detail = TORCH_IMPORT_ERROR or "not installed"
             return f"torch_unavailable:{detail};{guidance}"
-        if librosa is None:
-            return f"librosa_unavailable:{LIBROSA_IMPORT_ERROR}"
         return "unknown"
+
+    def _resolve_spectrogram_decoder(
+        self,
+        expected_sample_rate: int,
+    ) -> Optional[SpectrogramImageDecoder]:
+        params = self._spectrogram_params
+        if params.sample_rate != expected_sample_rate:
+            params = replace(params, sample_rate=expected_sample_rate)
+            self._spectrogram_params = params
+            self._spectrogram_decoder = None
+
+        if self._spectrogram_decoder is not None:
+            return self._spectrogram_decoder
+
+        try:
+            decoder = SpectrogramImageDecoder(params, device="cpu")
+        except RuntimeError as exc:
+            self._spectrogram_error = str(exc)
+            logger.warning("Spectrogram decoder unavailable: %s", exc)
+            return None
+
+        self._spectrogram_decoder = decoder
+        self._spectrogram_error = None
+        return decoder
 
     def _audio_from_images(
         self,
@@ -531,45 +560,27 @@ class RiffusionService:
         if not images:
             raise GenerationFailure("pipeline returned empty audio result")
 
-        image = images[0]
-        if hasattr(image, "convert"):
-            image_array = np.asarray(image.convert("L"), dtype=np.float32)
+        raw_image = images[0]
+        if isinstance(raw_image, Image.Image):
+            pil_image = raw_image
         else:
-            array = np.asarray(image, dtype=np.float32)
-            if array.ndim == 3:
-                image_array = array[..., 0]
+            array = np.asarray(raw_image)
+            if array.dtype != np.uint8:
+                upper_bound = float(np.max(array)) if array.size else 0.0
+                if upper_bound <= 1.0:
+                    array = np.clip(array, 0.0, 1.0) * 255.0
+                array = np.clip(array, 0.0, 255.0).astype(np.uint8)
+            if array.ndim == 2:
+                pil_image = Image.fromarray(array, mode="L").convert("RGB")
             else:
-                image_array = array
+                pil_image = Image.fromarray(array)
 
-        return self._mel_spectrogram_to_audio(image_array, default_sample_rate)
+        decoder = self._resolve_spectrogram_decoder(default_sample_rate)
+        if decoder is None:
+            reason = self._spectrogram_error or "spectrogram_decoder_unavailable"
+            raise GenerationFailure(reason)
 
-    def _mel_spectrogram_to_audio(
-        self,
-        image_array: np.ndarray,
-        sample_rate: int,
-    ) -> Tuple[np.ndarray, int]:
-        if librosa is None:
-            raise GenerationFailure(f"librosa_unavailable:{LIBROSA_IMPORT_ERROR}")
-
-        image_norm = image_array / 255.0
-        log_mel = image_norm * 80.0 - 80.0
-        mel = librosa.db_to_power(log_mel)
-        mel = np.flipud(mel)
-
-        n_fft = 2048
-        hop_length = 512
-        waveform = librosa.feature.inverse.mel_to_audio(
-            mel,
-            sr=sample_rate,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=n_fft,
-            n_iter=64,
-            power=1.0,
-        )
-        waveform = waveform.astype(np.float32)
-        if waveform.ndim == 1:
-            waveform = np.stack([waveform, waveform], axis=0)
+        waveform, sample_rate = decoder.decode(pil_image)
         return waveform, sample_rate
 
     def _prompt_hash(self, prompt: str) -> str:
