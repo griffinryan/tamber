@@ -14,8 +14,8 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
-use std::collections::HashMap;
 use std::time::Duration;
+use std::{collections::HashMap, time::Duration as StdDuration};
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender};
 
 pub fn run<B: ratatui::backend::Backend>(
@@ -218,6 +218,36 @@ fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'stat
 
 fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     let mut lines: Vec<Line> = Vec::new();
+
+    if let Some((ratio, elapsed, duration, playing, job_id, path)) = app.playback_progress() {
+        let status = if playing { "Playing" } else { "Playback paused" };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{}: {}", status, path.display()),
+                Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(" (job {})", job_id)),
+        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("Progress: {}/{}", format_duration(elapsed), format_duration(duration)),
+            Style::default().fg(Color::LightBlue),
+        )]));
+
+        let bar_width = area.width.saturating_sub(4);
+        let filled = (bar_width as f32 * ratio).round() as u16;
+        let mut spans = Vec::new();
+        spans.push(Span::raw("  "));
+        for idx in 0..bar_width {
+            if idx < filled {
+                spans.push(Span::styled("█", glow_style()));
+            } else {
+                spans.push(Span::styled("░", Style::default().fg(Color::DarkGray)));
+            }
+        }
+        lines.push(Line::from(spans));
+        lines.push(Line::default());
+    }
+
     lines.push(Line::from(vec![Span::raw(format!("Config: {}", app.config_summary()))]));
     if app.status_lines.is_empty() {
         lines.push(Line::from(vec![Span::raw("No activity yet.")]))
@@ -241,13 +271,36 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
 }
 
 fn render_status_bar(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let progress = app.status_bar.progress.clamp(0.0, 1.0);
-    let filled_width = (area.width as f32 * progress).round() as u16;
     let now = Utc::now();
-    let glow = glow_intensity(app.status_bar.last_update, now);
+    let mut base_progress = app.status_bar.progress.clamp(0.0, 1.0);
+    let mut message = app.status_bar.message.clone();
+    let mut glow_source = app.status_bar.last_update;
+
+    if let Some((ratio, elapsed, duration, playing, job_id, path)) = app.playback_progress() {
+        base_progress = ratio;
+        glow_source = app.status_bar.last_update;
+        message = if playing {
+            format!(
+                " Playing {} (job {}) — {}/{} ",
+                path.display(),
+                job_id,
+                format_duration(elapsed),
+                format_duration(duration)
+            )
+        } else {
+            format!(
+                " Playback paused (job {}) — {}/{} ",
+                job_id,
+                format_duration(elapsed),
+                format_duration(duration)
+            )
+        };
+    }
+
+    let filled_width = (area.width as f32 * base_progress).round() as u16;
+    let glow = glow_intensity(glow_source, now);
 
     let mut lines = Vec::new();
-    let message = format!(" {}", app.status_bar.message);
     let info_line = Line::from(vec![Span::styled(
         message,
         Style::default()
@@ -283,6 +336,9 @@ fn handle_key(
 ) -> Result<bool> {
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Char('q') if matches!(app.focused_pane, FocusedPane::Status) => {
+            let _ = command_tx.send(AppCommand::StopPlayback);
+        }
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some((job_id, job)) = app.selected_job() {
@@ -503,6 +559,13 @@ fn glow_color(intensity: f32) -> Color {
     let green = clamp(140.0 + 30.0 * intensity);
     let blue = clamp(120.0 + 25.0 * intensity);
     Color::Rgb(red, green, blue)
+}
+
+fn format_duration(duration: StdDuration) -> String {
+    let total_seconds = duration.as_secs();
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes:02}:{seconds:02}")
 }
 
 #[cfg(test)]

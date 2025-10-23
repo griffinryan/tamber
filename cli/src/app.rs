@@ -3,10 +3,11 @@ use crate::{
     planner::CompositionPlanner,
     types::{CompositionPlan, GenerationArtifact, GenerationRequest, GenerationStatus, JobState},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::time::Duration as StdDuration;
 
 const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
@@ -101,6 +102,15 @@ pub enum FocusedPane {
     Prompt,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlaybackState {
+    pub job_id: String,
+    pub path: PathBuf,
+    pub duration: StdDuration,
+    pub started_at: DateTime<Utc>,
+    pub is_playing: bool,
+}
+
 #[derive(Debug)]
 pub struct StatusBarState {
     pub progress: f32,
@@ -144,9 +154,10 @@ impl AppState {
             focused_job: None,
             status_lines: Vec::new(),
             status_bar: StatusBarState::default(),
-            focused_pane: FocusedPane::Conversation,
+            focused_pane: FocusedPane::Prompt,
             chat_scroll: 0,
             status_scroll: 0,
+            playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
             planner: CompositionPlanner::new(),
@@ -161,6 +172,7 @@ impl AppState {
                 self.append_chat(ChatRole::System, format!("{message}"));
             }
             AppEvent::JobQueued { status, prompt, request, plan } => {
+                self.playback = None;
                 self.jobs.insert(
                     status.job_id.clone(),
                     JobEntry {
@@ -217,6 +229,26 @@ impl AppState {
                     let (status_line, chat_line) = completion_messages(&status, &artifact);
                     self.push_status_line(status_line);
                     self.append_chat(ChatRole::Worker, chat_line);
+                }
+            }
+            AppEvent::PlaybackStarted { job_id, path, duration } => {
+                self.playback = Some(PlaybackState {
+                    job_id,
+                    path,
+                    duration,
+                    started_at: Utc::now(),
+                    is_playing: true,
+                });
+            }
+            AppEvent::PlaybackProgress { is_playing } => {
+                if let Some(playback) = &mut self.playback {
+                    playback.is_playing = is_playing;
+                }
+                self.status_bar.last_update = Utc::now();
+            }
+            AppEvent::PlaybackStopped => {
+                if let Some(playback) = &mut self.playback {
+                    playback.is_playing = false;
                 }
             }
             AppEvent::PollProgress { progress, message } => {
@@ -424,6 +456,31 @@ impl AppState {
         let next = (current + delta).clamp(0, max as isize);
         self.status_scroll = next as usize;
     }
+
+    pub fn playback_progress(
+        &self,
+    ) -> Option<(f32, StdDuration, StdDuration, bool, &String, &PathBuf)> {
+        let playback = self.playback.as_ref()?;
+        let now = Utc::now();
+        let elapsed = now.signed_duration_since(playback.started_at);
+        let elapsed =
+            if elapsed < ChronoDuration::zero() { ChronoDuration::zero() } else { elapsed };
+        let elapsed_std = StdDuration::from_millis(elapsed.num_milliseconds().max(0) as u64);
+        let capped_elapsed = std::cmp::min(elapsed_std, playback.duration);
+        let ratio = if playback.duration.as_millis() == 0 {
+            0.0
+        } else {
+            (capped_elapsed.as_secs_f32() / playback.duration.as_secs_f32()).clamp(0.0, 1.0)
+        };
+        Some((
+            ratio,
+            capped_elapsed,
+            playback.duration,
+            playback.is_playing,
+            &playback.job_id,
+            &playback.path,
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -443,6 +500,15 @@ pub enum AppEvent {
         status: GenerationStatus,
         artifact: LocalArtifact,
     },
+    PlaybackStarted {
+        job_id: String,
+        path: PathBuf,
+        duration: StdDuration,
+    },
+    PlaybackProgress {
+        is_playing: bool,
+    },
+    PlaybackStopped,
     PollProgress {
         progress: f32,
         message: String,
@@ -456,6 +522,7 @@ pub enum AppEvent {
 pub enum AppCommand {
     SubmitPrompt { prompt: String, request: GenerationRequest, plan: CompositionPlan },
     PlayJob { job_id: String },
+    StopPlayback,
 }
 
 pub fn format_request_summary(request: &GenerationRequest) -> String {
