@@ -70,6 +70,10 @@ If the MPS backend yields distorted or noisy audio, force the worker to fall bac
 `TIMBRE_INFERENCE_DEVICE=cpu` before launching `make worker-serve`. The worker now also prefers
 float32 precision on MPS to avoid the white-noise artefacts seen with float16.
 
+During automated testing or when you want to skip heavyweight model loads, disable Riffusion
+inference entirely by setting `TIMBRE_RIFFUSION_ALLOW_INFERENCE=0`. The worker will emit the
+deterministic placeholder audio while keeping the rest of the pipeline reachable.
+
 ## Testing & Linting
 
 ```bash

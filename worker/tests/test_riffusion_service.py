@@ -16,7 +16,11 @@ from timbre_worker.services.riffusion import DEFAULT_GUIDANCE_SCALE, PipelineHan
 
 @pytest.mark.asyncio
 async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+        riffusion_allow_inference=False,
+    )
     settings.ensure_directories()
     service = RiffusionService(settings)
 
@@ -36,7 +40,11 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_placeholder_audio_varies_by_prompt(tmp_path: Path) -> None:
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+        riffusion_allow_inference=False,
+    )
     settings.ensure_directories()
     service = RiffusionService(settings)
 
@@ -64,7 +72,11 @@ async def test_placeholder_audio_varies_by_prompt(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_placeholder_audio_respects_seed(tmp_path: Path) -> None:
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+        riffusion_allow_inference=False,
+    )
     settings.ensure_directories()
     service = RiffusionService(settings)
 

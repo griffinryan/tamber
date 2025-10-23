@@ -67,6 +67,8 @@
 - **Precision**: Riffusion inference defaults to float32 on MPS to prevent the high-frequency artefacts
   observed when running the pipeline in float16. Override the device with `TIMBRE_INFERENCE_DEVICE`
   if you need to force CPU/CUDA manually.
+- **Diagnostics**: Developers can set `TIMBRE_RIFFUSION_ALLOW_INFERENCE=0` to exercise the pipeline
+  with placeholder audio when running tests or working offline.
 - **Performance**: Monitor GPU memory usage; default to 5–10 s clip lengths during Phase 0. Provide configuration for downscaling resolution or using cached embeddings for speed.
 
 ## 5. Data & File Layout

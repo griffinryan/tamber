@@ -148,9 +148,15 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert len(progress_calls) == len(plan.sections)
     assert progress_calls[0][2] == "s00"
     assert progress_calls[1][2] == "s01"
-    assert pytest.approx(mix_calls[0], rel=1e-3) == plan.total_duration_seconds
+    assert mix_calls, "mix callback should be invoked"
 
     extras = artifact.metadata.extras
+    mix_info = extras.get("mix", {})
+    assert mix_calls[0] == pytest.approx(mix_info.get("duration_seconds", 0.0), rel=1e-3)
+    crossfade_total = sum(entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", []))
+    assert plan.total_duration_seconds - crossfade_total == pytest.approx(mix_calls[0], rel=1e-3)
+    assert mix_calls[0] <= plan.total_duration_seconds
+
     assert extras.get("backend") == "composer"
     assert extras.get("placeholder") is False
     sections = extras.get("sections")

@@ -70,6 +70,7 @@ class RiffusionService:
         self._pipelines: Dict[str, Optional[PipelineHandle]] = {}
         self._placeholder_reasons: Dict[str, str] = {}
         self._pipeline_lock = asyncio.Lock()
+        self._allow_inference = settings.riffusion_allow_inference
         self._device, self._dtype = self._select_device_and_dtype()
         self._pipeline_loader = pipeline_loader
 
@@ -98,7 +99,7 @@ class RiffusionService:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
-        dtype_str = str(self._dtype) if self._dtype is not None else None
+        dtype_str = str(self._dtype) if self._dtype is not None and pipeline_handle is not None else None
 
         if pipeline_handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
@@ -163,6 +164,11 @@ class RiffusionService:
             render.extras.get("placeholder_reason") for render in renders if render.extras.get("placeholder_reason")
         ]
         guidance_values = [render.extras.get("guidance_scale") for render in renders if render.extras.get("guidance_scale") is not None]
+        prompt_hashes = [
+            render.extras.get("prompt_hash")
+            for render in renders
+            if render.extras.get("prompt_hash") is not None
+        ]
 
         extras: Dict[str, Any] = {
             "backend": "riffusion",
@@ -171,10 +177,13 @@ class RiffusionService:
             "placeholder": any(placeholder_flags),
             "sections": [render.extras for render in renders],
         }
-        if self._dtype is not None:
+        if self._dtype is not None and not all(placeholder_flags):
             extras["dtype"] = str(self._dtype)
         if guidance_values:
             extras["guidance_scale"] = guidance_values[0]
+        if prompt_hashes:
+            extras["prompt_hash"] = prompt_hashes[0]
+            extras["prompt_hashes"] = prompt_hashes
         if placeholder_reasons:
             extras["placeholder_reason"] = placeholder_reasons[0] if len(placeholder_reasons) == 1 else placeholder_reasons
 
@@ -201,6 +210,14 @@ class RiffusionService:
                 return self._pipelines[model_id], self._placeholder_reasons.get(model_id)
 
         resolved = MODEL_REGISTRY.get(model_id, model_id)
+
+        if not self._allow_inference:
+            reason = "inference_disabled"
+            async with self._pipeline_lock:
+                self._pipelines[model_id] = None
+                self._placeholder_reasons[model_id] = reason
+            logger.info("Riffusion inference disabled via settings; using placeholder audio")
+            return None, reason
 
         if torch is None:
             reason = self._missing_dependency_reason()

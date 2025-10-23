@@ -40,7 +40,7 @@ class JobManager:
             status = self._statuses.get(job_id)
             if status is None:
                 return None
-            return status.copy(deep=True)
+            return status.model_copy(deep=True)
 
     async def get_artifact(self, job_id: str) -> Optional[GenerationArtifact]:
         async with self._lock:

@@ -8,9 +8,15 @@ from timbre_worker.generate import _run
 
 
 @pytest.mark.asyncio
-async def test_generate_cli_placeholder(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+async def test_generate_cli_placeholder(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     artifact_dir = tmp_path / "artifacts"
     config_dir = tmp_path / "config"
+
+    monkeypatch.setenv("TIMBRE_RIFFUSION_ALLOW_INFERENCE", "0")
 
     await _run(
         "calm modular arpeggios",

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default=None,
         description="Override inference device selection (cpu, mps, cuda).",
     )
+    riffusion_allow_inference: bool = Field(
+        default=True,
+        description="Enable Riffusion pipeline loading; disable to force placeholder audio.",
+    )
 
     def ensure_directories(self) -> None:
         self.config_dir.mkdir(parents=True, exist_ok=True)
