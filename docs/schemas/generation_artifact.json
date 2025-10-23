@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GenerationArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "artifact_path", "metadata"],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Job identifier corresponding to the completed generation."
+    },
+    "artifact_path": {
+      "type": "string",
+      "description": "Absolute filesystem path to the generated audio file."
+    },
+    "metadata": {
+      "$ref": "#/definitions/GenerationMetadata"
+    }
+  },
+  "definitions": {
+    "GenerationMetadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["prompt", "model_id", "duration_seconds"],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "Prompt used for the generation."
+        },
+        "seed": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Seed applied for deterministic output."
+        },
+        "model_id": {
+          "type": "string",
+          "description": "Identifier for the backend model."
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Duration of the generated clip."
+        },
+        "extras": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Backend-specific metadata payload. CLI adds `local_path` once the artifact is copied locally."
+        }
+      }
+    }
+  }
+}
