@@ -1,6 +1,7 @@
 use crate::{
     app::{
-        format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, JobEntry,
+        format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, InputMode,
+        JobEntry,
     },
     types::{CompositionSection, JobState, SectionEnergy},
 };
@@ -107,8 +108,8 @@ fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     }
 
     let mut block = Block::default().title("Conversation").borders(Borders::ALL);
-    if matches!(app.focused_pane, FocusedPane::Conversation) {
-        block = block.border_style(glow_style());
+    if app.focused_pane == FocusedPane::Conversation {
+        block = block.border_style(pane_border(app, FocusedPane::Conversation));
     }
 
     let total_lines = lines.len();
@@ -125,12 +126,12 @@ fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
 }
 
 fn render_prompt(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let block = Block::default().title("Prompt").borders(Borders::ALL).border_style(
-        match app.focused_pane {
-            FocusedPane::Prompt => glow_style(),
-            _ => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        },
-    );
+    let mut block = Block::default().title("Prompt").borders(Borders::ALL);
+    if app.focused_pane == FocusedPane::Prompt {
+        block = block.border_style(pane_border(app, FocusedPane::Prompt));
+    } else {
+        block = block.border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    }
     let paragraph = Paragraph::new(app.input.clone()).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -140,8 +141,8 @@ fn render_jobs(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
         app.jobs_iter().rev().map(|(job_id, job)| job_list_item(app, job_id, job)).collect();
 
     let mut block = Block::default().title("Jobs").borders(Borders::ALL);
-    if matches!(app.focused_pane, FocusedPane::Jobs) {
-        block = block.border_style(glow_style());
+    if app.focused_pane == FocusedPane::Jobs {
+        block = block.border_style(pane_border(app, FocusedPane::Jobs));
     }
 
     let list = List::new(items)
@@ -272,8 +273,8 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     }
 
     let mut block = Block::default().title("Status").borders(Borders::ALL);
-    if matches!(app.focused_pane, FocusedPane::Status) {
-        block = block.border_style(glow_style());
+    if app.focused_pane == FocusedPane::Status {
+        block = block.border_style(pane_border(app, FocusedPane::Status));
     }
     let total_lines = lines.len();
     let height = area.height as usize;
@@ -339,8 +340,8 @@ fn render_status_bar(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     lines.push(Line::from(bar_line));
 
     let mut block = Block::default().borders(Borders::ALL).title("Status");
-    if matches!(app.focused_pane, FocusedPane::StatusBar) {
-        block = block.border_style(glow_style());
+    if app.focused_pane == FocusedPane::StatusBar {
+        block = block.border_style(pane_border(app, FocusedPane::StatusBar));
     }
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
@@ -353,10 +354,37 @@ fn handle_key(
 ) -> Result<bool> {
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
-        KeyCode::Char('q') if matches!(app.focused_pane, FocusedPane::Status) => {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('s') if matches!(app.focused_pane, FocusedPane::Status) => {
             let _ = command_tx.send(AppCommand::StopPlayback);
         }
-        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('i') => {
+            if app.input_mode != InputMode::Insert {
+                app.input_mode = InputMode::Insert;
+                if matches!(app.focused_pane, FocusedPane::Conversation) {
+                    app.chat_following = false;
+                }
+                if matches!(app.focused_pane, FocusedPane::Status) {
+                    app.status_following = false;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            if app.input_mode == InputMode::Insert {
+                app.input_mode = InputMode::Normal;
+            }
+            if matches!(app.focused_pane, FocusedPane::Conversation) {
+                app.chat_scroll = 0;
+                app.chat_following = true;
+            }
+            if matches!(app.focused_pane, FocusedPane::Status) {
+                app.status_scroll = 0;
+                app.status_following = true;
+            }
+            if matches!(app.focused_pane, FocusedPane::Prompt) {
+                app.input.clear();
+            }
+        }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some((job_id, job)) = app.selected_job() {
                 if job.artifact.is_some() {
@@ -366,37 +394,62 @@ fn handle_key(
                 }
             }
         }
-        KeyCode::Up => match app.focused_pane {
-            FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
-            FocusedPane::Conversation => app.increment_chat_scroll(1),
-            FocusedPane::Status => app.increment_status_scroll(1),
-            FocusedPane::Jobs => app.select_previous_job(),
-            _ => {}
-        },
-        KeyCode::Down => match app.focused_pane {
-            FocusedPane::StatusBar => app.focused_pane = FocusedPane::Conversation,
-            FocusedPane::Conversation => app.increment_chat_scroll(-1),
-            FocusedPane::Status => {
-                if app.status_scroll == 0 {
-                    app.focused_pane = FocusedPane::Prompt;
-                } else {
-                    app.increment_status_scroll(-1);
+        KeyCode::Up => {
+            if matches!(app.input_mode, InputMode::Insert) {
+                match app.focused_pane {
+                    FocusedPane::Conversation => app.increment_chat_scroll(1),
+                    FocusedPane::Status => app.increment_status_scroll(1),
+                    FocusedPane::Jobs => app.select_previous_job(),
+                    _ => {}
+                }
+            } else {
+                match app.focused_pane {
+                    FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
+                    FocusedPane::Conversation => app.increment_chat_scroll(1),
+                    FocusedPane::Status => app.increment_status_scroll(1),
+                    FocusedPane::Jobs => app.select_previous_job(),
+                    _ => {}
                 }
             }
-            FocusedPane::Jobs => app.select_next_job(),
-            _ => {}
-        },
-        KeyCode::Left => app.focus_previous(),
-        KeyCode::Right => app.focus_next(),
-        KeyCode::Tab => app.focus_next(),
-        KeyCode::BackTab => app.focus_previous(),
-        KeyCode::Backspace if matches!(app.focused_pane, FocusedPane::Prompt) => {
+        }
+        KeyCode::Down => {
+            if matches!(app.input_mode, InputMode::Insert) {
+                match app.focused_pane {
+                    FocusedPane::Conversation => app.increment_chat_scroll(-1),
+                    FocusedPane::Status => app.increment_status_scroll(-1),
+                    FocusedPane::Jobs => app.select_next_job(),
+                    _ => {}
+                }
+            } else {
+                match app.focused_pane {
+                    FocusedPane::StatusBar => app.focused_pane = FocusedPane::Conversation,
+                    FocusedPane::Conversation => app.increment_chat_scroll(-1),
+                    FocusedPane::Status => {
+                        if app.status_scroll == 0 {
+                            app.focused_pane = FocusedPane::Prompt;
+                        } else {
+                            app.increment_status_scroll(-1);
+                        }
+                    }
+                    FocusedPane::Jobs => app.select_next_job(),
+                    _ => {}
+                }
+            }
+        }
+        KeyCode::Left if matches!(app.input_mode, InputMode::Normal) => app.focus_previous(),
+        KeyCode::Right if matches!(app.input_mode, InputMode::Normal) => app.focus_next(),
+        KeyCode::Tab if matches!(app.input_mode, InputMode::Normal) => app.focus_next(),
+        KeyCode::BackTab if matches!(app.input_mode, InputMode::Normal) => app.focus_previous(),
+        KeyCode::Backspace
+            if matches!(app.focused_pane, FocusedPane::Prompt)
+                && matches!(app.input_mode, InputMode::Insert) =>
+        {
             app.input.pop();
         }
-        KeyCode::Esc => {
-            app.input.clear();
-        }
-        KeyCode::Enter if matches!(app.focused_pane, FocusedPane::Prompt) => {
+        KeyCode::Enter
+            if matches!(app.focused_pane, FocusedPane::Prompt)
+                && matches!(app.input_mode, InputMode::Insert) =>
+        {
             let line = app.input.trim().to_string();
             if line.is_empty() {
                 app.input.clear();
@@ -429,8 +482,12 @@ fn handle_key(
             app.focused_pane = FocusedPane::StatusBar;
             app.status_scroll = 0;
             app.status_following = true;
+            app.input_mode = InputMode::Normal;
         }
-        KeyCode::Char(c) if matches!(app.focused_pane, FocusedPane::Prompt) => {
+        KeyCode::Char(c)
+            if matches!(app.focused_pane, FocusedPane::Prompt)
+                && matches!(app.input_mode, InputMode::Insert) =>
+        {
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                 app.input.push(c);
             }
@@ -594,6 +651,21 @@ fn format_duration(duration: StdDuration) -> String {
     let minutes = total_seconds / 60;
     let seconds = total_seconds % 60;
     format!("{minutes:02}:{seconds:02}")
+}
+
+fn pane_border(app: &AppState, pane: FocusedPane) -> Style {
+    if app.focused_pane == pane {
+        match app.input_mode {
+            InputMode::Insert => insert_border_style(),
+            InputMode::Normal => glow_style(),
+        }
+    } else {
+        Style::default()
+    }
+}
+
+fn insert_border_style() -> Style {
+    Style::default().fg(Color::Rgb(70, 70, 80)).add_modifier(Modifier::BOLD)
 }
 
 #[cfg(test)]

@@ -111,6 +111,12 @@ pub struct PlaybackState {
     pub is_playing: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Insert,
+}
+
 #[derive(Debug)]
 pub struct StatusBarState {
     pub progress: f32,
@@ -141,6 +147,7 @@ pub struct AppState {
     pub status_scroll: usize,
     pub chat_following: bool,
     pub status_following: bool,
+    pub input_mode: InputMode,
     app_config: AppConfig,
     generation_config: GenerationConfig,
     playback: Option<PlaybackState>,
@@ -161,6 +168,7 @@ impl AppState {
             status_scroll: 0,
             chat_following: true,
             status_following: true,
+            input_mode: InputMode::Normal,
             playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
@@ -201,6 +209,7 @@ impl AppState {
                 self.focused_pane = FocusedPane::StatusBar;
                 self.status_scroll = 0;
                 self.status_following = true;
+                self.input_mode = InputMode::Normal;
             }
             AppEvent::JobUpdated { status } => {
                 if let Some(job) = self.jobs.get_mut(&status.job_id) {
@@ -277,8 +286,9 @@ impl AppState {
             let overflow = self.chat.len() - MAX_CHAT_ENTRIES;
             self.chat.drain(0..overflow);
         }
-        self.chat_scroll = 0;
-        self.chat_following = true;
+        if self.chat_following {
+            self.chat_scroll = 0;
+        }
     }
 
     pub fn push_status_line(&mut self, line: String) {
@@ -287,8 +297,9 @@ impl AppState {
             let overflow = self.status_lines.len() - MAX_STATUS_LINES;
             self.status_lines.drain(0..overflow);
         }
-        self.status_scroll = 0;
-        self.status_following = true;
+        if self.status_following {
+            self.status_scroll = 0;
+        }
     }
 
     pub fn jobs_iter(&self) -> Iter<'_, String, JobEntry> {
