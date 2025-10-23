@@ -8,14 +8,15 @@ from uuid import uuid4
 from loguru import logger
 
 from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
-from ..services.riffusion import GenerationFailure, RiffusionService
+from ..services.orchestrator import ComposerOrchestrator
+from ..services.riffusion import GenerationFailure
 
 
 class JobManager:
     """Coordinates asynchronous generation jobs and exposes status artifacts."""
 
-    def __init__(self, service: RiffusionService):
-        self._service = service
+    def __init__(self, orchestrator: ComposerOrchestrator):
+        self._orchestrator = orchestrator
         self._statuses: Dict[str, GenerationStatus] = {}
         self._artifacts: Dict[str, GenerationArtifact] = {}
         self._requests: Dict[str, GenerationRequest] = {}
@@ -52,16 +53,22 @@ class JobManager:
             job_id,
             state=JobState.RUNNING,
             progress=0.05,
-            message="initialising riffusion backend",
+            message="planning composition",
         )
         try:
             await self._set_status(
                 job_id,
                 state=JobState.RUNNING,
-                progress=0.35,
-                message="running inference",
+                progress=0.2,
+                message="rendering sections",
             )
-            artifact = await self._service.generate(job_id=job_id, request=request)
+            await self._set_status(
+                job_id,
+                state=JobState.RUNNING,
+                progress=0.6,
+                message="assembling mixdown",
+            )
+            artifact = await self._orchestrator.generate(job_id=job_id, request=request)
         except GenerationFailure as exc:
             await self._set_status(
                 job_id,

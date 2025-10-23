@@ -26,6 +26,8 @@ pub struct GenerationRequest {
     pub model_id: String,
     pub cfg_scale: Option<f32>,
     pub scheduler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<CompositionPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,8 @@ pub struct GenerationMetadata {
     pub duration_seconds: u8,
     #[serde(default)]
     pub extras: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<CompositionPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,4 +64,51 @@ pub struct GenerationArtifact {
     pub job_id: String,
     pub artifact_path: String,
     pub metadata: GenerationMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionRole {
+    Intro,
+    Motif,
+    Development,
+    Bridge,
+    Resolution,
+    Outro,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionEnergy {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompositionSection {
+    pub section_id: String,
+    pub role: SectionRole,
+    pub label: String,
+    pub prompt: String,
+    pub bars: u8,
+    pub target_seconds: f32,
+    pub energy: SectionEnergy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_offset: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompositionPlan {
+    pub version: String,
+    pub tempo_bpm: u16,
+    pub time_signature: String,
+    pub key: String,
+    pub total_bars: u16,
+    pub total_duration_seconds: f32,
+    pub sections: Vec<CompositionSection>,
 }

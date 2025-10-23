@@ -263,9 +263,9 @@ fn handle_key(
             }
 
             let prompt = line;
-            let request = app.build_generation_request(&prompt);
+            let (request, plan) = app.build_generation_payload(&prompt);
             app.append_chat(ChatRole::User, prompt.clone());
-            if command_tx.send(AppCommand::SubmitPrompt { prompt, request }).is_err() {
+            if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {
                 app.push_status_line("Failed to submit prompt; worker channel closed".into());
             }
             app.input.clear();

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -10,8 +9,18 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 from loguru import logger
 
-from ..app.models import GenerationArtifact, GenerationMetadata, GenerationRequest
+from ..app.models import (
+    CompositionPlan,
+    CompositionSection,
+    GenerationArtifact,
+    GenerationMetadata,
+    GenerationRequest,
+    SectionEnergy,
+    SectionRole,
+)
 from ..app.settings import Settings
+from .audio_utils import ensure_waveform_channels, write_waveform
+from .types import SectionRender
 
 try:  # pragma: no cover - optional dependency imports are validated at runtime
     import torch
@@ -20,14 +29,6 @@ except Exception as exc:  # noqa: BLE001
     TORCH_IMPORT_ERROR = exc
 else:  # pragma: no cover
     TORCH_IMPORT_ERROR = None
-
-try:  # pragma: no cover
-    import soundfile as sf
-except Exception as exc:  # noqa: BLE001
-    sf = None  # type: ignore[assignment]
-    SOUND_FILE_IMPORT_ERROR = exc
-else:  # pragma: no cover
-    SOUND_FILE_IMPORT_ERROR = None
 
 try:  # pragma: no cover
     import librosa
@@ -79,36 +80,105 @@ class RiffusionService:
     async def warmup(self) -> None:
         await self._ensure_pipeline(self._default_model_id)
 
-    async def generate(self, job_id: str, request: GenerationRequest) -> GenerationArtifact:
-        model_key = request.model_id or self._default_model_id
+    async def render_section(
+        self,
+        request: GenerationRequest,
+        section: CompositionSection,
+        *,
+        plan: CompositionPlan,
+        model_id: Optional[str] = None,
+    ) -> SectionRender:
+        model_key = model_id or section.model_id or request.model_id or self._default_model_id
         pipeline_handle, placeholder_reason = await self._ensure_pipeline(model_key)
 
-        artifact_path: Path
-        extras: Dict[str, Any]
+        duration = max(1.0, float(section.target_seconds))
+        guidance_scale = request.cfg_scale if request.cfg_scale is not None else DEFAULT_GUIDANCE_SCALE
+        section_seed: Optional[int] = None
+        if request.seed is not None:
+            offset = section.seed_offset or 0
+            section_seed = request.seed + offset
 
         if pipeline_handle is None:
-            artifact_path, extras = await asyncio.to_thread(
-                self._write_placeholder_audio,
-                job_id,
-                request.prompt,
-                request.duration_seconds,
+            waveform, sample_rate, extras = await asyncio.to_thread(
+                self._placeholder_waveform,
+                section.prompt,
+                duration,
                 placeholder_reason or "pipeline_unavailable",
-                request.seed,
+                section_seed,
             )
         else:
-            artifact_path, extras = await asyncio.to_thread(
-                self._run_pipeline,
+            waveform, sample_rate, extras = await asyncio.to_thread(
+                self._run_inference,
                 pipeline_handle,
-                job_id,
-                request,
+                section.prompt,
+                duration,
+                guidance_scale,
+                section_seed,
             )
+
+        extras.update(
+            {
+                "backend": "riffusion",
+                "device": self._device if pipeline_handle is not None else "placeholder",
+                "guidance_scale": guidance_scale,
+                "placeholder": pipeline_handle is None,
+                "section_id": section.section_id,
+                "section_label": section.label,
+                "section_role": section.role.value,
+                "plan_version": plan.version,
+            }
+        )
+        if placeholder_reason:
+            extras["placeholder_reason"] = placeholder_reason
+        if section_seed is not None:
+            extras["seed"] = section_seed
+        extras["prompt_hash"] = self._prompt_hash(section.prompt)
+        extras["target_seconds"] = duration
+
+        return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
+
+    async def generate(self, job_id: str, request: GenerationRequest) -> GenerationArtifact:
+        plan = request.plan or self._fallback_plan(request)
+        renders: list[SectionRender] = []
+        for section in plan.sections:
+            render = await self.render_section(
+                request,
+                section,
+                plan=plan,
+                model_id=request.model_id,
+            )
+            renders.append(render)
+
+        waveform, sample_rate = self._combine_renders(renders)
+        artifact_path = self._artifact_path(job_id, placeholder=False)
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        write_waveform(artifact_path, waveform, sample_rate)
+
+        placeholder_flags = [render.extras.get("placeholder", False) for render in renders]
+        placeholder_reasons = [
+            render.extras.get("placeholder_reason") for render in renders if render.extras.get("placeholder_reason")
+        ]
+        guidance_values = [render.extras.get("guidance_scale") for render in renders if render.extras.get("guidance_scale") is not None]
+
+        extras: Dict[str, Any] = {
+            "backend": "riffusion",
+            "device": self._device if not all(placeholder_flags) else "placeholder",
+            "sample_rate": sample_rate,
+            "placeholder": any(placeholder_flags),
+            "sections": [render.extras for render in renders],
+        }
+        if guidance_values:
+            extras["guidance_scale"] = guidance_values[0]
+        if placeholder_reasons:
+            extras["placeholder_reason"] = placeholder_reasons[0] if len(placeholder_reasons) == 1 else placeholder_reasons
 
         metadata = GenerationMetadata(
             prompt=request.prompt,
             seed=request.seed,
-            model_id=model_key,
+            model_id=request.model_id or self._default_model_id,
             duration_seconds=request.duration_seconds,
             extras=extras,
+            plan=plan,
         )
 
         return GenerationArtifact(
@@ -203,31 +273,34 @@ class RiffusionService:
 
         return PipelineHandle(pipeline=pipeline, sample_rate=sample_rate)
 
-    def _run_pipeline(
+    def _run_inference(
         self,
         handle: PipelineHandle,
-        job_id: str,
-        request: GenerationRequest,
-    ) -> Tuple[Path, Dict[str, Any]]:
+        prompt: str,
+        duration_seconds: float,
+        guidance_scale: float,
+        seed: Optional[int],
+    ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         assert torch is not None
 
-        guidance_scale = request.cfg_scale if request.cfg_scale is not None else DEFAULT_GUIDANCE_SCALE
         generator = None
-        if request.seed is not None:
-            generator = torch.Generator(device=self._device).manual_seed(request.seed)
+        if seed is not None:
+            generator = torch.Generator(device=self._device).manual_seed(seed)
+
+        audio_length = max(1, int(round(duration_seconds)))
 
         pipeline = handle.pipeline
         try:
             result = pipeline(
-                prompt=request.prompt,
+                prompt=prompt,
                 num_inference_steps=50,
                 guidance_scale=guidance_scale,
-                audio_length_in_s=request.duration_seconds,
+                audio_length_in_s=audio_length,
                 generator=generator,
             )
         except TypeError:
             result = pipeline(
-                prompt=request.prompt,
+                prompt=prompt,
                 num_inference_steps=50,
                 guidance_scale=guidance_scale,
                 generator=generator,
@@ -241,36 +314,27 @@ class RiffusionService:
         else:
             waveform, sample_rate = self._audio_from_images(result, sample_rate)
 
-        waveform = self._prepare_waveform(waveform)
-
-        artifact_path = self._artifact_path(job_id, placeholder=False)
-        artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_audio_file(artifact_path, waveform, sample_rate)
-
         extras: Dict[str, Any] = {
-            "backend": "riffusion",
-            "device": self._device,
             "sample_rate": sample_rate,
             "guidance_scale": guidance_scale,
             "placeholder": False,
-            "prompt_hash": self._prompt_hash(request.prompt),
+            "prompt_hash": self._prompt_hash(prompt),
         }
-        if request.seed is not None:
-            extras["seed"] = request.seed
+        if seed is not None:
+            extras["seed"] = seed
 
-        return artifact_path, extras
+        return self._prepare_waveform(waveform), sample_rate, extras
 
-    def _write_placeholder_audio(
+    def _placeholder_waveform(
         self,
-        job_id: str,
         prompt: str,
-        duration_seconds: int,
+        duration_seconds: float,
         reason: str,
         seed: Optional[int],
-    ) -> Tuple[Path, Dict[str, Any]]:
+    ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         sample_rate = 44100
-        duration_seconds = max(1, min(duration_seconds, 30))
-        total_samples = duration_seconds * sample_rate
+        duration_seconds = max(1.0, min(duration_seconds, 30.0))
+        total_samples = int(duration_seconds * sample_rate)
         t = np.linspace(0, duration_seconds, total_samples, endpoint=False, dtype=np.float32)
 
         seed_value = seed if seed is not None else abs(hash((prompt, duration_seconds))) % (2**32)
@@ -281,49 +345,71 @@ class RiffusionService:
         rng_seed = seed_value % (2**32)
         waveform += 0.02 * np.random.default_rng(seed=rng_seed).standard_normal(size=total_samples)
         waveform = np.clip(waveform, -1.0, 1.0).astype(np.float32)
-
-        artifact_path = self._artifact_path(job_id, placeholder=True)
-        artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_audio_file(artifact_path, waveform, sample_rate)
-
         extras = {
-            "backend": "riffusion",
-            "device": "placeholder",
             "sample_rate": sample_rate,
             "guidance_scale": DEFAULT_GUIDANCE_SCALE,
-            "placeholder": True,
             "placeholder_reason": reason,
             "prompt_hash": self._prompt_hash(prompt),
         }
         if seed is not None:
             extras["seed"] = seed
 
-        return artifact_path, extras
-
-    def _write_audio_file(self, path: Path, waveform: np.ndarray, sample_rate: int) -> None:
-        waveform = np.clip(waveform, -1.0, 1.0)
-        if waveform.ndim == 1:
-            data = waveform
-        elif waveform.ndim == 2 and waveform.shape[0] in (1, 2):
-            data = waveform.T
-        else:
-            data = waveform.squeeze()
-
-        if sf is not None:
-            sf.write(path, data, sample_rate, subtype="PCM_16")
-            return
-
-        pcm = (data * 32767).astype(np.int16)
-        channels = 1 if pcm.ndim == 1 else pcm.shape[1]
-        with wave.open(str(path), "wb") as wav_file:  # type: ignore[attr-defined]
-            wav_file.setnchannels(channels)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(pcm.tobytes())
+        return waveform, sample_rate, extras
 
     def _artifact_path(self, job_id: str, *, placeholder: bool) -> Path:
         filename = f"{job_id}{'-placeholder' if placeholder else ''}.wav"
         return self._artifact_root / filename
+
+    def _combine_renders(self, renders: list[SectionRender]) -> Tuple[np.ndarray, int]:
+        if not renders:
+            raise GenerationFailure("no sections rendered")
+        sample_rate = renders[0].sample_rate
+        combined = ensure_waveform_channels(renders[0].waveform)
+        for render in renders[1:]:
+            if render.sample_rate != sample_rate:
+                raise GenerationFailure("sample_rate_mismatch")
+            combined = self._crossfade_append(
+                combined,
+                ensure_waveform_channels(render.waveform),
+                sample_rate,
+            )
+
+        peak = float(np.max(np.abs(combined))) if combined.size else 0.0
+        if peak > 0.99:
+            combined = combined / peak * 0.99
+        return combined.astype(np.float32), sample_rate
+
+    def _crossfade_append(
+        self,
+        left: np.ndarray,
+        right: np.ndarray,
+        sample_rate: int,
+    ) -> np.ndarray:
+        crossfade_seconds = 0.25
+        fade_samples = min(
+            int(sample_rate * crossfade_seconds),
+            max(1, left.shape[0] // 3),
+            max(1, right.shape[0] // 3),
+        )
+        if fade_samples <= 1:
+            return np.concatenate((left, right), axis=0)
+
+        if left.ndim == 1:
+            left = left[:, None]
+        if right.ndim == 1:
+            right = right[:, None]
+
+        fade_out = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
+        fade_in = 1.0 - fade_out
+
+        left_main = left[:-fade_samples]
+        left_tail = left[-fade_samples:]
+        right_head = right[:fade_samples]
+        right_rest = right[fade_samples:]
+
+        blended = left_tail * fade_out + right_head * fade_in
+        concatenated = np.vstack((left_main, blended, right_rest))
+        return concatenated.reshape(-1, concatenated.shape[-1])
 
     def _prepare_waveform(self, waveform: np.ndarray) -> np.ndarray:
         if waveform.ndim == 3:
@@ -405,3 +491,29 @@ class RiffusionService:
     def _prompt_hash(self, prompt: str) -> str:
         digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
         return digest.hexdigest()
+
+    def _fallback_plan(self, request: GenerationRequest) -> CompositionPlan:
+        duration = max(request.duration_seconds, 4)
+        bars = max(4, duration // 2)
+        tempo = int(np.clip(round(240 * bars / duration), 60, 120))
+        section = CompositionSection(
+            section_id="s00",
+            role=SectionRole.MOTIF,
+            label="Primary",
+            prompt=request.prompt,
+            bars=bars,
+            target_seconds=float(request.duration_seconds),
+            energy=SectionEnergy.MEDIUM,
+            model_id=request.model_id,
+            seed_offset=0,
+            transition=None,
+        )
+        return CompositionPlan(
+            version="fallback-v1",
+            tempo_bpm=tempo,
+            time_signature="4/4",
+            key="C major",
+            total_bars=bars,
+            total_duration_seconds=float(request.duration_seconds),
+            sections=[section],
+        )

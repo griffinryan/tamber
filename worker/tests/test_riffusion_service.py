@@ -30,6 +30,7 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
     assert extras.get("placeholder_reason") is not None
     assert extras.get("backend") == "riffusion"
     assert extras.get("prompt_hash") == hashlib.blake2s(b"soft synthwave", digest_size=8).hexdigest()
+    assert artifact.metadata.plan is not None
     assert artifact.metadata.prompt == "soft synthwave"
 
 
@@ -57,6 +58,8 @@ async def test_placeholder_audio_varies_by_prompt(tmp_path: Path) -> None:
     assert extras_a.get("placeholder") is True
     assert extras_b.get("placeholder") is True
     assert extras_a.get("prompt_hash") != extras_b.get("prompt_hash")
+    assert artifact_a.metadata.plan is not None
+    assert artifact_b.metadata.plan is not None
 
 
 @pytest.mark.asyncio
@@ -90,6 +93,8 @@ async def test_placeholder_audio_respects_seed(tmp_path: Path) -> None:
     extras_b = artifact_b.metadata.extras
     assert extras_a.get("seed") == 1234
     assert extras_b.get("seed") == 5678
+    assert artifact_a.metadata.plan is not None
+    assert artifact_b.metadata.plan is not None
 
 
 @pytest.mark.asyncio
@@ -137,6 +142,7 @@ async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkey
     assert Path(artifact.artifact_path).exists()
     extras = artifact.metadata.extras
     assert extras.get("placeholder") is False
+    assert artifact.metadata.plan is not None
     expected_hash = hashlib.blake2s(request.prompt.encode("utf-8"), digest_size=8).hexdigest()
     assert extras.get("prompt_hash") == expected_hash
     assert extras.get("sample_rate") == 44100

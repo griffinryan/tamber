@@ -33,6 +33,7 @@
 - **Runtime**: `tokio` handles async networking and background tasks.
 - **UI**: Ratatui defines layout panes (chat timeline, prompt editor, status sidebar, library view). `crossterm` manages terminal IO.
 - **State Management**: `AppState` struct tracks active prompt, queued jobs, history, and configuration.
+- **Composition UX**: the CLI produces a deterministic plan preview (via a mirror of the Python planner) before submitting jobs, surfaces the section flow in chat, and persists plan summaries alongside job entries so users can reason about phrasing rather than one-shot clips.
 - **Command Processing**: Background `tokio` tasks submit prompts, poll worker status, copy artifacts into `~/Music/Timbre/<job_id>/`, and push events/notifications back into the UI loop.
 - **Networking**: `reqwest` client submits generation requests and polls status endpoints. Job updates drive UI notifications.
 - **Playback**: `rodio` loads generated WAVs. For MP3 playback (future), integrate `symphonia`.
@@ -40,12 +41,15 @@
 
 ### 3.2 Python Worker (`worker/`)
 - **Framework**: `FastAPI` for HTTP APIs; `uvicorn` ASGI server. WebSocket endpoints reserved for future.
-- **Inference**: `diffusers`-based Riffusion pipeline with PyTorch (`torch>=2.x`) using MPS backend (`mps` device) on Apple Silicon; CPU fallback using `float32` pipeline. Generated spectrogram images are converted back to stereo waveform via an in-repo `SpectrogramImageConverter` (librosa + matplotlib). Missing dependencies trigger a deterministic placeholder waveform so the CLI still surfaces artifacts.
-- **Job handling**: `JobManager` orchestrates async tasks, updating progress for queued/running jobs and persisting `GenerationArtifact` metadata once complete.
-- **Artifacts**: `soundfile` or `torchaudio` writes WAV to `~/Music/Timbre/<job_id>.wav`. Metadata (prompt, seed, duration) stored in JSON alongside audio.
+- **Composition planner**: `CompositionPlanner` expands prompts into deterministic multi-section `CompositionPlan` structures (tempo, key, sections, transitions). Plans are generated server-side if the CLI does not provide one and are embedded in every artifact’s metadata for reproducibility.
+- **Inference backends**: a `ComposerOrchestrator` selects between lazy-loaded backends (Riffusion, MusicGen) per section, requests audio renders, and stitches them together with adaptive crossfades and loudness normalisation. Each backend reports section-level extras (seed, guidance, placeholder status) that flow back to the CLI.
+- **Riffusion backend**: Diffusers-based spectrogram diffusion with PyTorch (`torch>=2.x`) using the MPS backend on Apple Silicon (float32 CPU fallback). Missing dependencies return deterministic placeholder stems so the pipeline remains debuggable offline.
+- **MusicGen backend**: Audiocraft integration (small/medium checkpoints) with graceful placeholders when the model isn’t available. Backends can be extended via the orchestrator registry without touching the HTTP layer.
+- **Job handling**: `JobManager` now delegates to the orchestrator, emitting multi-stage progress updates (`planning`, `rendering sections`, `assembling mixdown`).
+- **Artifacts**: Shared audio utilities write PCM WAVs under `~/Music/Timbre/<job_id>.wav`; metadata records the full plan, backend extras, and render mix profile.
 - **Config**: `pydantic` models define requests/responses, aligning with Rust `serde` structs.
 - **Logging**: `loguru` surfaces structured events; worker annotates failures and dependency fallbacks for observability.
-- **Tooling**: `python -m timbre_worker.generate` performs single-shot generations for local debugging; `scripts/riffusion_smoke.py` offers a quick pipeline health check.
+- **Tooling**: `python -m timbre_worker.generate` runs the full planner → orchestrator chain for smoke-testing.
 
 ### 3.3 Shared Schemas
 - **GenerationRequest**: `prompt: str`, `seed: Optional[int]`, `duration_seconds: int`, `model_id: str`, `cfg_scale: Optional[float]`, `scheduler: Optional[str]`.

@@ -1,7 +1,9 @@
 use crate::{
     config::AppConfig,
+    planner::CompositionPlanner,
     types::{
-        GenerationArtifact, GenerationMetadata, GenerationRequest, GenerationStatus, JobState,
+        CompositionPlan, GenerationArtifact, GenerationMetadata, GenerationRequest,
+        GenerationStatus, JobState,
     },
 };
 use chrono::{DateTime, Utc};
@@ -78,6 +80,7 @@ pub struct JobEntry {
     pub prompt: String,
     pub request: GenerationRequest,
     pub status: GenerationStatus,
+    pub plan: CompositionPlan,
     pub artifact: Option<LocalArtifact>,
 }
 
@@ -101,6 +104,7 @@ pub struct AppState {
     pub status_lines: Vec<String>,
     app_config: AppConfig,
     generation_config: GenerationConfig,
+    planner: CompositionPlanner,
 }
 
 impl AppState {
@@ -113,6 +117,7 @@ impl AppState {
             status_lines: Vec::new(),
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
+            planner: CompositionPlanner::new(),
         }
     }
 
@@ -123,19 +128,24 @@ impl AppState {
                 self.push_status_line(format!("Error: {message}"));
                 self.append_chat(ChatRole::System, format!("{message}"));
             }
-            AppEvent::JobQueued { status, prompt, request } => {
+            AppEvent::JobQueued { status, prompt, request, plan } => {
                 self.jobs.insert(
                     status.job_id.clone(),
                     JobEntry {
                         prompt: prompt.clone(),
                         request: request.clone(),
                         status: status.clone(),
+                        plan: plan.clone(),
                         artifact: None,
                     },
                 );
                 self.focused_job = Some(status.job_id.clone());
                 let summary = format_request_summary(&request);
                 self.push_status_line(format!("Job {} queued ({summary})", status.job_id));
+                self.append_chat(
+                    ChatRole::System,
+                    format!("Composition plan for job {}: {}", status.job_id, plan_summary(&plan)),
+                );
                 self.append_chat(
                     ChatRole::Worker,
                     format!("Queued job {} ({summary})", status.job_id),
@@ -168,6 +178,9 @@ impl AppState {
                 if let Some(job) = self.jobs.get_mut(&status.job_id) {
                     job.status = status.clone();
                     job.artifact = Some(artifact.clone());
+                    if let Some(plan) = &artifact.descriptor.metadata.plan {
+                        job.plan = plan.clone();
+                    }
                     self.focused_job = Some(status.job_id.clone());
                     let (status_line, chat_line) = completion_messages(&status, &artifact);
                     self.push_status_line(status_line);
@@ -201,15 +214,22 @@ impl AppState {
         self.generation_config.summary()
     }
 
-    pub fn build_generation_request(&self, prompt: &str) -> GenerationRequest {
-        GenerationRequest {
+    pub fn build_generation_payload(&self, prompt: &str) -> (GenerationRequest, CompositionPlan) {
+        let plan = self.planner.build_plan(
+            prompt,
+            self.generation_config.duration_seconds,
+            self.generation_config.seed,
+        );
+        let request = GenerationRequest {
             prompt: prompt.to_string(),
             seed: self.generation_config.seed,
             duration_seconds: self.generation_config.duration_seconds,
             model_id: self.generation_config.model_id.clone(),
             cfg_scale: self.generation_config.cfg_scale,
             scheduler: None,
-        }
+            plan: Some(plan.clone()),
+        };
+        (request, plan)
     }
 
     pub fn handle_command(&mut self, input: &str) -> Result<String, String> {
@@ -334,14 +354,24 @@ impl AppState {
 pub enum AppEvent {
     Info(String),
     Error(String),
-    JobQueued { status: GenerationStatus, prompt: String, request: GenerationRequest },
-    JobUpdated { status: GenerationStatus },
-    JobCompleted { status: GenerationStatus, artifact: LocalArtifact },
+    JobQueued {
+        status: GenerationStatus,
+        prompt: String,
+        request: GenerationRequest,
+        plan: CompositionPlan,
+    },
+    JobUpdated {
+        status: GenerationStatus,
+    },
+    JobCompleted {
+        status: GenerationStatus,
+        artifact: LocalArtifact,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum AppCommand {
-    SubmitPrompt { prompt: String, request: GenerationRequest },
+    SubmitPrompt { prompt: String, request: GenerationRequest, plan: CompositionPlan },
     PlayJob { job_id: String },
 }
 
@@ -359,6 +389,10 @@ pub fn format_request_summary(request: &GenerationRequest) -> String {
 
     if let Some(seed) = request.seed {
         parts.push(format!("seed {}", seed));
+    }
+
+    if let Some(plan) = &request.plan {
+        parts.push(format!("plan {} sections", plan.sections.len()));
     }
 
     parts.join(", ")
@@ -405,11 +439,28 @@ fn completion_messages(status: &GenerationStatus, artifact: &LocalArtifact) -> (
         parts.push(format!("seed {}", seed));
     }
 
+    if let Some(plan) = &metadata.plan {
+        parts.push(format!("{} sections", plan.sections.len()));
+    }
+
     let detail = parts.join(", ");
     let status_line = format!("Job {} completed ({detail})", status.job_id);
     let chat_line =
         format!("Job {} completed ({detail}) → {}", status.job_id, artifact.local_path.display());
     (status_line, chat_line)
+}
+
+fn plan_summary(plan: &CompositionPlan) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(format!("{} sections · {} BPM · {}", plan.sections.len(), plan.tempo_bpm, plan.key));
+    let flow = plan
+        .sections
+        .iter()
+        .map(|section| section.label.clone())
+        .collect::<Vec<String>>()
+        .join(" → ");
+    parts.push(format!("flow: {flow}"));
+    parts.join(" | ")
 }
 
 #[cfg(test)]
@@ -441,6 +492,7 @@ mod tests {
                 "sample_rate": 44100,
                 "prompt_hash": "abc123ef"
             }),
+            plan: None,
         };
 
         let artifact = LocalArtifact {
@@ -481,6 +533,7 @@ mod tests {
                 "placeholder_reason": "pipeline_unavailable",
                 "prompt_hash": "deadbeef"
             }),
+            plan: None,
         };
 
         let artifact = LocalArtifact {
@@ -522,6 +575,7 @@ mod tests {
                 "prompt_hash": "feedcafe",
                 "seed": 7
             }),
+            plan: None,
         };
 
         let artifact = LocalArtifact {
@@ -547,6 +601,7 @@ mod tests {
             model_id: "riffusion-v1".into(),
             cfg_scale: Some(5.5),
             scheduler: None,
+            plan: None,
         };
         let summary = format_request_summary(&request);
         assert!(summary.contains("riffusion-v1"));
@@ -576,10 +631,12 @@ mod tests {
         let _ = state.handle_command("/duration 10");
         let _ = state.handle_command("/cfg 6.5");
         let _ = state.handle_command("/seed 77");
-        let request = state.build_generation_request("lively strings");
+        let (request, plan) = state.build_generation_payload("lively strings");
         assert_eq!(request.duration_seconds, 10);
         assert_eq!(request.cfg_scale, Some(6.5));
         assert_eq!(request.seed, Some(77));
         assert_eq!(request.model_id, "riffusion-v1");
+        assert!(request.plan.is_some());
+        assert_eq!(plan.sections.len(), request.plan.as_ref().unwrap().sections.len());
     }
 }

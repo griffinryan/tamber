@@ -14,12 +14,13 @@ use tracing::{error, info};
 mod api;
 mod app;
 mod config;
+mod planner;
 mod types;
 mod ui;
 
 use app::{AppCommand, AppEvent, AppState, LocalArtifact};
 use config::AppConfig;
-use types::{GenerationArtifact, GenerationRequest, JobState};
+use types::{CompositionPlan, GenerationArtifact, GenerationRequest, JobState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -113,8 +114,8 @@ impl Controller {
 
     async fn handle_command(inner: Arc<ControllerInner>, command: AppCommand) -> Result<()> {
         match command {
-            AppCommand::SubmitPrompt { prompt, request } => {
-                Controller::submit_prompt(inner, prompt, request).await?;
+            AppCommand::SubmitPrompt { prompt, request, plan } => {
+                Controller::submit_prompt(inner, prompt, request, plan).await?;
             }
             AppCommand::PlayJob { job_id } => {
                 Controller::play_job(inner, job_id).await?;
@@ -127,6 +128,7 @@ impl Controller {
         inner: Arc<ControllerInner>,
         prompt: String,
         request: GenerationRequest,
+        plan: CompositionPlan,
     ) -> Result<()> {
         let status = inner
             .client
@@ -134,8 +136,12 @@ impl Controller {
             .await
             .context("failed to submit generation request")?;
 
-        let _ =
-            inner.event_tx.send(AppEvent::JobQueued { status: status.clone(), prompt, request });
+        let _ = inner.event_tx.send(AppEvent::JobQueued {
+            status: status.clone(),
+            prompt,
+            request,
+            plan,
+        });
 
         Controller::spawn_poll_task(inner, status.job_id.clone());
         Ok(())

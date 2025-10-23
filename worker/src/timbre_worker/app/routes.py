@@ -5,6 +5,7 @@ from typing import cast
 from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 from .jobs import JobManager
 from .settings import Settings
+from ..services.planner import PLAN_VERSION
 
 router = APIRouter()
 
@@ -14,12 +15,18 @@ def get_job_manager(request: Request) -> JobManager:
 
 
 @router.get("/health")
-async def health(request: Request) -> dict[str, str]:
+async def health(request: Request) -> dict[str, object]:
     settings = cast(Settings, request.app.state.settings)
+    composer = getattr(request.app.state, "composer", None)
+    available_backends: list[str] = []
+    if composer is not None:
+        available_backends = ["riffusion", "musicgen"]
     return {
         "status": "ok",
         "default_model_id": settings.default_model_id,
         "artifact_root": str(settings.artifact_root),
+        "planner_version": PLAN_VERSION,
+        "available_backends": available_backends,
     }
 
 

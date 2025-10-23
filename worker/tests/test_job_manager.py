@@ -6,13 +6,22 @@ from pathlib import Path
 import pytest
 
 from timbre_worker.app.jobs import JobManager
-from timbre_worker.app.models import GenerationArtifact, GenerationMetadata, GenerationRequest, GenerationStatus, JobState
+from timbre_worker.app.models import (
+    CompositionPlan,
+    CompositionSection,
+    GenerationArtifact,
+    GenerationMetadata,
+    GenerationRequest,
+    GenerationStatus,
+    JobState,
+    SectionEnergy,
+    SectionRole,
+)
 from timbre_worker.services.riffusion import GenerationFailure
 
 
-class StubService:
+class StubOrchestrator:
     def __init__(self, artifact_root: Path) -> None:
-        self.default_model_id = "riffusion-v1"
         self._artifact_root = artifact_root
         self._artifact_root.mkdir(parents=True, exist_ok=True)
 
@@ -32,6 +41,7 @@ class StubService:
             model_id=request.model_id,
             duration_seconds=request.duration_seconds,
             extras={"backend": "stub"},
+            plan=self._plan(request),
         )
         return GenerationArtifact(
             job_id=job_id,
@@ -39,16 +49,39 @@ class StubService:
             metadata=metadata,
         )
 
+    def _plan(self, request: GenerationRequest) -> CompositionPlan:
+        section = CompositionSection(
+            section_id="s00",
+            role=SectionRole.MOTIF,
+            label="Test",
+            prompt=request.prompt,
+            bars=4,
+            target_seconds=float(request.duration_seconds),
+            energy=SectionEnergy.MEDIUM,
+            model_id=request.model_id,
+            seed_offset=0,
+            transition=None,
+        )
+        return CompositionPlan(
+            version="test",
+            tempo_bpm=90,
+            time_signature="4/4",
+            key="C major",
+            total_bars=4,
+            total_duration_seconds=float(request.duration_seconds),
+            sections=[section],
+        )
 
-class FailingService(StubService):
+
+class FailingOrchestrator(StubOrchestrator):
     async def generate(self, job_id: str, request: GenerationRequest) -> GenerationArtifact:
         raise GenerationFailure("boom")
 
 
 @pytest.mark.asyncio
 async def test_job_manager_success_flow(tmp_path: Path) -> None:
-    service = StubService(tmp_path)
-    manager = JobManager(service)
+    orchestrator = StubOrchestrator(tmp_path)
+    manager = JobManager(orchestrator)
     request = GenerationRequest(prompt="hello", duration_seconds=2, model_id="riffusion-v1")
 
     status = await manager.enqueue(request)
@@ -63,8 +96,8 @@ async def test_job_manager_success_flow(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_job_manager_failure_flow(tmp_path: Path) -> None:
-    service = FailingService(tmp_path)
-    manager = JobManager(service)
+    orchestrator = FailingOrchestrator(tmp_path)
+    manager = JobManager(orchestrator)
     request = GenerationRequest(prompt="oops", duration_seconds=2, model_id="riffusion-v1")
 
     status = await manager.enqueue(request)

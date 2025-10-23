@@ -1,5 +1,5 @@
 """
-CLI entry point to run a one-off generation against the Riffusion service layer.
+CLI entry point to run a one-off generation through the composition orchestrator.
 
 Example:
     uv run --project worker python -m timbre_worker.generate --prompt "quiet ambient drones"
@@ -15,6 +15,9 @@ from uuid import uuid4
 
 from .app.models import GenerationRequest
 from .app.settings import Settings
+from .services.musicgen import MusicGenService
+from .services.orchestrator import ComposerOrchestrator
+from .services.planner import CompositionPlanner
 from .services.riffusion import RiffusionService
 
 
@@ -64,17 +67,21 @@ async def _run(
     settings = Settings(**settings_kwargs)
     settings.ensure_directories()
 
-    service = RiffusionService(settings)
-    await service.warmup()
+    planner = CompositionPlanner()
+    riffusion = RiffusionService(settings)
+    musicgen = MusicGenService()
+    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    await orchestrator.warmup()
 
     request = GenerationRequest(
         prompt=prompt,
         duration_seconds=duration or settings.default_duration_seconds,
         model_id=model_id or settings.default_model_id,
     )
+    request.plan = planner.build_plan(request)
 
     job_id = f"cli-{uuid4()}"
-    artifact = await service.generate(job_id=job_id, request=request)
+    artifact = await orchestrator.generate(job_id=job_id, request=request)
 
     extras = artifact.metadata.extras
     placeholder = extras.get("placeholder", False)
@@ -103,4 +110,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
