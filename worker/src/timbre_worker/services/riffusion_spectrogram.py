@@ -30,7 +30,7 @@ ImageLike = Union[Image.Image, np.ndarray]
 class SpectrogramParams:
     """Parameter bundle describing the training-time spectrogram configuration."""
 
-    stereo: bool = False
+    stereo: bool = True
     sample_rate: int = 44100
     step_size_ms: int = 10
     window_duration_ms: int = 100
@@ -41,8 +41,8 @@ class SpectrogramParams:
     mel_scale_norm: Optional[str] = None
     mel_scale_type: str = "htk"
     max_mel_iters: int = 200
-    num_griffin_lim_iters: int = 32
-    power_for_image: float = 0.25
+    num_griffin_lim_iters: int = 48
+    power_for_image: float = 0.3
     max_image_value: float = 30e6
 
     @property
@@ -92,6 +92,73 @@ class SpectrogramImageDecoder:
         waveform = self._waveform_from_mel(mel)
         return waveform, self._params.sample_rate
 
+    def encode(self, waveform: np.ndarray, sample_rate: int) -> Image.Image:
+        """Convert a waveform into the spectrogram image used by Riffusion."""
+
+        if torchaudio is None:
+            raise RuntimeError("torchaudio_unavailable")
+        if waveform.ndim == 1:
+            waveform = waveform[:, None]
+        if waveform.shape[0] < waveform.shape[1]:
+            waveform = waveform.T
+
+        resampled = waveform
+        if sample_rate != self._params.sample_rate:
+            factor = self._params.sample_rate / sample_rate
+            indices = np.arange(0, waveform.shape[0] * factor, factor)
+            indices = indices[indices < waveform.shape[0]].astype(np.int32)
+            resampled = waveform[indices]
+
+        tensor = torch.as_tensor(resampled.T, dtype=self._dtype, device=self._device)
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+
+        stft = torch.stft(
+            tensor,
+            n_fft=self._params.n_fft,
+            hop_length=self._params.hop_length,
+            win_length=self._params.win_length,
+            window=torch.hann_window(self._params.win_length).to(self._device),
+            center=True,
+            return_complex=True,
+        )
+        magnitude = torch.abs(stft)
+        mel = torch.nn.functional.linear(
+            magnitude,
+            torch.tensor(
+                torchaudio.functional.create_fb_matrix(
+                    self._params.n_fft // 2 + 1,
+                    self._params.sample_rate,
+                    self._params.num_frequencies,
+                    self._params.min_frequency,
+                    self._params.max_frequency,
+                ),
+                device=self._device,
+                dtype=self._dtype,
+            ),
+        )
+        mel = mel.cpu().numpy()
+
+        mel = np.power(np.maximum(mel, 1e-6), self._params.power_for_image)
+        mel = mel / mel.max(initial=1.0)
+        mel = mel * self._params.max_image_value
+
+        if self._params.stereo and mel.shape[0] >= 2:
+            channels = np.stack([
+                mel[0],
+                mel[1],
+                mel[1],
+            ], axis=0)
+        else:
+            channels = np.stack([mel[0], mel[0], mel[0]], axis=0)
+
+        image_array = np.clip(channels, 0.0, self._params.max_image_value)
+        image_array = 255.0 - (image_array / self._params.max_image_value) * 255.0
+        image_array = image_array.transpose(1, 2, 0)
+        image_array = np.flip(image_array, axis=0)
+        image = Image.fromarray(image_array.astype(np.uint8))
+        return image
+
     def _build_inverse_mel(self, params: SpectrogramParams) -> torch.nn.Module:
         """Construct an InverseMelScale compatible with the installed torchaudio."""
 
@@ -124,7 +191,7 @@ class SpectrogramImageDecoder:
             mode = "unknown"
 
         module = inverse_cls(**kwargs).to(self._device)
-        setattr(module, "decoder_mode", mode)
+        module.decoder_mode = mode
         return module
 
     def _spectrogram_from_image(self, image: ImageLike) -> np.ndarray:
@@ -145,7 +212,7 @@ class SpectrogramImageDecoder:
         array = np.flip(array, axis=0)  # Flip vertical axis back to spectrogram orientation.
         channels_first = array.transpose(2, 0, 1)
 
-        if self._params.stereo:
+        if self._params.stereo and channels_first.shape[0] >= 3:
             data = channels_first[[1, 2], :, :]
         else:
             data = channels_first[0:1, :, :]

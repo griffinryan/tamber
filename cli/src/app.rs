@@ -3,10 +3,11 @@ use crate::{
     planner::CompositionPlanner,
     types::{CompositionPlan, GenerationArtifact, GenerationRequest, GenerationStatus, JobState},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::time::Duration as StdDuration;
 
 const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
@@ -92,6 +93,47 @@ impl JobEntry {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPane {
+    StatusBar,
+    Conversation,
+    Jobs,
+    Status,
+    Prompt,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaybackState {
+    pub job_id: String,
+    pub path: PathBuf,
+    pub duration: StdDuration,
+    pub started_at: DateTime<Utc>,
+    pub is_playing: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Insert,
+}
+
+#[derive(Debug)]
+pub struct StatusBarState {
+    pub progress: f32,
+    pub message: String,
+    pub last_update: DateTime<Utc>,
+}
+
+impl Default for StatusBarState {
+    fn default() -> Self {
+        Self {
+            progress: 0.0,
+            message: "Ready for the next idea…".to_string(),
+            last_update: Utc::now(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub input: String,
@@ -99,8 +141,16 @@ pub struct AppState {
     pub jobs: IndexMap<String, JobEntry>,
     pub focused_job: Option<String>,
     pub status_lines: Vec<String>,
+    pub status_bar: StatusBarState,
+    pub focused_pane: FocusedPane,
+    pub chat_scroll: usize,
+    pub status_scroll: usize,
+    pub chat_following: bool,
+    pub status_following: bool,
+    pub input_mode: InputMode,
     app_config: AppConfig,
     generation_config: GenerationConfig,
+    playback: Option<PlaybackState>,
     planner: CompositionPlanner,
 }
 
@@ -112,6 +162,14 @@ impl AppState {
             jobs: IndexMap::new(),
             focused_job: None,
             status_lines: Vec::new(),
+            status_bar: StatusBarState::default(),
+            focused_pane: FocusedPane::Prompt,
+            chat_scroll: 0,
+            status_scroll: 0,
+            chat_following: true,
+            status_following: true,
+            input_mode: InputMode::Normal,
+            playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
             planner: CompositionPlanner::new(),
@@ -126,6 +184,7 @@ impl AppState {
                 self.append_chat(ChatRole::System, format!("{message}"));
             }
             AppEvent::JobQueued { status, prompt, request, plan } => {
+                self.playback = None;
                 self.jobs.insert(
                     status.job_id.clone(),
                     JobEntry {
@@ -147,6 +206,10 @@ impl AppState {
                     ChatRole::Worker,
                     format!("Queued job {} ({summary})", status.job_id),
                 );
+                self.focused_pane = FocusedPane::StatusBar;
+                self.status_scroll = 0;
+                self.status_following = true;
+                self.input_mode = InputMode::Normal;
             }
             AppEvent::JobUpdated { status } => {
                 if let Some(job) = self.jobs.get_mut(&status.job_id) {
@@ -184,6 +247,36 @@ impl AppState {
                     self.append_chat(ChatRole::Worker, chat_line);
                 }
             }
+            AppEvent::PlaybackStarted { job_id, path, duration } => {
+                self.playback = Some(PlaybackState {
+                    job_id,
+                    path,
+                    duration,
+                    started_at: Utc::now(),
+                    is_playing: true,
+                });
+                self.status_scroll = 0;
+                self.status_following = true;
+            }
+            AppEvent::PlaybackProgress { is_playing } => {
+                if let Some(playback) = &mut self.playback {
+                    playback.is_playing = is_playing;
+                }
+                self.status_bar.last_update = Utc::now();
+            }
+            AppEvent::PlaybackStopped => {
+                if let Some(playback) = &mut self.playback {
+                    playback.is_playing = false;
+                }
+            }
+            AppEvent::PollProgress { progress, message } => {
+                self.status_bar.progress = progress.clamp(0.0, 1.0);
+                self.status_bar.message = message;
+                self.status_bar.last_update = Utc::now();
+            }
+            AppEvent::WorkerNudge { message } => {
+                self.append_chat(ChatRole::Worker, message);
+            }
         }
     }
 
@@ -193,6 +286,9 @@ impl AppState {
             let overflow = self.chat.len() - MAX_CHAT_ENTRIES;
             self.chat.drain(0..overflow);
         }
+        if self.chat_following {
+            self.chat_scroll = 0;
+        }
     }
 
     pub fn push_status_line(&mut self, line: String) {
@@ -200,6 +296,9 @@ impl AppState {
         if self.status_lines.len() > MAX_STATUS_LINES {
             let overflow = self.status_lines.len() - MAX_STATUS_LINES;
             self.status_lines.drain(0..overflow);
+        }
+        if self.status_following {
+            self.status_scroll = 0;
         }
     }
 
@@ -345,6 +444,65 @@ impl AppState {
             .and_then(|id| self.jobs.get_full(id))
             .map(|(_, key, value)| (key, value))
     }
+
+    pub fn focus_next(&mut self) {
+        self.focused_pane = match self.focused_pane {
+            FocusedPane::StatusBar => FocusedPane::Conversation,
+            FocusedPane::Conversation => FocusedPane::Jobs,
+            FocusedPane::Jobs => FocusedPane::Status,
+            FocusedPane::Status => FocusedPane::Prompt,
+            FocusedPane::Prompt => FocusedPane::StatusBar,
+        };
+    }
+
+    pub fn focus_previous(&mut self) {
+        self.focused_pane = match self.focused_pane {
+            FocusedPane::StatusBar => FocusedPane::Prompt,
+            FocusedPane::Conversation => FocusedPane::StatusBar,
+            FocusedPane::Jobs => FocusedPane::Conversation,
+            FocusedPane::Status => FocusedPane::Jobs,
+            FocusedPane::Prompt => FocusedPane::Status,
+        };
+    }
+
+    pub fn increment_chat_scroll(&mut self, delta: isize) {
+        let current = self.chat_scroll as isize;
+        let next = (current + delta).max(0);
+        self.chat_scroll = next as usize;
+        self.chat_following = self.chat_scroll == 0;
+    }
+
+    pub fn increment_status_scroll(&mut self, delta: isize) {
+        let current = self.status_scroll as isize;
+        let next = (current + delta).max(0);
+        self.status_scroll = next as usize;
+        self.status_following = self.status_scroll == 0;
+    }
+
+    pub fn playback_progress(
+        &self,
+    ) -> Option<(f32, StdDuration, StdDuration, bool, &String, &PathBuf)> {
+        let playback = self.playback.as_ref()?;
+        let now = Utc::now();
+        let elapsed = now.signed_duration_since(playback.started_at);
+        let elapsed =
+            if elapsed < ChronoDuration::zero() { ChronoDuration::zero() } else { elapsed };
+        let elapsed_std = StdDuration::from_millis(elapsed.num_milliseconds().max(0) as u64);
+        let capped_elapsed = std::cmp::min(elapsed_std, playback.duration);
+        let ratio = if playback.duration.as_millis() == 0 {
+            0.0
+        } else {
+            (capped_elapsed.as_secs_f32() / playback.duration.as_secs_f32()).clamp(0.0, 1.0)
+        };
+        Some((
+            ratio,
+            capped_elapsed,
+            playback.duration,
+            playback.is_playing,
+            &playback.job_id,
+            &playback.path,
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -364,12 +522,29 @@ pub enum AppEvent {
         status: GenerationStatus,
         artifact: LocalArtifact,
     },
+    PlaybackStarted {
+        job_id: String,
+        path: PathBuf,
+        duration: StdDuration,
+    },
+    PlaybackProgress {
+        is_playing: bool,
+    },
+    PlaybackStopped,
+    PollProgress {
+        progress: f32,
+        message: String,
+    },
+    WorkerNudge {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum AppCommand {
     SubmitPrompt { prompt: String, request: GenerationRequest, plan: CompositionPlan },
     PlayJob { job_id: String },
+    StopPlayback,
 }
 
 pub fn format_request_summary(request: &GenerationRequest) -> String {

@@ -14,6 +14,7 @@ from ..app.models import (
     CompositionPlan,
     CompositionSection,
     GenerationRequest,
+    ThemeDescriptor,
 )
 from .audio_utils import ensure_waveform_channels
 from .types import SectionRender
@@ -71,6 +72,8 @@ class MusicGenService:
         plan: CompositionPlan,
         model_id: Optional[str] = None,
         render_seconds: Optional[float] = None,
+        theme: ThemeDescriptor | None = None,
+        previous_render: SectionRender | None = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or self._default_model_id
         handle, placeholder_reason = await self._ensure_model(model_key)
@@ -84,10 +87,17 @@ class MusicGenService:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
+        prompt_text = self._compose_prompt(section.prompt, theme=theme, previous=previous_render)
+
+        warmup = None
+        if previous_render is not None:
+            target_rate = handle.sample_rate if handle is not None else 32_000
+            warmup = self._prepare_warmup(previous_render, target_rate)
+
         if handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._placeholder_waveform,
-                section.prompt,
+                prompt_text,
                 duration,
                 placeholder_reason or "musicgen_unavailable",
                 section_seed,
@@ -99,9 +109,10 @@ class MusicGenService:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._render_waveform,
                 handle,
-                section.prompt,
+                prompt_text,
                 duration,
                 section_seed,
+                warmup,
             )
             extras["placeholder"] = False
             extras["backend"] = "musicgen"
@@ -122,6 +133,18 @@ class MusicGenService:
             extras["placeholder_reason"] = placeholder_reason
         if section_seed is not None:
             extras["seed"] = section_seed
+        if theme is not None:
+            extras["theme"] = theme.model_dump()
+        if warmup is not None:
+            extras.setdefault("continuation", {})
+            extras["continuation"].update(
+                {
+                    "from_section": previous_render.extras.get("section_id")
+                    if previous_render is not None
+                    else None,
+                    "samples": warmup.shape[-1] if warmup is not None else 0,
+                }
+            )
 
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
@@ -162,6 +185,7 @@ class MusicGenService:
         prompt: str,
         duration_seconds: float,
         seed: Optional[int],
+        warmup: Optional[np.ndarray],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         assert MusicGen is not None and torch is not None
         model = handle.model
@@ -170,14 +194,35 @@ class MusicGenService:
         if seed is not None:
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
+        audio = None
+        if warmup is not None and hasattr(model, "generate_continuation"):
+            try:
+                tensor = torch.from_numpy(warmup).to(self._device)
+                if tensor.ndim == 1:
+                    tensor = tensor.unsqueeze(0)
+                if tensor.shape[0] > 2:
+                    tensor = tensor[:2]
+                audio = model.generate_continuation(
+                    warmup_audio=tensor,
+                    descriptions=[prompt],
+                    progress=False,
+                    return_tokens=False,
+                    generator=generator,
+                    duration=duration_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("MusicGen continuation failed, falling back: %s", exc)
+                audio = None
+
         try:
-            model.set_generation_params(duration=duration_seconds, use_sampling=True)
-            audio = model.generate(
-                descriptions=[prompt],
-                progress=False,
-                return_tokens=False,
-                generator=generator,
-            )
+            if audio is None:
+                model.set_generation_params(duration=duration_seconds, use_sampling=True)
+                audio = model.generate(
+                    descriptions=[prompt],
+                    progress=False,
+                    return_tokens=False,
+                    generator=generator,
+                )
         except TypeError:
             audio = model.generate(
                 descriptions=[prompt],
@@ -266,3 +311,75 @@ class MusicGenService:
     def _prompt_hash(self, prompt: str) -> str:
         digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
         return digest.hexdigest()
+
+    def _compose_prompt(
+        self,
+        base_prompt: str,
+        *,
+        theme: ThemeDescriptor | None,
+        previous: SectionRender | None,
+    ) -> str:
+        segments: list[str] = [base_prompt.strip()]
+        if theme is not None:
+            instrumentation = (
+                ", ".join(theme.instrumentation)
+                if theme.instrumentation
+                else "blended instrumentation"
+            )
+            parts = [
+                f"Keep the {theme.motif} motif",
+                f"with {instrumentation}",
+                f"locked to a {theme.rhythm}",
+            ]
+            if theme.texture:
+                parts.append(f"inside a {theme.texture}")
+            segments.append(" ".join(parts) + ".")
+        if previous is not None:
+            prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
+            descriptor = prev_label or "section"
+            segments.append(
+                "Continue seamlessly from the previous "
+                f"{descriptor}, preserving tone and instrumentation while "
+                "evolving the motif."
+            )
+        return " ".join(fragment.strip() for fragment in segments if fragment.strip())
+
+    def _prepare_warmup(
+        self,
+        render: SectionRender,
+        target_rate: int,
+        max_seconds: float = 4.0,
+    ) -> Optional[np.ndarray]:
+        waveform = ensure_waveform_channels(render.waveform)
+        if waveform.size == 0:
+            return None
+        samples = min(waveform.shape[0], int(max_seconds * render.sample_rate))
+        if samples <= 0:
+            return None
+        tail = waveform[-samples:]
+        if render.sample_rate != target_rate:
+            tail = self._resample_linear(tail, render.sample_rate, target_rate)
+            if tail is None:
+                return None
+        tail = tail.T.astype(np.float32)
+        return tail
+
+    @staticmethod
+    def _resample_linear(
+        data: np.ndarray,
+        src_rate: int,
+        dst_rate: int,
+    ) -> Optional[np.ndarray]:
+        if src_rate <= 0 or dst_rate <= 0:
+            return None
+        if src_rate == dst_rate:
+            return data
+        scale = dst_rate / src_rate
+        target_length = int(round(data.shape[0] * scale))
+        target_indices = np.linspace(0, data.shape[0] - 1, target_length, dtype=np.float64)
+        lower = np.floor(target_indices).astype(int)
+        upper = np.ceil(target_indices).astype(int)
+        upper = np.clip(upper, 0, data.shape[0] - 1)
+        frac = target_indices - lower
+        resampled = (1.0 - frac)[:, None] * data[lower] + frac[:, None] * data[upper]
+        return resampled

@@ -4,10 +4,10 @@ from typing import cast
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ..services.planner import PLAN_VERSION
 from .jobs import JobManager
 from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 from .settings import Settings
-from ..services.planner import PLAN_VERSION
 
 router = APIRouter()
 

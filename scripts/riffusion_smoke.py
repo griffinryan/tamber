@@ -26,9 +26,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 if TYPE_CHECKING:
-    from timbre_worker.app.models import GenerationRequest
-    from timbre_worker.app.settings import Settings
-    from timbre_worker.services.riffusion import RiffusionService
+    pass
 
 
 def parse_args() -> argparse.Namespace:

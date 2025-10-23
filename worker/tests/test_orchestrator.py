@@ -40,6 +40,9 @@ class DummyBackend:
         plan: CompositionPlan,
         model_id: str | None = None,
         render_seconds: float | None = None,
+        theme=None,
+        previous_render: SectionRender | None = None,
+        **_: object,
     ) -> SectionRender:
         self.calls.append(section.section_id)
         sample_rate = 44100
@@ -65,6 +68,7 @@ class PlaceholderBackend(DummyBackend):
         plan: CompositionPlan,
         model_id: str | None = None,
         render_seconds: float | None = None,
+        **kwargs: object,
     ) -> SectionRender:
         render = await super().render_section(
             request,
@@ -72,6 +76,7 @@ class PlaceholderBackend(DummyBackend):
             plan=plan,
             model_id=model_id,
             render_seconds=render_seconds,
+            **kwargs,
         )
         render.extras["placeholder"] = True
         render.extras["placeholder_reason"] = "missing"
@@ -177,6 +182,10 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
 
     assert extras.get("backend") == "composer"
     assert extras.get("placeholder") is False
+    assert mix_info.get("target_rms", 0.0) == pytest.approx(0.2, rel=1e-3)
+    section_rms = mix_info.get("section_rms")
+    assert isinstance(section_rms, list)
+    assert len(section_rms) == len(plan.sections)
     sections = extras.get("sections")
     assert isinstance(sections, list)
     assert len(sections) == 2
