@@ -404,8 +404,10 @@ fn handle_key(
                 }
             } else {
                 match app.focused_pane {
-                    FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
-                    FocusedPane::Jobs => app.select_previous_job(),
+                    FocusedPane::Prompt => app.focused_pane = FocusedPane::Conversation,
+                    FocusedPane::Conversation => app.focused_pane = FocusedPane::StatusBar,
+                    FocusedPane::Status => app.focused_pane = FocusedPane::Jobs,
+                    FocusedPane::Jobs => app.focused_pane = FocusedPane::StatusBar,
                     _ => {}
                 }
             }
@@ -421,8 +423,8 @@ fn handle_key(
             } else {
                 match app.focused_pane {
                     FocusedPane::StatusBar => app.focused_pane = FocusedPane::Conversation,
-                    FocusedPane::Status => app.focused_pane = FocusedPane::Prompt,
-                    FocusedPane::Jobs => app.select_next_job(),
+                    FocusedPane::Conversation => app.focused_pane = FocusedPane::Prompt,
+                    FocusedPane::Jobs => app.focused_pane = FocusedPane::Status,
                     _ => {}
                 }
             }
