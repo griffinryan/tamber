@@ -42,19 +42,23 @@ To target a worker running on a different host/port, set `TIMBRE_WORKER_URL` bef
 TIMBRE_WORKER_URL="http://localhost:9000" make cli-run
 ```
 
-## Installing Inference Dependencies
+## Installing Development & Inference Dependencies
 
-When ready to use Riffusion locally, install the optional inference extras (large downloads):
+Tests and linting rely on the `dev` extra, while real audio generation requires the heavier `inference` extra. Install both once you are ready to work on the backend end-to-end:
 
 ```bash
-uv sync --project worker --extra inference
-# quick health check (exits non-zero if the real pipeline fails to load)
+uv sync --project worker --extra dev --extra inference
+```
+
+This provides `pytest`, `ruff`, `mypy`, PyTorch, Diffusers, Librosa, Torchaudio, and Hugging Face tooling. MusicGen support (Audiocraft) is not bundled yet because upstream still depends on Pydantic 1; the worker will fall back to placeholder sections for the MusicGen backend until we ship a compatible integration.
+
+Verify the environment by running the bundled smoke test (exits non-zero when the real pipeline cannot load and we fall back to placeholder audio):
+
+```bash
 uv run --project worker python ../scripts/riffusion_smoke.py
 ```
 
-The inference extras include `torch`, `diffusers`, `librosa`, and `matplotlib` for spectrogram reconstruction; make sure the sync finishes successfully before testing audio. The smoke test exits early if placeholder audio is produced.
-
-Ensure PyTorch detects the Metal (MPS) backend where available:
+Ensure PyTorch detects the Metal (MPS) backend if you plan to run on GPU:
 
 ```python
 >>> import torch
@@ -73,7 +77,7 @@ cargo clippy -- -D warnings
 cd worker
 uv run ruff check src tests
 uv run mypy
-uv run pytest
+uv run python -m pytest
 
 Run a one-off generation without the HTTP API:
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -45,11 +45,17 @@ class ComposerOrchestrator:
             self._musicgen.warmup(),
         )
 
-    async def generate(self, job_id: str, request: GenerationRequest) -> GenerationArtifact:
+    async def generate(
+        self,
+        job_id: str,
+        request: GenerationRequest,
+        progress_cb: Optional[Callable[[int, int, SectionRender], Awaitable[None]]] = None,
+        mix_cb: Optional[Callable[[float], Awaitable[None]]] = None,
+    ) -> GenerationArtifact:
         plan = request.plan or self._planner.build_plan(request)
 
         renders: List[SectionRender] = []
-        for section in plan.sections:
+        for index, section in enumerate(plan.sections):
             backend = self._select_backend(section.model_id or request.model_id or "")
             logger.debug(
                 "Rendering section %s via %s", section.section_id, backend.__class__.__name__
@@ -61,8 +67,12 @@ class ComposerOrchestrator:
                 model_id=section.model_id or request.model_id,
             )
             renders.append(render)
+            if progress_cb is not None:
+                await progress_cb(index + 1, len(plan.sections), render)
 
         waveform, sample_rate, crossfades = self._combine_sections(plan, renders)
+        if mix_cb is not None:
+            await mix_cb(len(waveform) / sample_rate)
 
         artifact_path = self._artifact_root / f"{job_id}.wav"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)

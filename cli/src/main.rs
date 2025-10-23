@@ -55,9 +55,17 @@ async fn seed_health_status(client: &api::Client, app: &mut AppState) {
                 body.get("default_model_id").and_then(|v| v.as_str()).unwrap_or("riffusion-v1");
             let artifact_root =
                 body.get("artifact_root").and_then(|v| v.as_str()).unwrap_or("~/Music/Timbre");
+            let planner_version =
+                body.get("planner_version").and_then(|v| v.as_str()).unwrap_or("-");
+            let backends = body
+                .get("available_backends")
+                .and_then(|v| v.as_array())
+                .map(|items| items.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "unknown".to_string());
             let base_url = client.base_url().to_string();
             app.handle_event(AppEvent::Info(format!(
-                "Worker health: {status} (model: {default_model}, artifacts: {artifact_root}) @ {base_url}"
+                "Worker health: {status} (model: {default_model}, planner {planner_version}, backends: {backends}, artifacts: {artifact_root}) @ {base_url}"
             )));
         }
         Err(err) => {

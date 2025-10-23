@@ -1,6 +1,6 @@
 use crate::{
     app::{format_request_summary, AppCommand, AppEvent, AppState, ChatRole, JobEntry},
-    types::JobState,
+    types::{CompositionSection, JobState, SectionEnergy, SectionRole},
 };
 use anyhow::Result;
 use crossterm::{
@@ -14,6 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Terminal,
 };
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender};
 
@@ -209,6 +210,12 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     } else {
         lines.extend(app.status_lines.iter().cloned());
     }
+
+    if let Some((_id, job)) = app.selected_job() {
+        lines.push(String::new());
+        lines.extend(plan_status_lines(job));
+    }
+
     let content = lines.join("\n");
     let block = Block::default().title("Status").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(content).block(block), area);
@@ -295,5 +302,120 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     } else {
         let truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
         format!("{}…", truncated)
+    }
+}
+
+fn plan_status_lines(job: &JobEntry) -> Vec<String> {
+    let mut lines = Vec::new();
+    let header = format!(
+        "Plan: {} sections · {} BPM · {}",
+        job.plan.sections.len(),
+        job.plan.tempo_bpm,
+        job.plan.key
+    );
+    lines.push(header);
+
+    let active_label = job
+        .status
+        .message
+        .as_ref()
+        .and_then(|m| m.strip_prefix("rendering "))
+        .and_then(|rest| rest.split(':').nth(1))
+        .map(|s| s.trim())
+        .map(|s| s.split('(').next().unwrap_or(s).trim().to_string());
+
+    let section_extras = extract_section_extras(job);
+
+    for section in &job.plan.sections {
+        lines.push(format_section_line(section, &section_extras, active_label.as_deref()));
+    }
+
+    lines
+}
+
+fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> {
+    let mut map = HashMap::new();
+    if let Some(artifact) = &job.artifact {
+        if let Some(extras) = artifact.descriptor.metadata.extras.as_object() {
+            if let Some(sections) = extras.get("sections").and_then(|value| value.as_array()) {
+                for entry in sections {
+                    if let Some(section_id) =
+                        entry.get("section_id").and_then(|value| value.as_str())
+                    {
+                        map.insert(section_id.to_string(), entry.clone());
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+fn format_section_line(
+    section: &CompositionSection,
+    extras: &HashMap<String, serde_json::Value>,
+    active_label: Option<&str>,
+) -> String {
+    let mut label = String::new();
+    if let Some(active) = active_label {
+        if active.eq_ignore_ascii_case(&section.label) {
+            label.push('▶');
+            label.push(' ');
+        }
+    }
+    let energy_label = match section.energy {
+        SectionEnergy::Low => "low",
+        SectionEnergy::Medium => "medium",
+        SectionEnergy::High => "high",
+    };
+    label.push_str(&format!(
+        "{} {} · {} · {} bars · {:.1}s",
+        section.section_id, section.label, energy_label, section.bars, section.target_seconds,
+    ));
+
+    if let Some(extra) = extras.get(&section.section_id) {
+        if let Some(backend) = extra.get("backend").and_then(|value| value.as_str()) {
+            label.push_str(&format!(" · {}", backend));
+        }
+        if extra.get("placeholder").and_then(|value| value.as_bool()).unwrap_or(false) {
+            label.push_str(" · placeholder");
+        }
+    }
+
+    label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn format_section_line_includes_backend_and_active_marker() {
+        let section = CompositionSection {
+            section_id: "s00".to_string(),
+            role: SectionRole::Motif,
+            label: "Theme".to_string(),
+            prompt: "melody".to_string(),
+            bars: 4,
+            target_seconds: 8.0,
+            energy: SectionEnergy::Medium,
+            model_id: None,
+            seed_offset: Some(0),
+            transition: None,
+        };
+        let mut extras = HashMap::new();
+        extras.insert(
+            "s00".to_string(),
+            json!({
+                "backend": "musicgen",
+                "section_id": "s00",
+                "placeholder": false
+            }),
+        );
+
+        let line = format_section_line(&section, &extras, Some("Theme"));
+        assert!(line.contains("musicgen"));
+        assert!(line.starts_with("▶"));
     }
 }

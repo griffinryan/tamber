@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 from timbre_worker.app.jobs import JobManager
 from timbre_worker.app.models import (
@@ -18,6 +19,7 @@ from timbre_worker.app.models import (
     SectionRole,
 )
 from timbre_worker.services.riffusion import GenerationFailure
+from timbre_worker.services.types import SectionRender
 
 
 class StubOrchestrator:
@@ -32,9 +34,28 @@ class StubOrchestrator:
         self,
         job_id: str,
         request: GenerationRequest,
+        progress_cb=None,
+        mix_cb=None,
     ) -> GenerationArtifact:
         artifact_path = self._artifact_root / f"{job_id}.wav"
         artifact_path.write_bytes(b"RIFF")
+        if progress_cb is not None:
+            await progress_cb(
+                1,
+                1,
+                SectionRender(
+                    waveform=np.zeros(10, dtype=np.float32),
+                    sample_rate=44100,
+                    extras={
+                        "backend": "stub",
+                        "section_id": "s00",
+                        "section_label": "Test",
+                        "placeholder": False,
+                    },
+                ),
+            )
+        if mix_cb is not None:
+            await mix_cb(float(request.duration_seconds))
         metadata = GenerationMetadata(
             prompt=request.prompt,
             seed=request.seed,
@@ -74,7 +95,13 @@ class StubOrchestrator:
 
 
 class FailingOrchestrator(StubOrchestrator):
-    async def generate(self, job_id: str, request: GenerationRequest) -> GenerationArtifact:
+    async def generate(
+        self,
+        job_id: str,
+        request: GenerationRequest,
+        progress_cb=None,
+        mix_cb=None,
+    ) -> GenerationArtifact:
         raise GenerationFailure("boom")
 
 

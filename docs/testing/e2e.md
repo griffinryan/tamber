@@ -18,8 +18,23 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
    - `/seed 42` (or `/seed off`) locks deterministic runs; `/reset` restores defaults.
 5. Watch the job transition `Queued → Running → Done`. Progress updates stream every few seconds.
 6. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `p` with the job highlighted to surface the path again.
-7. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the `.[inference]` extras (torch, diffusers, transformers, etc.) and will reflect the prompt more directly.
+7. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the inference extras (torch, diffusers, transformers, Audiocraft) and will reflect the prompt more directly.
 8. Inspect `metadata.json` in the job directory to confirm prompt/model/duration values.
+
+## Composition Plan Smoke
+1. Launch the worker with the dev + inference extras installed (`uv sync --project worker --extra dev --extra inference` and Audiocraft).
+2. In the CLI, submit a descriptive prompt (e.g., `wistful piano resolving to hope`). The system chat should print a plan summary (`N sections · BPM · key · flow`).
+3. Focus the job and check the Status panel: it should list each section with role, energy, bars, target seconds, backend, and indicate which section is currently rendering (`▶`).
+4. Watch the job status lines update to `rendering 1/N: … (riffusion)` etc., ending with `assembling mixdown` before completion.
+5. After completion, open `~/Music/Timbre/<job_id>/metadata.json`:
+   - Confirm `plan.sections` matches the status panel and includes backend + placeholder flags. (The MusicGen backend will still appear as a placeholder until Audiocraft ships with Pydantic 2 support.)
+   - Inspect `extras.mix.crossfades` to verify the orchestrator recorded transition durations.
+6. (Optional) Replay generation with `/duration 24` and `/model musicgen-small` to validate cross-backend stitching.
+
+## Test Automation
+
+- Rust unit tests: `cargo test`
+- Python unit tests: `uv run --project worker python -m pytest`
 
 ## Failure Handling
 - Worker offline: CLI should surface “Worker health check failed”. Verify prompt submission yields an error toast instead of hanging.

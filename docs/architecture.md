@@ -35,6 +35,7 @@
 - **State Management**: `AppState` struct tracks active prompt, queued jobs, history, and configuration.
 - **Composition UX**: the CLI produces a deterministic plan preview (via a mirror of the Python planner) before submitting jobs, surfaces the section flow in chat, and persists plan summaries alongside job entries so users can reason about phrasing rather than one-shot clips.
 - **Command Processing**: Background `tokio` tasks submit prompts, poll worker status, copy artifacts into `~/Music/Timbre/<job_id>/`, and push events/notifications back into the UI loop.
+- **Plan timeline**: the status pane highlights the currently rendering section, showing tempo/key, per-section metadata, backend choice, and whether any placeholder stems were used once a job completes.
 - **Networking**: `reqwest` client submits generation requests and polls status endpoints. Job updates drive UI notifications.
 - **Playback**: `rodio` loads generated WAVs. For MP3 playback (future), integrate `symphonia`.
 - **Logging**: `tracing` + `tracing-subscriber` for structured logs. Configurable verbosity via CLI flags.

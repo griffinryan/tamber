@@ -10,6 +10,7 @@ from loguru import logger
 from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 from ..services.orchestrator import ComposerOrchestrator
 from ..services.riffusion import GenerationFailure
+from ..services.types import SectionRender
 
 
 class JobManager:
@@ -56,19 +57,33 @@ class JobManager:
             message="planning composition",
         )
         try:
-            await self._set_status(
-                job_id,
-                state=JobState.RUNNING,
-                progress=0.2,
-                message="rendering sections",
+            async def progress_cb(position: int, total: int, render: SectionRender) -> None:
+                ratio = position / max(total, 1)
+                progress = 0.2 + 0.6 * ratio
+                label = render.extras.get("section_label") or render.extras.get("section_id") or "section"
+                backend = render.extras.get("backend", "backend")
+                message = f"rendering {position}/{total}: {label} ({backend})"
+                await self._set_status(
+                    job_id,
+                    state=JobState.RUNNING,
+                    progress=progress,
+                    message=message,
+                )
+
+            async def mix_cb(duration_seconds: float) -> None:
+                await self._set_status(
+                    job_id,
+                    state=JobState.RUNNING,
+                    progress=0.9,
+                    message=f"assembling mixdown ({duration_seconds:.1f}s)",
+                )
+
+            artifact = await self._orchestrator.generate(
+                job_id=job_id,
+                request=request,
+                progress_cb=progress_cb,
+                mix_cb=mix_cb,
             )
-            await self._set_status(
-                job_id,
-                state=JobState.RUNNING,
-                progress=0.6,
-                message="assembling mixdown",
-            )
-            artifact = await self._orchestrator.generate(job_id=job_id, request=request)
         except GenerationFailure as exc:
             await self._set_status(
                 job_id,

@@ -20,14 +20,16 @@ Hybrid Ratatui (Rust) and FastAPI (Python) system for text-to-music experimentat
    make setup
    ```
 
-3. (Optional, large downloads) Install inference extras once you are ready to run Riffusion locally:
+3. (Optional, large downloads) Install development + inference extras once you are ready to run the real pipelines locally:
 
    ```bash
-   cd worker
-   uv pip install '.[inference]'
+   # from repo root
+   uv sync --project worker --extra dev --extra inference
    # verify the backend with a one-off smoke run
-   uv run python ../scripts/riffusion_smoke.py
+   uv run --project worker python ../scripts/riffusion_smoke.py
    ```
+
+   > MusicGen support (Audiocraft) still targets Pydantic 1 and is therefore not part of the default extras. Until we land a compatible integration, the worker will return placeholder sections for the MusicGen backend.
 
 ## Running the Prototype
 
