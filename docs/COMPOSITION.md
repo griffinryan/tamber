@@ -4,6 +4,7 @@ These notes track the current composition + mixing pipeline as of planner **v2**
 
 ## 1. Planning Surface (Planner v2)
 - **Tempo quantisation**: we derive seconds-per-beat from the target tempo after clamping to 60–140 BPM. Every section is allocated an integer number of beats, so section joins fall on the grid.
+- **Theme descriptor**: planner v2.1 now emits a `ThemeDescriptor` (motif phrase, instrumentation palette, rhythm tag, dynamic curve, texture). This descriptor is baked into every section prompt so the whole plan shares a coherent musical vocabulary.
 - **Seeded structure**: planner chooses a tonal centre by hashing the prompt/seed so intro/motif/outro sections remain deterministic for the same prompt.
 - **Adaptive beats**: per-role minimum beats guardrails (intro ≥1 bar, motif ≥2 bars, etc.) ensure the short clips still contain musical arcs. Redistribution honours a priority list (motif → development → bridge …) when extending or shrinking plans.
 - **Minimum clip length**: global floor of 12 s keeps at least intro/motif/outro alive by default. The CLI now defaults to 24 s so most generations surface three or more sections without manual tweaking.
@@ -26,6 +27,7 @@ These notes track the current composition + mixing pipeline as of planner **v2**
   - If short, we loop the tail in tempo-sized slices with a quick crossfade. This fills missing beats instead of padding zeros.
 - **Crossfades**: beat-aware fades (0.5–1.5 beats) using the shared `crossfade_append` helper keep transitions musical. `mix.crossfades[*].seconds` documents the actual overlap to help future timeline visualisation.
 - **Master polish**: after concatenation we apply another loudness normalisation pass and a soft tanh limiter (0.98 threshold). This ensures headroom for user-side mastering while eliminating obvious clipping.
+- **Theme-aware prompting**: both Riffusion and MusicGen receive the plan’s `ThemeDescriptor` plus the previous section’s render metadata. We append motif/instrument/rhythm text to every inference prompt and ask the models to “flow from the previous section,” tightening continuity even without latent continuation.
 
 ### UX Hooks
 - `mix` extras now include `target_rms`, `section_rms`, and exact crossfade durations. The CLI feedback loop can visualise these to highlight overly quiet sections or abrupt transitions.
@@ -50,6 +52,6 @@ These notes track the current composition + mixing pipeline as of planner **v2**
 - **Plan editing API**: expose a worker endpoint that accepts beat-level mutations and leverages the `fit_to_length` utility. The CLI can emit quick “trim chorus” actions without re-planning from scratch.
 - **Per-section audition**: now that stems are pre-normalised, we can write each `render.waveform` to disk for isolated playback in the CLI (press `p` on motif to audition shell loops).
 - **Lyric/arrangement layer**: store an `extras.arrangement` blob parallel to the plan referencing beat offsets. As long as we keep beats integer, we can align lyric syllables or automation curves later.
-- **Live meters**: `section_rms` + `crossfades` let us trend mix energy – perfect for streaming UI overlays or quick “this motif is quiet; regenerate?” prompts in the feedback loop.
+- **Live meters & motif awareness**: `section_rms` + `crossfades` + the shared theme descriptor let us trend mix energy and stay motif-aware – perfect for streaming UI overlays or quick “this motif is quiet; regenerate?” prompts in the feedback loop.
 
 Keep this document current whenever planner versions, normalization strategy, or default durations change. Future “Ableton-like” loop controls should build directly on these beat-aligned primitives.***

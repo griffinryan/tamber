@@ -69,6 +69,7 @@ class ComposerOrchestrator:
         for index, section in enumerate(plan.sections):
             backend = self._select_backend(section.model_id or request.model_id or "")
             render_hint = self._render_duration_hint(plan, index, section, total_sections)
+            previous_render = renders[-1] if renders else None
             logger.debug(
                 "Rendering section %s via %s (target %.2fs, render %.2fs)",
                 section.section_id,
@@ -82,6 +83,8 @@ class ComposerOrchestrator:
                 plan=plan,
                 model_id=section.model_id or request.model_id,
                 render_seconds=render_hint,
+                theme=plan.theme,
+                previous_render=previous_render,
             )
             renders.append(render)
             if progress_cb is not None:
@@ -113,6 +116,8 @@ class ComposerOrchestrator:
             },
             "sample_rate": sample_rate,
         }
+        if plan.theme is not None:
+            extras["theme"] = plan.theme.model_dump()
 
         metadata = GenerationMetadata(
             prompt=request.prompt,

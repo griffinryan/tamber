@@ -18,6 +18,7 @@ from ..app.models import (
     GenerationRequest,
     SectionEnergy,
     SectionRole,
+    ThemeDescriptor,
 )
 from ..app.settings import Settings
 from .audio_utils import ensure_waveform_channels, write_waveform
@@ -89,6 +90,8 @@ class RiffusionService:
         plan: CompositionPlan,
         model_id: Optional[str] = None,
         render_seconds: Optional[float] = None,
+        theme: ThemeDescriptor | None = None,
+        previous_render: SectionRender | None = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or request.model_id or self._default_model_id
         pipeline_handle, placeholder_reason = await self._ensure_pipeline(model_key)
@@ -112,10 +115,16 @@ class RiffusionService:
         used_placeholder = pipeline_handle is None
         device_token = self._device if pipeline_handle is not None else "placeholder"
 
+        prompt_text = self._compose_prompt(
+            section.prompt,
+            theme=theme,
+            previous=previous_render,
+        )
+
         if pipeline_handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._placeholder_waveform,
-                section.prompt,
+                prompt_text,
                 duration,
                 placeholder_reason or "pipeline_unavailable",
                 section_seed,
@@ -125,7 +134,7 @@ class RiffusionService:
                 waveform, sample_rate, extras = await asyncio.to_thread(
                     self._run_inference,
                     pipeline_handle,
-                    section.prompt,
+                    prompt_text,
                     duration,
                     guidance_scale,
                     section_seed,
@@ -141,7 +150,7 @@ class RiffusionService:
                 placeholder_reason = f"inference_error:{exc}"
                 waveform, sample_rate, extras = await asyncio.to_thread(
                     self._placeholder_waveform,
-                    section.prompt,
+                    prompt_text,
                     duration,
                     placeholder_reason,
                     section_seed,
@@ -168,6 +177,8 @@ class RiffusionService:
             extras["placeholder_reason"] = placeholder_reason
         if section_seed is not None:
             extras["seed"] = section_seed
+        if theme is not None:
+            extras["theme"] = theme.model_dump()
         decoder_mode = self._spectrogram_mode if not used_placeholder else "placeholder"
         if decoder_mode is not None:
             extras["spectrogram_decoder"] = decoder_mode
@@ -532,6 +543,31 @@ class RiffusionService:
             detail = TORCH_IMPORT_ERROR or "not installed"
             return f"torch_unavailable:{detail};{guidance}"
         return "unknown"
+
+    def _compose_prompt(
+        self,
+        base_prompt: str,
+        *,
+        theme: ThemeDescriptor | None,
+        previous: SectionRender | None,
+    ) -> str:
+        segments: list[str] = [base_prompt.strip()]
+        if theme is not None:
+            instrumentation = ", ".join(theme.instrumentation) if theme.instrumentation else "blended instrumentation"
+            descriptor_parts = [
+                f"Maintain the {theme.motif} motif",
+                f"with {instrumentation}",
+                f"following a {theme.rhythm} feel",
+            ]
+            if theme.texture:
+                descriptor_parts.append(f"and preserve the {theme.texture}")
+            segments.append(" ".join(descriptor_parts) + ".")
+        if previous is not None:
+            prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
+            segments.append(
+                f"Flow smoothly from the previous {prev_label or 'section'}, evolving its ideas without changing the instrumentation."
+            )
+        return " ".join(segment.strip() for segment in segments if segment.strip())
 
     def _resolve_spectrogram_decoder(
         self,

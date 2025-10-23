@@ -13,6 +13,7 @@ from ..app.models import (
     GenerationRequest,
     SectionEnergy,
     SectionRole,
+    ThemeDescriptor,
 )
 
 PLAN_VERSION = "v2"
@@ -49,6 +50,65 @@ REMOVE_PRIORITY = [
     SectionRole.MOTIF,
 ]
 
+INSTRUMENT_KEYWORDS = [
+    ("piano", "warm piano"),
+    ("keys", "soft keys"),
+    ("synth", "lush synth pads"),
+    ("synthwave", "retro synth layers"),
+    ("modular", "modular synth textures"),
+    ("guitar", "ambient guitar"),
+    ("bass", "deep bass"),
+    ("drum", "tight drums"),
+    ("percussion", "organic percussion"),
+    ("string", "layered strings"),
+    ("violin", "expressive strings"),
+    ("cello", "warm cello"),
+    ("choir", "airy choir voices"),
+    ("vocal", "ethereal vocals"),
+    ("brass", "smooth brass"),
+    ("sax", "saxophone lead"),
+    ("flute", "breathy flute"),
+    ("ambient", "atmospheric textures"),
+    ("lofi", "dusty keys"),
+]
+
+RHYTHM_KEYWORDS = [
+    ("waltz", "gentle 3/4 sway"),
+    ("swing", "swinging groove"),
+    ("hip hop", "laid-back hip hop beat"),
+    ("boom bap", "boom-bap pulse"),
+    ("house", "four-on-the-floor pulse"),
+    ("techno", "driving techno rhythm"),
+    ("trance", "rolling trance rhythm"),
+    ("trap", "stuttered trap beat"),
+    ("downtempo", "downtempo pulse"),
+    ("breakbeat", "syncopated breakbeat"),
+    ("bossa", "bossa nova sway"),
+    ("reggae", "off-beat reggae groove"),
+]
+
+TEXTURE_KEYWORDS = [
+    ("dream", "dreamy haze"),
+    ("noir", "late-night noir mood"),
+    ("dark", "shadowy atmosphere"),
+    ("bright", "glowing shimmer"),
+    ("glitch", "glitchy texture"),
+    ("cinematic", "cinematic expanse"),
+    ("epic", "soaring atmosphere"),
+    ("mystic", "mystical aura"),
+    ("lofi", "dusty vignette"),
+    ("rain", "rain-soaked ambience"),
+]
+
+DEFAULT_INSTRUMENTATION = ["blended instrumentation"]
+DEFAULT_TEXTURE = "immersive atmosphere"
+
+ENERGY_DYNAMIC_MAP = {
+    SectionEnergy.LOW: ("gentle entrance", "soft release"),
+    SectionEnergy.MEDIUM: ("steady motion", "measured resolve"),
+    SectionEnergy.HIGH: ("climactic surge", "energetic peak"),
+}
+
 
 @dataclass(frozen=True)
 class SectionTemplate:
@@ -81,10 +141,17 @@ class CompositionPlanner:
         total_bars = max(1, int(round(sum(beats) / 4)))
         seconds_per_section = [beat_count * seconds_per_beat for beat_count in beats]
 
+        descriptor = _build_theme_descriptor(request.prompt, templates)
+
         sections: List[CompositionSection] = []
 
         for index, template in enumerate(templates):
-            prompt_text = template.prompt_template.format(prompt=request.prompt).strip()
+            prompt_text = _render_prompt(
+                template.prompt_template,
+                prompt=request.prompt,
+                descriptor=descriptor,
+                section_index=index,
+            ).strip()
 
             section_seconds = max(MIN_SECTION_SECONDS, seconds_per_section[index])
             sections.append(
@@ -111,6 +178,7 @@ class CompositionPlanner:
             key=musical_key,
             total_bars=total_bars,
             total_duration_seconds=total_duration,
+            theme=descriptor,
             sections=sections,
         )
 
@@ -227,6 +295,116 @@ def _allocate_beats(
     return beats
 
 
+def _build_theme_descriptor(
+    prompt: str,
+    templates: List[SectionTemplate],
+) -> ThemeDescriptor:
+    prompt_lower = prompt.lower()
+    instrumentation = _extract_keywords(prompt_lower, INSTRUMENT_KEYWORDS)
+    if not instrumentation:
+        instrumentation = list(DEFAULT_INSTRUMENTATION)
+
+    rhythm = _derive_rhythm(prompt_lower, templates)
+    motif = _derive_motif(prompt)
+    texture = _derive_texture(prompt_lower, instrumentation)
+    dynamic_curve = [
+        _dynamic_label(template.role, template.energy, index, len(templates))
+        for index, template in enumerate(templates)
+    ]
+
+    return ThemeDescriptor(
+        motif=motif,
+        instrumentation=instrumentation,
+        rhythm=rhythm,
+        dynamic_curve=dynamic_curve,
+        texture=texture,
+    )
+
+
+def _extract_keywords(prompt_lower: str, mapping: list[tuple[str, str]]) -> list[str]:
+    results: list[str] = []
+    for keyword, label in mapping:
+        if keyword in prompt_lower and label not in results:
+            results.append(label)
+    return results
+
+
+def _derive_rhythm(prompt_lower: str, templates: List[SectionTemplate]) -> str:
+    for keyword, label in RHYTHM_KEYWORDS:
+        if keyword in prompt_lower:
+            return label
+    energies = {template.energy for template in templates}
+    if SectionEnergy.HIGH in energies:
+        return "driving pulse"
+    if SectionEnergy.MEDIUM in energies:
+        return "steady groove"
+    return "gentle pulse"
+
+
+def _derive_motif(prompt: str) -> str:
+    words = [
+        token.strip(".,;:!?")
+        for token in prompt.split()
+        if token.strip(".,;:!?").isalpha()
+    ]
+    if len(words) >= 3:
+        return " ".join(words[:3])
+    if words:
+        return " ".join(words)
+    return "primary motif"
+
+
+def _derive_texture(prompt_lower: str, instrumentation: list[str]) -> str:
+    for keyword, label in TEXTURE_KEYWORDS:
+        if keyword in prompt_lower:
+            return label
+    if instrumentation:
+        return f"focused blend of {', '.join(instrumentation[:2])}"
+    return DEFAULT_TEXTURE
+
+
+def _dynamic_label(
+    role: SectionRole,
+    energy: SectionEnergy,
+    index: int,
+    total: int,
+) -> str:
+    primary, release = ENERGY_DYNAMIC_MAP.get(energy, ("flowing motion", "gentle close"))
+    if index == 0:
+        if role == SectionRole.INTRO:
+            return primary
+        return "emerging momentum"
+    if index == total - 1:
+        if role == SectionRole.OUTRO:
+            return release
+        return "resolved cadence"
+    if energy == SectionEnergy.HIGH:
+        return "heightened intensity"
+    if energy == SectionEnergy.MEDIUM:
+        return "building drive"
+    return "textural breath"
+
+
+def _render_prompt(
+    template: str,
+    *,
+    prompt: str,
+    descriptor: ThemeDescriptor,
+    section_index: int,
+) -> str:
+    instrumentation_text = ", ".join(descriptor.instrumentation) or ", ".join(DEFAULT_INSTRUMENTATION)
+    dynamic = descriptor.dynamic_curve[section_index] if section_index < len(descriptor.dynamic_curve) else descriptor.dynamic_curve[-1] if descriptor.dynamic_curve else "flowing dynamic"
+    texture = descriptor.texture or DEFAULT_TEXTURE
+    return template.format(
+        prompt=prompt,
+        motif=descriptor.motif,
+        instrumentation=instrumentation_text,
+        rhythm=descriptor.rhythm,
+        texture=texture,
+        dynamic=dynamic,
+    )
+
+
 def _rebalance_beats(
     templates: List[SectionTemplate],
     beats: List[int],
@@ -290,7 +468,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Arrival",
             energy=SectionEnergy.LOW,
             bars=4,
-            prompt_template="Set the stage with a hushed texture hinting at {prompt}.",
+            prompt_template=(
+                "Set a {texture} scene for {prompt} by introducing the {motif} motif with "
+                "{instrumentation} over a {rhythm} pulse."
+            ),
             transition="Fade in layers",
         )
         yield SectionTemplate(
@@ -298,7 +479,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Statement",
             energy=SectionEnergy.MEDIUM,
             bars=8,
-            prompt_template="Introduce a memorable motif expressing {prompt}.",
+            prompt_template=(
+                "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} "
+                "driving as {dynamic} begins."
+            ),
             transition="Build momentum",
         )
         yield SectionTemplate(
@@ -307,7 +491,8 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             energy=SectionEnergy.HIGH,
             bars=8,
             prompt_template=(
-                "Expand the motif with syncopation and evolving harmony around {prompt}."
+                "Evolve the {motif} motif with adventurous variations, letting {instrumentation} "
+                "weave syncopations over the {rhythm} while {dynamic} unfolds."
             ),
             transition="Evolve harmonies",
         )
@@ -316,7 +501,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Bridge",
             energy=SectionEnergy.MEDIUM,
             bars=4,
-            prompt_template="Introduce contrast with modal colors echoing {prompt}.",
+            prompt_template=(
+                "Shift the palette gently, morphing {instrumentation} into new colours yet "
+                "echoing the {motif} motif within the {rhythm} feel."
+            ),
             transition="Prepare resolution",
         )
         yield SectionTemplate(
@@ -324,7 +512,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Resolution",
             energy=SectionEnergy.MEDIUM,
             bars=4,
-            prompt_template="Resolve tension with satisfying cadences fulfilling {prompt}.",
+            prompt_template=(
+                "Guide the {motif} motif toward resolution, using {instrumentation} to ease the "
+                "{rhythm} while highlighting {dynamic}."
+            ),
             transition="Return home",
         )
         yield SectionTemplate(
@@ -332,7 +523,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Release",
             energy=SectionEnergy.LOW,
             bars=4,
-            prompt_template="Let the textures dissolve, echoing the atmosphere of {prompt}.",
+            prompt_template=(
+                "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop "
+                "the {rhythm}, allowing {dynamic} to close the journey."
+            ),
             transition="Fade to silence",
         )
         return
@@ -343,7 +537,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Lead-in",
             energy=SectionEnergy.LOW,
             bars=4,
-            prompt_template="Open gently and establish the mood of {prompt}.",
+            prompt_template=(
+                "Open gently with {instrumentation}, introducing the {motif} motif against a "
+                "{rhythm} pulse that hints at {prompt}."
+            ),
             transition="Invite motif",
         )
         yield SectionTemplate(
@@ -351,7 +548,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Motif A",
             energy=SectionEnergy.MEDIUM,
             bars=8,
-            prompt_template="Present a clear melodic phrase inspired by {prompt}.",
+            prompt_template=(
+                "Present the {motif} motif clearly, keeping {instrumentation} tight around the "
+                "{rhythm} while {dynamic} grows."
+            ),
             transition="Increase energy",
         )
         yield SectionTemplate(
@@ -360,7 +560,8 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             energy=SectionEnergy.HIGH,
             bars=6,
             prompt_template=(
-                "Develop the motif with rhythmic motion and harmonic color tied to {prompt}."
+                "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride "
+                "the {rhythm} as {dynamic} intensifies."
             ),
             transition="Soften textures",
         )
@@ -369,7 +570,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Cadence",
             energy=SectionEnergy.MEDIUM,
             bars=4,
-            prompt_template="Resolve back to calm, letting {prompt} settle.",
+            prompt_template=(
+                "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and "
+                "settle the {rhythm} with {dynamic}."
+            ),
             transition="Release",
         )
         yield SectionTemplate(
@@ -377,7 +581,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Tail",
             energy=SectionEnergy.LOW,
             bars=2,
-            prompt_template="Conclude with a gentle echo of {prompt}.",
+            prompt_template=(
+                "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and "
+                "the {rhythm} fade as {dynamic} sighs out."
+            ),
             transition="Fade",
         )
         return
@@ -387,7 +594,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
         label="Intro",
         energy=SectionEnergy.LOW,
         bars=2,
-        prompt_template="Set a delicate entrance referencing {prompt}.",
+        prompt_template=(
+            "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over "
+            "a {rhythm} that nods to {prompt}."
+        ),
         transition="Introduce motif",
     )
     yield SectionTemplate(
@@ -395,7 +605,10 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
         label="Motif",
         energy=SectionEnergy.MEDIUM,
         bars=6,
-        prompt_template="Deliver a simple, emotive motif capturing {prompt}.",
+        prompt_template=(
+            "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the "
+            "{rhythm} while {dynamic} expands."
+        ),
         transition="Lift energy",
     )
     yield SectionTemplate(
@@ -403,6 +616,9 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
         label="Resolve",
         energy=SectionEnergy.MEDIUM,
         bars=4,
-        prompt_template="Resolve with warm chords that fulfill {prompt}.",
+        prompt_template=(
+            "Resolve the story with {instrumentation}, letting the {motif} motif relax across the "
+            "{rhythm} as {dynamic} softens."
+        ),
         transition="Fade out",
     )

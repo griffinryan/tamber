@@ -16,6 +16,8 @@ def test_planner_builds_deterministic_plan() -> None:
     assert plan_a.sections
     assert plan_a.sections[0].target_seconds > 0
     assert plan_a.total_duration_seconds + 2.0 >= request.duration_seconds
+    assert plan_a.theme is not None
+    assert plan_a.theme.instrumentation
 
 
 def test_planner_collapses_short_duration() -> None:
@@ -29,3 +31,4 @@ def test_planner_collapses_short_duration() -> None:
     assert len(plan.sections) <= 2
     assert any(section.role == SectionRole.MOTIF for section in plan.sections)
     assert all(section.target_seconds >= 2.0 for section in plan.sections)
+    assert plan.theme is not None

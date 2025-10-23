@@ -14,6 +14,7 @@ from ..app.models import (
     CompositionPlan,
     CompositionSection,
     GenerationRequest,
+    ThemeDescriptor,
 )
 from .audio_utils import ensure_waveform_channels
 from .types import SectionRender
@@ -71,6 +72,8 @@ class MusicGenService:
         plan: CompositionPlan,
         model_id: Optional[str] = None,
         render_seconds: Optional[float] = None,
+        theme: ThemeDescriptor | None = None,
+        previous_render: SectionRender | None = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or self._default_model_id
         handle, placeholder_reason = await self._ensure_model(model_key)
@@ -84,10 +87,12 @@ class MusicGenService:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
+        prompt_text = self._compose_prompt(section.prompt, theme=theme, previous=previous_render)
+
         if handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._placeholder_waveform,
-                section.prompt,
+                prompt_text,
                 duration,
                 placeholder_reason or "musicgen_unavailable",
                 section_seed,
@@ -99,7 +104,7 @@ class MusicGenService:
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._render_waveform,
                 handle,
-                section.prompt,
+                prompt_text,
                 duration,
                 section_seed,
             )
@@ -122,6 +127,8 @@ class MusicGenService:
             extras["placeholder_reason"] = placeholder_reason
         if section_seed is not None:
             extras["seed"] = section_seed
+        if theme is not None:
+            extras["theme"] = theme.model_dump()
 
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
@@ -266,3 +273,28 @@ class MusicGenService:
     def _prompt_hash(self, prompt: str) -> str:
         digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
         return digest.hexdigest()
+
+    def _compose_prompt(
+        self,
+        base_prompt: str,
+        *,
+        theme: ThemeDescriptor | None,
+        previous: SectionRender | None,
+    ) -> str:
+        segments: list[str] = [base_prompt.strip()]
+        if theme is not None:
+            instrumentation = ", ".join(theme.instrumentation) if theme.instrumentation else "blended instrumentation"
+            parts = [
+                f"Keep the {theme.motif} motif",
+                f"with {instrumentation}",
+                f"locked to a {theme.rhythm}",
+            ]
+            if theme.texture:
+                parts.append(f"inside a {theme.texture}")
+            segments.append(" ".join(parts) + ".")
+        if previous is not None:
+            prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
+            segments.append(
+                f"Continue seamlessly from the previous {prev_label or 'section'}, preserving tone and instrumentation while evolving the motif."
+            )
+        return " ".join(fragment.strip() for fragment in segments if fragment.strip())

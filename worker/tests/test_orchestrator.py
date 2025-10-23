@@ -40,6 +40,9 @@ class DummyBackend:
         plan: CompositionPlan,
         model_id: str | None = None,
         render_seconds: float | None = None,
+        theme=None,
+        previous_render: SectionRender | None = None,
+        **_: object,
     ) -> SectionRender:
         self.calls.append(section.section_id)
         sample_rate = 44100
@@ -65,6 +68,7 @@ class PlaceholderBackend(DummyBackend):
         plan: CompositionPlan,
         model_id: str | None = None,
         render_seconds: float | None = None,
+        **kwargs: object,
     ) -> SectionRender:
         render = await super().render_section(
             request,
@@ -72,6 +76,7 @@ class PlaceholderBackend(DummyBackend):
             plan=plan,
             model_id=model_id,
             render_seconds=render_seconds,
+            **kwargs,
         )
         render.extras["placeholder"] = True
         render.extras["placeholder_reason"] = "missing"

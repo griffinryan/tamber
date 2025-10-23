@@ -1,4 +1,6 @@
-use crate::types::{CompositionPlan, CompositionSection, SectionEnergy, SectionRole};
+use crate::types::{
+    CompositionPlan, CompositionSection, SectionEnergy, SectionRole, ThemeDescriptor,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -35,6 +37,59 @@ const REMOVE_PRIORITY: &[SectionRole] = &[
     SectionRole::Development,
     SectionRole::Motif,
 ];
+
+const INSTRUMENT_KEYWORDS: &[(&str, &str)] = &[
+    ("piano", "warm piano"),
+    ("keys", "soft keys"),
+    ("synthwave", "retro synth layers"),
+    ("synth", "lush synth pads"),
+    ("modular", "modular synth textures"),
+    ("guitar", "ambient guitar"),
+    ("bass", "deep bass"),
+    ("drum", "tight drums"),
+    ("percussion", "organic percussion"),
+    ("string", "layered strings"),
+    ("violin", "expressive strings"),
+    ("cello", "warm cello"),
+    ("choir", "airy choir voices"),
+    ("vocal", "ethereal vocals"),
+    ("brass", "smooth brass"),
+    ("sax", "saxophone lead"),
+    ("flute", "breathy flute"),
+    ("ambient", "atmospheric textures"),
+    ("lofi", "dusty keys"),
+];
+
+const RHYTHM_KEYWORDS: &[(&str, &str)] = &[
+    ("waltz", "gentle 3/4 sway"),
+    ("swing", "swinging groove"),
+    ("hip hop", "laid-back hip hop beat"),
+    ("boom bap", "boom-bap pulse"),
+    ("house", "four-on-the-floor pulse"),
+    ("techno", "driving techno rhythm"),
+    ("trance", "rolling trance rhythm"),
+    ("trap", "stuttered trap beat"),
+    ("downtempo", "downtempo pulse"),
+    ("breakbeat", "syncopated breakbeat"),
+    ("bossa", "bossa nova sway"),
+    ("reggae", "off-beat reggae groove"),
+];
+
+const TEXTURE_KEYWORDS: &[(&str, &str)] = &[
+    ("dream", "dreamy haze"),
+    ("noir", "late-night noir mood"),
+    ("dark", "shadowy atmosphere"),
+    ("bright", "glowing shimmer"),
+    ("glitch", "glitchy texture"),
+    ("cinematic", "cinematic expanse"),
+    ("epic", "soaring atmosphere"),
+    ("mystic", "mystical aura"),
+    ("lofi", "dusty vignette"),
+    ("rain", "rain-soaked ambience"),
+];
+
+const DEFAULT_INSTRUMENTATION: &[&str] = &["blended instrumentation"];
+const DEFAULT_TEXTURE: &str = "immersive atmosphere";
 
 struct SectionTemplate {
     role: SectionRole,
@@ -79,13 +134,14 @@ impl CompositionPlanner {
         let seconds_per_section: Vec<f32> =
             beats.iter().map(|count| *count as f32 * seconds_per_beat).collect();
 
+        let descriptor = build_theme_descriptor(prompt, &templates);
         let mut sections: Vec<CompositionSection> = Vec::with_capacity(templates.len());
 
         for (index, (template, section_seconds)) in
             templates.iter().zip(seconds_per_section).enumerate()
         {
             let section_prompt =
-                template.prompt_template.replace("{prompt}", prompt).trim().to_string();
+                render_prompt(template.prompt_template, prompt, &descriptor, index);
             let target_seconds = section_seconds.max(MIN_SECTION_SECONDS);
 
             sections.push(CompositionSection {
@@ -109,6 +165,7 @@ impl CompositionPlanner {
             key,
             total_bars,
             total_duration_seconds: sections.iter().map(|s| s.target_seconds).sum(),
+            theme: Some(descriptor.clone()),
             sections,
         }
     }
@@ -303,6 +360,135 @@ fn rebalance_beats(
     }
 }
 
+fn build_theme_descriptor(prompt: &str, templates: &[SectionTemplate]) -> ThemeDescriptor {
+    let prompt_lower = prompt.to_lowercase();
+    let mut instrumentation = extract_keywords(&prompt_lower, INSTRUMENT_KEYWORDS);
+    if instrumentation.is_empty() {
+        instrumentation = DEFAULT_INSTRUMENTATION.iter().map(|item| (*item).to_string()).collect();
+    }
+
+    let rhythm = derive_rhythm(&prompt_lower, templates);
+    let motif = derive_motif(prompt);
+    let texture = derive_texture(&prompt_lower, &instrumentation);
+    let dynamic_curve = templates
+        .iter()
+        .enumerate()
+        .map(|(index, template)| {
+            dynamic_label(&template.role, &template.energy, index, templates.len())
+        })
+        .collect();
+
+    ThemeDescriptor { motif, instrumentation, rhythm, dynamic_curve, texture: Some(texture) }
+}
+
+fn extract_keywords(prompt_lower: &str, mapping: &[(&str, &str)]) -> Vec<String> {
+    let mut results = Vec::new();
+    for (keyword, label) in mapping {
+        if prompt_lower.contains(keyword) && !results.iter().any(|existing| existing == label) {
+            results.push((*label).to_string());
+        }
+    }
+    results
+}
+
+fn derive_rhythm(prompt_lower: &str, templates: &[SectionTemplate]) -> String {
+    for (keyword, label) in RHYTHM_KEYWORDS {
+        if prompt_lower.contains(keyword) {
+            return (*label).to_string();
+        }
+    }
+    if templates.iter().any(|template| matches!(template.energy, SectionEnergy::High)) {
+        return "driving pulse".to_string();
+    }
+    if templates.iter().any(|template| matches!(template.energy, SectionEnergy::Medium)) {
+        return "steady groove".to_string();
+    }
+    "gentle pulse".to_string()
+}
+
+fn derive_motif(prompt: &str) -> String {
+    let mut words: Vec<String> = prompt
+        .split_whitespace()
+        .map(|token| token.trim_matches(|c: char| ",.;:!?\"'".contains(c)))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_string())
+        .collect();
+    words.retain(|word| word.chars().all(|c| c.is_alphabetic()));
+    if words.len() >= 3 {
+        return words[..3].join(" ");
+    }
+    if !words.is_empty() {
+        return words.join(" ");
+    }
+    "primary motif".to_string()
+}
+
+fn derive_texture(prompt_lower: &str, instrumentation: &[String]) -> String {
+    for (keyword, label) in TEXTURE_KEYWORDS {
+        if prompt_lower.contains(keyword) {
+            return (*label).to_string();
+        }
+    }
+    if !instrumentation.is_empty() {
+        let joined = instrumentation.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+        return format!("focused blend of {}", joined);
+    }
+    DEFAULT_TEXTURE.to_string()
+}
+
+fn dynamic_label(role: &SectionRole, energy: &SectionEnergy, index: usize, total: usize) -> String {
+    let (primary, release) = match energy {
+        SectionEnergy::Low => ("gentle entrance", "soft release"),
+        SectionEnergy::Medium => ("steady motion", "measured resolve"),
+        SectionEnergy::High => ("climactic surge", "energetic peak"),
+    };
+    if index == 0 {
+        if matches!(role, SectionRole::Intro) {
+            return primary.to_string();
+        }
+        return "emerging momentum".to_string();
+    }
+    if index + 1 == total {
+        if matches!(role, SectionRole::Outro) {
+            return release.to_string();
+        }
+        return "resolved cadence".to_string();
+    }
+    match energy {
+        SectionEnergy::High => "heightened intensity".to_string(),
+        SectionEnergy::Medium => "building drive".to_string(),
+        SectionEnergy::Low => "textural breath".to_string(),
+    }
+}
+
+fn render_prompt(
+    template: &str,
+    prompt: &str,
+    descriptor: &ThemeDescriptor,
+    index: usize,
+) -> String {
+    let instrumentation_text = if descriptor.instrumentation.is_empty() {
+        DEFAULT_INSTRUMENTATION.join(", ")
+    } else {
+        descriptor.instrumentation.join(", ")
+    };
+    let dynamic = descriptor
+        .dynamic_curve
+        .get(index)
+        .cloned()
+        .unwrap_or_else(|| "flowing dynamic".to_string());
+    let texture = descriptor.texture.clone().unwrap_or_else(|| DEFAULT_TEXTURE.to_string());
+
+    let mut rendered = template.to_string();
+    rendered = rendered.replace("{prompt}", prompt);
+    rendered = rendered.replace("{motif}", descriptor.motif.as_str());
+    rendered = rendered.replace("{instrumentation}", instrumentation_text.as_str());
+    rendered = rendered.replace("{rhythm}", descriptor.rhythm.as_str());
+    rendered = rendered.replace("{texture}", texture.as_str());
+    rendered = rendered.replace("{dynamic}", dynamic.as_str());
+    rendered.trim().to_string()
+}
+
 fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
     if duration_seconds >= 24 {
         vec![
@@ -311,7 +497,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Arrival",
                 energy: SectionEnergy::Low,
                 bars: 4,
-                prompt_template: "Set the stage with a hushed texture hinting at {prompt}.",
+                prompt_template: "Set a {texture} scene for {prompt} by introducing the {motif} motif with {instrumentation} over a {rhythm} pulse.",
                 transition: Some("Fade in layers"),
             },
             SectionTemplate {
@@ -319,7 +505,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Statement",
                 energy: SectionEnergy::Medium,
                 bars: 8,
-                prompt_template: "Introduce a memorable motif expressing {prompt}.",
+                prompt_template: "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins.",
                 transition: Some("Build momentum"),
             },
             SectionTemplate {
@@ -327,8 +513,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Development",
                 energy: SectionEnergy::High,
                 bars: 8,
-                prompt_template:
-                    "Expand the motif with syncopation and evolving harmony around {prompt}.",
+                prompt_template: "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds.",
                 transition: Some("Evolve harmonies"),
             },
             SectionTemplate {
@@ -336,7 +521,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Bridge",
                 energy: SectionEnergy::Medium,
                 bars: 4,
-                prompt_template: "Introduce contrast with modal colors echoing {prompt}.",
+                prompt_template: "Shift the palette gently, morphing {instrumentation} into new colours yet echoing the {motif} motif within the {rhythm} feel.",
                 transition: Some("Prepare resolution"),
             },
             SectionTemplate {
@@ -344,7 +529,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Resolution",
                 energy: SectionEnergy::Medium,
                 bars: 4,
-                prompt_template: "Resolve tension with satisfying cadences fulfilling {prompt}.",
+                prompt_template: "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}.",
                 transition: Some("Return home"),
             },
             SectionTemplate {
@@ -352,7 +537,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Release",
                 energy: SectionEnergy::Low,
                 bars: 4,
-                prompt_template: "Let the textures dissolve, echoing the atmosphere of {prompt}.",
+                prompt_template: "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey.",
                 transition: Some("Fade to silence"),
             },
         ]
@@ -363,7 +548,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Lead-in",
                 energy: SectionEnergy::Low,
                 bars: 4,
-                prompt_template: "Open gently and establish the mood of {prompt}.",
+                prompt_template: "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}.",
                 transition: Some("Invite motif"),
             },
             SectionTemplate {
@@ -371,7 +556,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Motif A",
                 energy: SectionEnergy::Medium,
                 bars: 8,
-                prompt_template: "Present a clear melodic phrase inspired by {prompt}.",
+                prompt_template: "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows.",
                 transition: Some("Increase energy"),
             },
             SectionTemplate {
@@ -379,8 +564,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Variation",
                 energy: SectionEnergy::High,
                 bars: 6,
-                prompt_template:
-                    "Develop the motif with rhythmic motion and harmonic color tied to {prompt}.",
+                prompt_template: "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies.",
                 transition: Some("Soften textures"),
             },
             SectionTemplate {
@@ -388,7 +572,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Cadence",
                 energy: SectionEnergy::Medium,
                 bars: 4,
-                prompt_template: "Resolve back to calm, letting {prompt} settle.",
+                prompt_template: "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}.",
                 transition: Some("Release"),
             },
             SectionTemplate {
@@ -396,7 +580,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Tail",
                 energy: SectionEnergy::Low,
                 bars: 2,
-                prompt_template: "Conclude with a gentle echo of {prompt}.",
+                prompt_template: "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out.",
                 transition: Some("Fade"),
             },
         ]
@@ -407,7 +591,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Intro",
                 energy: SectionEnergy::Low,
                 bars: 2,
-                prompt_template: "Set a delicate entrance referencing {prompt}.",
+                prompt_template: "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}.",
                 transition: Some("Introduce motif"),
             },
             SectionTemplate {
@@ -415,7 +599,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Motif",
                 energy: SectionEnergy::Medium,
                 bars: 6,
-                prompt_template: "Deliver a simple, emotive motif capturing {prompt}.",
+                prompt_template: "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands.",
                 transition: Some("Lift energy"),
             },
             SectionTemplate {
@@ -423,7 +607,7 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 label: "Resolve",
                 energy: SectionEnergy::Medium,
                 bars: 4,
-                prompt_template: "Resolve with warm chords that fulfill {prompt}.",
+                prompt_template: "Resolve the story with {instrumentation}, letting the {motif} motif relax across the {rhythm} as {dynamic} softens.",
                 transition: Some("Fade out"),
             },
         ]
@@ -442,6 +626,7 @@ mod tests {
         assert_eq!(plan.version, PLAN_VERSION);
         assert!(plan.total_duration_seconds > 0.0);
         assert!(plan.total_duration_seconds >= MIN_TOTAL_SECONDS);
+        assert!(plan.theme.is_some());
     }
 
     #[test]
@@ -451,5 +636,6 @@ mod tests {
         assert!(plan.sections.len() <= 2);
         assert!(plan.sections.iter().any(|section| matches!(section.role, SectionRole::Motif)));
         assert!(plan.sections.iter().all(|section| section.target_seconds >= 2.0));
+        assert!(plan.theme.is_some());
     }
 }
