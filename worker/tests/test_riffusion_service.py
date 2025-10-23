@@ -220,11 +220,7 @@ async def test_riffusion_service_pipeline_receives_prompt(
     assert first_call.get("prompt") == request.prompt
     assert first_call.get("guidance_scale") == DEFAULT_GUIDANCE_SCALE
     assert first_call.get("num_inference_steps") == 50
-    assert first_call.get("audio_length_in_s") >= pytest.approx(
-        MIN_RENDER_SECONDS,
-        rel=0.0,
-        abs=0.5,
-    )
+    assert first_call.get("audio_length_in_s") >= MIN_RENDER_SECONDS - 0.5
 
     request_cfg = GenerationRequest(
         prompt="dreamy modular sequence",
@@ -238,16 +234,8 @@ async def test_riffusion_service_pipeline_receives_prompt(
     assert extras_cfg.get("placeholder") is False
     assert extras_cfg.get("guidance_scale") == pytest.approx(4.5)
     assert calls[-1].get("guidance_scale") == pytest.approx(4.5)
-    assert calls[-1].get("audio_length_in_s") >= pytest.approx(
-        MIN_RENDER_SECONDS,
-        rel=0.0,
-        abs=0.5,
-    )
-    assert extras_cfg.get("render_seconds") >= pytest.approx(
-        MIN_RENDER_SECONDS,
-        rel=0.0,
-        abs=0.5,
-    )
+    assert calls[-1].get("audio_length_in_s") >= MIN_RENDER_SECONDS - 0.5
+    assert extras_cfg.get("render_seconds", 0.0) >= MIN_RENDER_SECONDS - 0.5
 
 
 def test_load_pipeline_uses_trust_remote_code(
