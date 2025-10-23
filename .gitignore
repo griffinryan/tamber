@@ -1,0 +1,18 @@
+# Rust
+/target
+
+# Extras
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+worker/.uv/
+uv.lock
+.python-version
+
+# General
+.DS_Store
+*.log
+artifacts/

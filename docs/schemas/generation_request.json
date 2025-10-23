@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GenerationRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["prompt", "duration_seconds", "model_id"],
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "User-supplied text prompt driving the audio generation."
+    },
+    "seed": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Optional deterministic seed for reproducible generations."
+    },
+    "duration_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 8,
+      "description": "Requested audio duration in whole seconds."
+    },
+    "model_id": {
+      "type": "string",
+      "description": "Identifier for the backend model to use (e.g. riffusion-v1)."
+    },
+    "cfg_scale": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 20.0,
+      "description": "Classifier-free guidance scale; higher values enforce the prompt more strongly."
+    },
+    "scheduler": {
+      "type": ["string", "null"],
+      "maxLength": 64,
+      "description": "Optional scheduler identifier for diffusion backends."
+    }
+  }
+}
