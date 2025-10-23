@@ -30,7 +30,7 @@ ImageLike = Union[Image.Image, np.ndarray]
 class SpectrogramParams:
     """Parameter bundle describing the training-time spectrogram configuration."""
 
-    stereo: bool = False
+    stereo: bool = True
     sample_rate: int = 44100
     step_size_ms: int = 10
     window_duration_ms: int = 100
@@ -41,8 +41,8 @@ class SpectrogramParams:
     mel_scale_norm: Optional[str] = None
     mel_scale_type: str = "htk"
     max_mel_iters: int = 200
-    num_griffin_lim_iters: int = 32
-    power_for_image: float = 0.25
+    num_griffin_lim_iters: int = 48
+    power_for_image: float = 0.3
     max_image_value: float = 30e6
 
     @property
@@ -145,7 +145,7 @@ class SpectrogramImageDecoder:
         array = np.flip(array, axis=0)  # Flip vertical axis back to spectrogram orientation.
         channels_first = array.transpose(2, 0, 1)
 
-        if self._params.stereo:
+        if self._params.stereo and channels_first.shape[0] >= 3:
             data = channels_first[[1, 2], :, :]
         else:
             data = channels_first[0:1, :, :]

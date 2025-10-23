@@ -16,7 +16,15 @@ from ..app.models import (
     GenerationRequest,
 )
 from ..app.settings import Settings
-from .audio_utils import ensure_waveform_channels, write_waveform
+from .audio_utils import (
+    crossfade_append,
+    ensure_waveform_channels,
+    fit_to_length,
+    normalise_loudness,
+    rms_level,
+    soft_limiter,
+    write_waveform,
+)
 from .musicgen import MusicGenService
 from .planner import CompositionPlanner
 from .riffusion import RiffusionService
@@ -57,9 +65,10 @@ class ComposerOrchestrator:
         plan = request.plan or self._planner.build_plan(request)
 
         renders: List[SectionRender] = []
+        total_sections = len(plan.sections)
         for index, section in enumerate(plan.sections):
             backend = self._select_backend(section.model_id or request.model_id or "")
-            render_hint = self._render_duration_hint(index, section, len(plan.sections))
+            render_hint = self._render_duration_hint(plan, index, section, total_sections)
             logger.debug(
                 "Rendering section %s via %s (target %.2fs, render %.2fs)",
                 section.section_id,
@@ -78,8 +87,10 @@ class ComposerOrchestrator:
             if progress_cb is not None:
                 await progress_cb(index + 1, len(plan.sections), render)
 
-        trimmed, sample_rate = self._prepare_section_waveforms(plan, renders)
+        trimmed, sample_rate, section_rms = self._prepare_section_waveforms(plan, renders)
         waveform, crossfades = self._combine_sections(plan, trimmed, sample_rate)
+        waveform = normalise_loudness(waveform, target_rms=0.2)
+        waveform = soft_limiter(waveform, threshold=0.98)
         if mix_cb is not None:
             await mix_cb(len(waveform) / sample_rate)
 
@@ -97,6 +108,8 @@ class ComposerOrchestrator:
                 "sample_rate": sample_rate,
                 "duration_seconds": len(waveform) / sample_rate,
                 "crossfades": crossfades,
+                "section_rms": section_rms,
+                "target_rms": 0.2,
             },
             "sample_rate": sample_rate,
         }
@@ -124,55 +137,42 @@ class ComposerOrchestrator:
 
     def _render_duration_hint(
         self,
+        plan: CompositionPlan,
         index: int,
         section: CompositionSection,
         total_sections: int,
     ) -> float:
-        padding = 0.0
-        if total_sections > 1:
-            if index == 0 or index == total_sections - 1:
-                padding = 0.25
-            else:
-                padding = 0.5
-        return max(
-            float(section.target_seconds) + padding,
-            float(section.target_seconds),
-        )
+        tempo = max(plan.tempo_bpm, 1)
+        seconds_per_beat = 60.0 / tempo
+        interior_padding = seconds_per_beat * 1.25
+        edge_padding = seconds_per_beat * 0.75
+        padding = edge_padding if index in (0, total_sections - 1) else interior_padding
+        padding = float(min(1.5, max(0.35, padding)))
+        return max(float(section.target_seconds) + padding, float(section.target_seconds))
 
     def _prepare_section_waveforms(
         self,
         plan: CompositionPlan,
         renders: List[SectionRender],
-    ) -> Tuple[List[np.ndarray], int]:
+    ) -> Tuple[List[np.ndarray], int, List[float]]:
         if not renders:
             raise RuntimeError("composition produced no sections")
         prepared: List[np.ndarray] = []
+        loudness: List[float] = []
         sample_rate = renders[0].sample_rate
+        tempo = max(plan.tempo_bpm, 1)
         for section, render in zip(plan.sections, renders, strict=True):
             if render.sample_rate != sample_rate:
                 raise RuntimeError("section sample rates diverged")
             waveform = ensure_waveform_channels(render.waveform)
             target_seconds = float(section.target_seconds)
             target_samples = max(1, int(round(target_seconds * sample_rate)))
-            if waveform.shape[0] > target_samples:
-                start = max(0, (waveform.shape[0] - target_samples) // 2)
-                end = start + target_samples
-                prepared.append(waveform[start:end])
-            elif waveform.shape[0] < target_samples:
-                normalized = waveform if waveform.ndim == 2 else waveform.reshape(-1, 1)
-                channels = normalized.shape[1] if normalized.ndim == 2 else 1
-                pad = target_samples - normalized.shape[0]
-                padding = np.zeros((pad, channels), dtype=np.float32)
-                padded = np.vstack((normalized, padding))
-                if channels == 1:
-                    prepared.append(padded.reshape(-1))
-                else:
-                    prepared.append(padded)
-            else:
-                prepared.append(waveform)
+            fitted = fit_to_length(waveform, target_samples, sample_rate, tempo_bpm=tempo)
+            loudness.append(rms_level(fitted))
+            prepared.append(fitted)
         if len(prepared) != len(plan.sections):
             raise RuntimeError("prepared waveforms do not match plan sections")
-        return prepared, sample_rate
+        return prepared, sample_rate, loudness
 
     def _combine_sections(
         self,
@@ -183,14 +183,15 @@ class ComposerOrchestrator:
         if not waveforms:
             raise RuntimeError("composition produced no sections")
 
-        combined = waveforms[0]
+        combined = ensure_waveform_channels(waveforms[0])
         crossfade_records: List[Dict[str, object]] = []
 
         for index, waveform in enumerate(waveforms[1:], start=1):
             left = combined
-            right = waveform
-            fade_seconds = self._crossfade_seconds(left, right, sample_rate)
-            combined = self._crossfade_append(left, right, sample_rate, fade_seconds)
+            right = ensure_waveform_channels(waveform)
+            fade_seconds = self._crossfade_seconds(plan, left, right, sample_rate)
+            fade_samples = int(max(1, round(sample_rate * fade_seconds)))
+            combined = crossfade_append(left, right, fade_samples)
             crossfade_records.append(
                 {
                     "from": plan.sections[index - 1].section_id,
@@ -199,56 +200,19 @@ class ComposerOrchestrator:
                 }
             )
 
-        peak = float(np.max(np.abs(combined))) if combined.size else 0.0
-        if peak > 0.98:
-            combined = combined / peak * 0.98
-
         return combined.astype(np.float32), crossfade_records
 
     def _crossfade_seconds(
         self,
+        plan: CompositionPlan,
         left: np.ndarray,
         right: np.ndarray,
         sample_rate: int,
     ) -> float:
         left_duration = left.shape[0] / sample_rate
         right_duration = right.shape[0] / sample_rate
-        base = min(0.5, max(0.1, min(left_duration, right_duration) * 0.2))
-        return float(base)
-
-    def _crossfade_append(
-        self,
-        left: np.ndarray,
-        right: np.ndarray,
-        sample_rate: int,
-        fade_seconds: float,
-    ) -> np.ndarray:
-        fade_samples = int(
-            max(
-                1,
-                min(
-                    sample_rate * fade_seconds,
-                    left.shape[0] - 1,
-                    right.shape[0] - 1,
-                ),
-            )
-        )
-        if fade_samples <= 1:
-            return np.concatenate((left, right), axis=0)
-
-        if left.ndim == 1:
-            left = left[:, None]
-        if right.ndim == 1:
-            right = right[:, None]
-
-        fade_out = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
-        fade_in = 1.0 - fade_out
-
-        left_main = left[:-fade_samples]
-        left_tail = left[-fade_samples:]
-        right_head = right[:fade_samples]
-        right_rest = right[fade_samples:]
-
-        blended = left_tail * fade_out + right_head * fade_in
-        result = np.vstack((left_main, blended, right_rest))
-        return result.reshape(-1, result.shape[-1])
+        seconds_per_beat = 60.0 / max(plan.tempo_bpm, 1)
+        base = min(left_duration, right_duration) * 0.35
+        base = max(base, seconds_per_beat * 0.5)
+        base = min(base, seconds_per_beat * 1.5)
+        return float(max(0.1, min(base, 1.5)))

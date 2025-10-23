@@ -177,6 +177,10 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
 
     assert extras.get("backend") == "composer"
     assert extras.get("placeholder") is False
+    assert mix_info.get("target_rms", 0.0) == pytest.approx(0.2, rel=1e-3)
+    section_rms = mix_info.get("section_rms")
+    assert isinstance(section_rms, list)
+    assert len(section_rms) == len(plan.sections)
     sections = extras.get("sections")
     assert isinstance(sections, list)
     assert len(sections) == 2

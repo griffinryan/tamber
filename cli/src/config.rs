@@ -122,7 +122,7 @@ impl Default for AppConfig {
         Self {
             worker_url: None,
             default_model_id: "riffusion-v1".into(),
-            default_duration_seconds: 8,
+            default_duration_seconds: 24,
             artifact_dir: default_artifact_dir(),
         }
     }

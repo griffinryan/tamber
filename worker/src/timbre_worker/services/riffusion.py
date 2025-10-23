@@ -363,7 +363,7 @@ class RiffusionService:
         if seed is not None:
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
-        audio_length = max(1, int(round(duration_seconds)))
+        audio_length = max(1.0, float(duration_seconds))
 
         pipeline = handle.pipeline
         try:
@@ -379,6 +379,7 @@ class RiffusionService:
                 prompt=prompt,
                 num_inference_steps=50,
                 guidance_scale=guidance_scale,
+                audio_length_in_s=int(round(audio_length)),
                 generator=generator,
             )
 
