@@ -405,8 +405,6 @@ fn handle_key(
             } else {
                 match app.focused_pane {
                     FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
-                    FocusedPane::Conversation => app.increment_chat_scroll(1),
-                    FocusedPane::Status => app.increment_status_scroll(1),
                     FocusedPane::Jobs => app.select_previous_job(),
                     _ => {}
                 }
@@ -423,14 +421,7 @@ fn handle_key(
             } else {
                 match app.focused_pane {
                     FocusedPane::StatusBar => app.focused_pane = FocusedPane::Conversation,
-                    FocusedPane::Conversation => app.increment_chat_scroll(-1),
-                    FocusedPane::Status => {
-                        if app.status_scroll == 0 {
-                            app.focused_pane = FocusedPane::Prompt;
-                        } else {
-                            app.increment_status_scroll(-1);
-                        }
-                    }
+                    FocusedPane::Status => app.focused_pane = FocusedPane::Prompt,
                     FocusedPane::Jobs => app.select_next_job(),
                     _ => {}
                 }
