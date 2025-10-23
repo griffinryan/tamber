@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -23,9 +25,10 @@ SRC_DIR = REPO_ROOT / "worker" / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from timbre_worker.app.models import GenerationRequest
-from timbre_worker.app.settings import Settings
-from timbre_worker.services.riffusion import RiffusionService
+if TYPE_CHECKING:
+    from timbre_worker.app.models import GenerationRequest
+    from timbre_worker.app.settings import Settings
+    from timbre_worker.services.riffusion import RiffusionService
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,16 +63,12 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+
 def ensure_inference_dependencies() -> None:
     missing: list[str] = []
-    try:  # pragma: no cover - import checked at runtime
-        import torch  # type: ignore[unused-import]
-    except Exception as exc:  # noqa: BLE001
-        missing.append(f"torch ({exc})")
-    try:  # pragma: no cover
-        import diffusers  # type: ignore[unused-import]
-    except Exception as exc:  # noqa: BLE001
-        missing.append(f"diffusers ({exc})")
+    for module_name in ("torch", "diffusers"):
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(f"{module_name} (module not found)")
 
     if missing:
         message = "\n".join(
@@ -84,6 +83,10 @@ def ensure_inference_dependencies() -> None:
 
 
 async def run_smoke(args: argparse.Namespace) -> None:
+    from timbre_worker.app.models import GenerationRequest
+    from timbre_worker.app.settings import Settings
+    from timbre_worker.services.riffusion import RiffusionService
+
     ensure_inference_dependencies()
 
     settings = Settings(artifact_root=args.artifact_dir, config_dir=args.config_dir)

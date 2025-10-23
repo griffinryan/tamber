@@ -18,6 +18,7 @@ PLAN_VERSION = "v1"
 DEFAULT_TIME_SIGNATURE = "4/4"
 MIN_TEMPO = 60
 MAX_TEMPO = 140
+MIN_SECTION_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -35,14 +36,17 @@ class CompositionPlanner:
 
     def build_plan(self, request: GenerationRequest) -> CompositionPlan:
         templates = list(_select_templates(request.duration_seconds))
-        total_bars = sum(template.bars for template in templates)
         seconds_total = float(max(request.duration_seconds, 4))
+        templates = _prune_templates(seconds_total, templates)
+        total_bars = sum(template.bars for template in templates)
         seconds_per_bar = seconds_total / total_bars
 
         raw_tempo = round(240.0 * total_bars / seconds_total)
         tempo_bpm = max(MIN_TEMPO, min(MAX_TEMPO, int(raw_tempo)))
 
-        base_seed = request.seed if request.seed is not None else _deterministic_seed(request.prompt)
+        base_seed = (
+            request.seed if request.seed is not None else _deterministic_seed(request.prompt)
+        )
         musical_key = _select_key(base_seed)
 
         sections: List[CompositionSection] = []
@@ -106,6 +110,47 @@ def _select_key(seed: int) -> str:
     return keys[seed % len(keys)]
 
 
+def _prune_templates(
+    seconds_total: float,
+    templates: List[SectionTemplate],
+) -> List[SectionTemplate]:
+    if not templates:
+        return templates
+
+    pruned = list(templates)
+    while len(pruned) > 1 and seconds_total < MIN_SECTION_SECONDS * len(pruned):
+        drop_index = _template_to_drop(pruned)
+        pruned.pop(drop_index)
+    return pruned
+
+
+def _template_to_drop(templates: List[SectionTemplate]) -> int:
+    role_priority = {
+        SectionRole.OUTRO: 0,
+        SectionRole.INTRO: 1,
+        SectionRole.BRIDGE: 2,
+        SectionRole.RESOLUTION: 3,
+        SectionRole.DEVELOPMENT: 4,
+        SectionRole.MOTIF: 5,
+    }
+    best_idx = 0
+    best_key = (
+        role_priority.get(templates[0].role, 10),
+        templates[0].bars,
+        0,
+    )
+    for index, template in enumerate(templates[1:], start=1):
+        key = (
+            role_priority.get(template.role, 10),
+            template.bars,
+            index,
+        )
+        if key < best_key:
+            best_idx = index
+            best_key = key
+    return best_idx
+
+
 def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
     if duration_seconds >= 24:
         yield SectionTemplate(
@@ -129,7 +174,9 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Development",
             energy=SectionEnergy.HIGH,
             bars=8,
-            prompt_template="Expand the motif with syncopation and evolving harmony around {prompt}.",
+            prompt_template=(
+                "Expand the motif with syncopation and evolving harmony around {prompt}."
+            ),
             transition="Evolve harmonies",
         )
         yield SectionTemplate(
@@ -180,7 +227,9 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
             label="Variation",
             energy=SectionEnergy.HIGH,
             bars=6,
-            prompt_template="Develop the motif with rhythmic motion and harmonic color tied to {prompt}.",
+            prompt_template=(
+                "Develop the motif with rhythmic motion and harmonic color tied to {prompt}."
+            ),
             transition="Soften textures",
         )
         yield SectionTemplate(

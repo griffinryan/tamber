@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import wave
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 

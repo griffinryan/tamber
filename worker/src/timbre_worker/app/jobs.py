@@ -60,7 +60,11 @@ class JobManager:
             async def progress_cb(position: int, total: int, render: SectionRender) -> None:
                 ratio = position / max(total, 1)
                 progress = 0.2 + 0.6 * ratio
-                label = render.extras.get("section_label") or render.extras.get("section_id") or "section"
+                label = (
+                    render.extras.get("section_label")
+                    or render.extras.get("section_id")
+                    or "section"
+                )
                 backend = render.extras.get("backend", "backend")
                 message = f"rendering {position}/{total}: {label} ({backend})"
                 await self._set_status(
@@ -93,7 +97,7 @@ class JobManager:
             )
             logger.error("job {job_id} failed: {exc}", job_id=job_id, exc=exc)
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             await self._set_status(
                 job_id,
                 state=JobState.FAILED,

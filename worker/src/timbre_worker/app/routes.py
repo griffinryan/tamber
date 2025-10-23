@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, Request
+from __future__ import annotations
 
 from typing import cast
 
-from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
+from fastapi import APIRouter, HTTPException, Request
+
 from .jobs import JobManager
+from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 from .settings import Settings
 from ..services.planner import PLAN_VERSION
 

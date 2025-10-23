@@ -7,6 +7,7 @@ const PLAN_VERSION: &str = "v1";
 const MIN_TEMPO: u16 = 60;
 const MAX_TEMPO: u16 = 140;
 const DEFAULT_TIME_SIGNATURE: &str = "4/4";
+const MIN_SECTION_SECONDS: f32 = 5.0;
 
 struct SectionTemplate {
     role: SectionRole,
@@ -31,9 +32,9 @@ impl CompositionPlanner {
         duration_seconds: u8,
         seed: Option<u64>,
     ) -> CompositionPlan {
-        let templates = select_templates(duration_seconds);
-        let total_bars: u16 = templates.iter().map(|tpl| tpl.bars as u16).sum();
         let seconds_total = duration_seconds.max(4) as f32;
+        let templates = prune_templates(seconds_total, select_templates(duration_seconds));
+        let total_bars: u16 = templates.iter().map(|tpl| tpl.bars as u16).sum();
         let seconds_per_bar = seconds_total / total_bars as f32;
         let raw_tempo = (240.0 * total_bars as f32 / seconds_total).round() as u16;
         let tempo_bpm = raw_tempo.clamp(MIN_TEMPO, MAX_TEMPO);
@@ -96,6 +97,43 @@ fn deterministic_seed(prompt: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     prompt.hash(&mut hasher);
     hasher.finish()
+}
+
+fn prune_templates(
+    seconds_total: f32,
+    mut templates: Vec<SectionTemplate>,
+) -> Vec<SectionTemplate> {
+    while templates.len() > 1 && seconds_total < MIN_SECTION_SECONDS * templates.len() as f32 {
+        let drop_index = template_to_drop(&templates);
+        templates.remove(drop_index);
+    }
+    templates
+}
+
+fn template_to_drop(templates: &[SectionTemplate]) -> usize {
+    fn role_priority(role: &SectionRole) -> u8 {
+        match role {
+            SectionRole::Outro => 0,
+            SectionRole::Intro => 1,
+            SectionRole::Bridge => 2,
+            SectionRole::Resolution => 3,
+            SectionRole::Development => 4,
+            SectionRole::Motif => 5,
+        }
+    }
+
+    let mut best_index = 0usize;
+    let mut best_key = (role_priority(&templates[0].role), templates[0].bars, 0usize);
+
+    for (index, template) in templates.iter().enumerate().skip(1) {
+        let key = (role_priority(&template.role), template.bars, index);
+        if key < best_key {
+            best_index = index;
+            best_key = key;
+        }
+    }
+
+    best_index
 }
 
 fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
@@ -236,5 +274,13 @@ mod tests {
         assert!(plan.sections.len() >= 3);
         assert_eq!(plan.version, PLAN_VERSION);
         assert!(plan.total_duration_seconds > 0.0);
+    }
+
+    #[test]
+    fn collapses_short_duration_into_single_section() {
+        let planner = CompositionPlanner::new();
+        let plan = planner.build_plan("short clip", 8, None);
+        assert_eq!(plan.sections.len(), 1);
+        assert!(plan.sections[0].target_seconds >= 2.0);
     }
 }

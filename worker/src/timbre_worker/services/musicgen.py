@@ -15,6 +15,7 @@ from ..app.models import (
     CompositionSection,
     GenerationRequest,
 )
+from .audio_utils import ensure_waveform_channels
 from .types import SectionRender
 
 try:  # pragma: no cover - optional dependency imports are validated at runtime
@@ -69,11 +70,15 @@ class MusicGenService:
         *,
         plan: CompositionPlan,
         model_id: Optional[str] = None,
+        render_seconds: Optional[float] = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or self._default_model_id
         handle, placeholder_reason = await self._ensure_model(model_key)
 
-        duration = max(1.0, float(section.target_seconds))
+        duration_hint = (
+            render_seconds if render_seconds is not None else float(section.target_seconds)
+        )
+        duration = max(1.0, float(duration_hint))
         section_seed: Optional[int] = None
         if request.seed is not None:
             offset = section.seed_offset or 0
@@ -102,13 +107,15 @@ class MusicGenService:
             extras["backend"] = "musicgen"
             extras["device"] = self._device
 
+        actual_seconds = len(ensure_waveform_channels(waveform)) / float(sample_rate)
         extras.update(
             {
                 "section_id": section.section_id,
                 "section_label": section.label,
                 "section_role": section.role.value,
                 "plan_version": plan.version,
-                "target_seconds": duration,
+                "target_seconds": float(section.target_seconds),
+                "render_seconds": actual_seconds,
             }
         )
         if placeholder_reason:
@@ -213,13 +220,17 @@ class MusicGenService:
         total_samples = int(duration_seconds * sample_rate)
         t = np.linspace(0, duration_seconds, total_samples, endpoint=False, dtype=np.float32)
 
-        seed_value = seed if seed is not None else abs(hash((prompt, duration_seconds))) % (2**32)
+        seed_value = (
+            seed if seed is not None else abs(hash((prompt, duration_seconds))) % (2**32)
+        )
         base_freq_source = (hash(prompt), seed_value)
         base_freq = 110 + (abs(hash(base_freq_source)) % 440)
         waveform = 0.18 * np.sin(2 * np.pi * base_freq * t)
         waveform += 0.06 * np.sin(2 * np.pi * base_freq * 0.5 * t)
         waveform += 0.03 * np.sin(2 * np.pi * (base_freq * 1.5) * t)
-        waveform += 0.02 * np.random.default_rng(seed=seed_value).standard_normal(size=total_samples)
+        waveform += 0.02 * np.random.default_rng(seed=seed_value).standard_normal(
+            size=total_samples
+        )
         waveform = np.clip(waveform, -1.0, 1.0).astype(np.float32)
 
         extras = {
@@ -236,7 +247,10 @@ class MusicGenService:
             return "cpu"
         if torch.cuda.is_available():  # pragma: no cover
             return "cuda"
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # pragma: no cover
+        if (
+            getattr(torch.backends, "mps", None)
+            and torch.backends.mps.is_available()  # pragma: no cover
+        ):
             return "mps"
         return "cpu"
 

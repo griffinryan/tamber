@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 import numpy as np
+import pytest
 
 from timbre_worker.app.jobs import JobManager
 from timbre_worker.app.models import (

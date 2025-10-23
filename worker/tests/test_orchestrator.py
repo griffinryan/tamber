@@ -39,16 +39,19 @@ class DummyBackend:
         *,
         plan: CompositionPlan,
         model_id: str | None = None,
+        render_seconds: float | None = None,
     ) -> SectionRender:
         self.calls.append(section.section_id)
         sample_rate = 44100
-        samples = max(1, int(round(section.target_seconds * sample_rate)))
+        duration = render_seconds if render_seconds is not None else section.target_seconds
+        samples = max(1, int(round(duration * sample_rate)))
         waveform = np.linspace(0.0, 1.0, samples, dtype=np.float32)
         extras = {
             "backend": self.name,
             "section_id": section.section_id,
             "section_label": section.label,
             "placeholder": False,
+            "render_seconds": duration,
         }
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
@@ -61,8 +64,15 @@ class PlaceholderBackend(DummyBackend):
         *,
         plan: CompositionPlan,
         model_id: str | None = None,
+        render_seconds: float | None = None,
     ) -> SectionRender:
-        render = await super().render_section(request, section, plan=plan, model_id=model_id)
+        render = await super().render_section(
+            request,
+            section,
+            plan=plan,
+            model_id=model_id,
+            render_seconds=render_seconds,
+        )
         render.extras["placeholder"] = True
         render.extras["placeholder_reason"] = "missing"
         return render
@@ -120,7 +130,10 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
     riffusion = DummyBackend("riffusion")
     musicgen = DummyBackend("musicgen")
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
     settings.ensure_directories()
 
     orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
@@ -153,8 +166,13 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     extras = artifact.metadata.extras
     mix_info = extras.get("mix", {})
     assert mix_calls[0] == pytest.approx(mix_info.get("duration_seconds", 0.0), rel=1e-3)
-    crossfade_total = sum(entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", []))
-    assert plan.total_duration_seconds - crossfade_total == pytest.approx(mix_calls[0], rel=1e-3)
+    crossfade_total = sum(
+        entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", [])
+    )
+    assert plan.total_duration_seconds - crossfade_total == pytest.approx(
+        mix_calls[0],
+        rel=1e-3,
+    )
     assert mix_calls[0] <= plan.total_duration_seconds
 
     assert extras.get("backend") == "composer"
@@ -162,6 +180,8 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     sections = extras.get("sections")
     assert isinstance(sections, list)
     assert len(sections) == 2
+    assert sections[0].get("render_seconds", 0.0) >= plan.sections[0].target_seconds
+    assert sections[1].get("render_seconds", 0.0) >= plan.sections[1].target_seconds
 
 
 @pytest.mark.asyncio
@@ -169,7 +189,10 @@ async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
     riffusion = PlaceholderBackend("riffusion")
     musicgen = DummyBackend("musicgen")
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
     settings.ensure_directories()
 
     orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)

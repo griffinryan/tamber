@@ -18,7 +18,11 @@ def _default_artifact_root() -> Path:
 class Settings(BaseSettings):
     """Runtime configuration for the Timbre worker process."""
 
-    model_config = SettingsConfigDict(env_prefix="TIMBRE_", env_nested_delimiter="__", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="TIMBRE_",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )
 
     config_dir: Path = Field(default_factory=_default_config_dir)
     artifact_root: Path = Field(default_factory=_default_artifact_root)

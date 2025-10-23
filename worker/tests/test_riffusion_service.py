@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import sys
-from pathlib import Path
 import types
+from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
@@ -11,7 +11,12 @@ import pytest
 
 from timbre_worker.app.models import GenerationRequest
 from timbre_worker.app.settings import Settings
-from timbre_worker.services.riffusion import DEFAULT_GUIDANCE_SCALE, PipelineHandle, RiffusionService
+from timbre_worker.services.riffusion import (
+    DEFAULT_GUIDANCE_SCALE,
+    MIN_RENDER_SECONDS,
+    PipelineHandle,
+    RiffusionService,
+)
 
 
 @pytest.mark.asyncio
@@ -24,7 +29,11 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
     settings.ensure_directories()
     service = RiffusionService(settings)
 
-    request = GenerationRequest(prompt="soft synthwave", duration_seconds=2, model_id="riffusion-v1")
+    request = GenerationRequest(
+        prompt="soft synthwave",
+        duration_seconds=2,
+        model_id="riffusion-v1",
+    )
     artifact = await service.generate("job123", request)
 
     path = Path(artifact.artifact_path)
@@ -33,7 +42,15 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
     assert extras.get("placeholder") is True
     assert extras.get("placeholder_reason") is not None
     assert extras.get("backend") == "riffusion"
-    assert extras.get("prompt_hash") == hashlib.blake2s(b"soft synthwave", digest_size=8).hexdigest()
+    assert extras.get("prompt_hash") == hashlib.blake2s(
+        b"soft synthwave",
+        digest_size=8,
+    ).hexdigest()
+    assert extras.get("render_seconds") == pytest.approx(
+        MIN_RENDER_SECONDS,
+        rel=0.0,
+        abs=0.5,
+    )
     assert artifact.metadata.plan is not None
     assert artifact.metadata.prompt == "soft synthwave"
 
@@ -51,8 +68,16 @@ async def test_placeholder_audio_varies_by_prompt(tmp_path: Path) -> None:
     prompt_a = "minimal ambient drones"
     prompt_b = "energetic drum and bass"
 
-    request_a = GenerationRequest(prompt=prompt_a, duration_seconds=2, model_id="riffusion-v1")
-    request_b = GenerationRequest(prompt=prompt_b, duration_seconds=2, model_id="riffusion-v1")
+    request_a = GenerationRequest(
+        prompt=prompt_a,
+        duration_seconds=2,
+        model_id="riffusion-v1",
+    )
+    request_b = GenerationRequest(
+        prompt=prompt_b,
+        duration_seconds=2,
+        model_id="riffusion-v1",
+    )
 
     artifact_a = await service.generate("job-a", request_a)
     artifact_b = await service.generate("job-b", request_b)
@@ -110,7 +135,10 @@ async def test_placeholder_audio_respects_seed(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_riffusion_service_pipeline_receives_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _StubGenerator:
         def manual_seed(self, seed: int) -> "_StubGenerator":
             return self
@@ -123,13 +151,25 @@ async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkey
         Generator=lambda device=None: _StubGenerator(),
     )
 
-    monkeypatch.setattr("timbre_worker.services.riffusion.torch", stub_torch, raising=False)
-    monkeypatch.setattr("timbre_worker.services.riffusion.TORCH_IMPORT_ERROR", None, raising=False)
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.torch",
+        stub_torch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.TORCH_IMPORT_ERROR",
+        None,
+        raising=False,
+    )
 
     calls: list[Dict[str, Any]] = []
 
     class _DummyPipeline:
-        def __init__(self, store: list[Dict[str, Any]], sample_rate: int = 44100):
+        def __init__(
+            self,
+            store: list[Dict[str, Any]],
+            sample_rate: int = 44100,
+        ):
             self.sample_rate = sample_rate
             self._store = store
 
@@ -144,28 +184,47 @@ async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkey
     def loader(resolved_model_id: str) -> PipelineHandle:
         return PipelineHandle(pipeline=_DummyPipeline(calls), sample_rate=44100)
 
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
     settings.ensure_directories()
     service = RiffusionService(settings, pipeline_loader=loader)
 
-    request = GenerationRequest(prompt="vintage jazz trio", duration_seconds=3, model_id="riffusion-v1")
+    request = GenerationRequest(
+        prompt="vintage jazz trio",
+        duration_seconds=3,
+        model_id="riffusion-v1",
+    )
     artifact = await service.generate("job-real", request)
 
     assert Path(artifact.artifact_path).exists()
     extras = artifact.metadata.extras
     assert extras.get("placeholder") is False
     assert artifact.metadata.plan is not None
-    expected_hash = hashlib.blake2s(request.prompt.encode("utf-8"), digest_size=8).hexdigest()
+    expected_hash = hashlib.blake2s(
+        request.prompt.encode("utf-8"),
+        digest_size=8,
+    ).hexdigest()
     assert extras.get("prompt_hash") == expected_hash
     assert extras.get("sample_rate") == 44100
     assert extras.get("guidance_scale") == DEFAULT_GUIDANCE_SCALE
+    assert extras.get("render_seconds") == pytest.approx(
+        MIN_RENDER_SECONDS,
+        rel=0.0,
+        abs=0.5,
+    )
 
     assert calls, "pipeline should have been invoked"
     first_call = calls[0]
     assert first_call.get("prompt") == request.prompt
     assert first_call.get("guidance_scale") == DEFAULT_GUIDANCE_SCALE
     assert first_call.get("num_inference_steps") == 50
-    assert first_call.get("audio_length_in_s") == request.duration_seconds
+    assert first_call.get("audio_length_in_s") >= pytest.approx(
+        MIN_RENDER_SECONDS,
+        rel=0.0,
+        abs=0.5,
+    )
 
     request_cfg = GenerationRequest(
         prompt="dreamy modular sequence",
@@ -179,9 +238,22 @@ async def test_riffusion_service_pipeline_receives_prompt(tmp_path: Path, monkey
     assert extras_cfg.get("placeholder") is False
     assert extras_cfg.get("guidance_scale") == pytest.approx(4.5)
     assert calls[-1].get("guidance_scale") == pytest.approx(4.5)
+    assert calls[-1].get("audio_length_in_s") >= pytest.approx(
+        MIN_RENDER_SECONDS,
+        rel=0.0,
+        abs=0.5,
+    )
+    assert extras_cfg.get("render_seconds") >= pytest.approx(
+        MIN_RENDER_SECONDS,
+        rel=0.0,
+        abs=0.5,
+    )
 
 
-def test_load_pipeline_uses_trust_remote_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_pipeline_uses_trust_remote_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_kwargs: list[dict[str, Any]] = []
 
     class _StubTorch:
@@ -206,7 +278,10 @@ def test_load_pipeline_uses_trust_remote_code(tmp_path: Path, monkeypatch: pytes
         def to(self, _device: str) -> "_StubPipeline":
             return self
 
-        def set_progress_bar_config(self, disable: bool = True) -> None:  # pragma: no cover - noop
+        def set_progress_bar_config(
+            self,
+            disable: bool = True,
+        ) -> None:  # pragma: no cover - noop
             return None
 
     def fake_from_pretrained(model_id: str, **kwargs: Any) -> _StubPipeline:
@@ -219,12 +294,19 @@ def test_load_pipeline_uses_trust_remote_code(tmp_path: Path, monkeypatch: pytes
             return fake_from_pretrained(model_id, **kwargs)
 
     fake_diffusers = types.ModuleType("diffusers")
-    fake_diffusers.DiffusionPipeline = _StubDiffusionPipeline  # type: ignore[attr-defined]
+    setattr(fake_diffusers, "DiffusionPipeline", _StubDiffusionPipeline)
 
-    monkeypatch.setattr("timbre_worker.services.riffusion.torch", _StubTorch, raising=False)
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.torch",
+        _StubTorch,
+        raising=False,
+    )
     monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
 
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
     settings.ensure_directories()
     service = RiffusionService(settings)
     handle = service._load_pipeline("riffusion/riffusion-model-v1")
@@ -235,7 +317,10 @@ def test_load_pipeline_uses_trust_remote_code(tmp_path: Path, monkeypatch: pytes
     assert first_call.get("trust_remote_code") is True
 
 
-def test_device_selection_prefers_mps_float32(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_device_selection_prefers_mps_float32(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _StubTorch:
         float16 = np.float16
         float32 = np.float32
@@ -251,10 +336,21 @@ def test_device_selection_prefers_mps_float32(tmp_path: Path, monkeypatch: pytes
                 def is_available() -> bool:
                     return True
 
-    monkeypatch.setattr("timbre_worker.services.riffusion.torch", _StubTorch, raising=False)
-    monkeypatch.setattr("timbre_worker.services.riffusion.TORCH_IMPORT_ERROR", None, raising=False)
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.torch",
+        _StubTorch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.TORCH_IMPORT_ERROR",
+        None,
+        raising=False,
+    )
 
-    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
     settings.ensure_directories()
     service = RiffusionService(settings)
 
@@ -262,7 +358,10 @@ def test_device_selection_prefers_mps_float32(tmp_path: Path, monkeypatch: pytes
     assert service._dtype == np.float32
 
 
-def test_device_override_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_device_override_cpu(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _StubTorch:
         float16 = np.float16
         float32 = np.float32
@@ -278,8 +377,16 @@ def test_device_override_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
                 def is_available() -> bool:
                     return True
 
-    monkeypatch.setattr("timbre_worker.services.riffusion.torch", _StubTorch, raising=False)
-    monkeypatch.setattr("timbre_worker.services.riffusion.TORCH_IMPORT_ERROR", None, raising=False)
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.torch",
+        _StubTorch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "timbre_worker.services.riffusion.TORCH_IMPORT_ERROR",
+        None,
+        raising=False,
+    )
 
     settings = Settings(
         artifact_root=tmp_path / "artifacts",

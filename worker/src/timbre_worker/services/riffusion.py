@@ -40,6 +40,7 @@ else:  # pragma: no cover
 
 
 DEFAULT_GUIDANCE_SCALE = 7.0
+MIN_RENDER_SECONDS = 5.0
 MODEL_REGISTRY = {
     "riffusion-v1": "riffusion/riffusion-model-v1",
 }
@@ -88,18 +89,26 @@ class RiffusionService:
         *,
         plan: CompositionPlan,
         model_id: Optional[str] = None,
+        render_seconds: Optional[float] = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or request.model_id or self._default_model_id
         pipeline_handle, placeholder_reason = await self._ensure_pipeline(model_key)
 
-        duration = max(1.0, float(section.target_seconds))
-        guidance_scale = request.cfg_scale if request.cfg_scale is not None else DEFAULT_GUIDANCE_SCALE
+        duration_hint = (
+            render_seconds if render_seconds is not None else float(section.target_seconds)
+        )
+        duration = max(MIN_RENDER_SECONDS, max(1.0, float(duration_hint)))
+        guidance_scale = (
+            request.cfg_scale if request.cfg_scale is not None else DEFAULT_GUIDANCE_SCALE
+        )
         section_seed: Optional[int] = None
         if request.seed is not None:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
-        dtype_str = str(self._dtype) if self._dtype is not None and pipeline_handle is not None else None
+        dtype_str = (
+            str(self._dtype) if self._dtype is not None and pipeline_handle is not None else None
+        )
 
         if pipeline_handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
@@ -118,6 +127,7 @@ class RiffusionService:
                 guidance_scale,
                 section_seed,
             )
+        actual_seconds = len(ensure_waveform_channels(waveform)) / float(sample_rate)
 
         extras.update(
             {
@@ -129,6 +139,8 @@ class RiffusionService:
                 "section_label": section.label,
                 "section_role": section.role.value,
                 "plan_version": plan.version,
+                "render_seconds": actual_seconds,
+                "target_seconds": float(section.target_seconds),
             }
         )
         if dtype_str is not None:
@@ -138,7 +150,6 @@ class RiffusionService:
         if section_seed is not None:
             extras["seed"] = section_seed
         extras["prompt_hash"] = self._prompt_hash(section.prompt)
-        extras["target_seconds"] = duration
 
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
@@ -159,11 +170,19 @@ class RiffusionService:
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         write_waveform(artifact_path, waveform, sample_rate)
 
-        placeholder_flags = [render.extras.get("placeholder", False) for render in renders]
-        placeholder_reasons = [
-            render.extras.get("placeholder_reason") for render in renders if render.extras.get("placeholder_reason")
+        placeholder_flags = [
+            render.extras.get("placeholder", False) for render in renders
         ]
-        guidance_values = [render.extras.get("guidance_scale") for render in renders if render.extras.get("guidance_scale") is not None]
+        placeholder_reasons = [
+            render.extras.get("placeholder_reason")
+            for render in renders
+            if render.extras.get("placeholder_reason")
+        ]
+        guidance_values = [
+            render.extras.get("guidance_scale")
+            for render in renders
+            if render.extras.get("guidance_scale") is not None
+        ]
         prompt_hashes = [
             render.extras.get("prompt_hash")
             for render in renders
@@ -177,6 +196,25 @@ class RiffusionService:
             "placeholder": any(placeholder_flags),
             "sections": [render.extras for render in renders],
         }
+        seed_values = [
+            render.extras.get("seed")
+            for render in renders
+            if render.extras.get("seed") is not None
+        ]
+        if seed_values:
+            unique_seeds = {value for value in seed_values}
+            extras["seed"] = (
+                seed_values[0] if len(unique_seeds) == 1 else seed_values
+            )
+        render_lengths = [
+            render.extras.get("render_seconds")
+            for render in renders
+            if render.extras.get("render_seconds") is not None
+        ]
+        if render_lengths:
+            extras["render_seconds"] = (
+                render_lengths[0] if len(render_lengths) == 1 else render_lengths
+            )
         if self._dtype is not None and not all(placeholder_flags):
             extras["dtype"] = str(self._dtype)
         if guidance_values:
@@ -185,7 +223,11 @@ class RiffusionService:
             extras["prompt_hash"] = prompt_hashes[0]
             extras["prompt_hashes"] = prompt_hashes
         if placeholder_reasons:
-            extras["placeholder_reason"] = placeholder_reasons[0] if len(placeholder_reasons) == 1 else placeholder_reasons
+            extras["placeholder_reason"] = (
+                placeholder_reasons[0]
+                if len(placeholder_reasons) == 1
+                else placeholder_reasons
+            )
 
         metadata = GenerationMetadata(
             prompt=request.prompt,
@@ -372,6 +414,7 @@ class RiffusionService:
             "guidance_scale": DEFAULT_GUIDANCE_SCALE,
             "placeholder_reason": reason,
             "prompt_hash": self._prompt_hash(prompt),
+            "render_seconds": duration_seconds,
         }
         if seed is not None:
             extras["seed"] = seed
@@ -450,16 +493,23 @@ class RiffusionService:
         if override:
             if override == "cuda" and torch.cuda.is_available():  # pragma: no cover - hardware dependent
                 return "cuda", torch.float16
-            if override == "mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # pragma: no cover
+            if (
+                override == "mps"
+                and getattr(torch.backends, "mps", None)
+                and torch.backends.mps.is_available()  # pragma: no cover
+            ):
                 return "mps", torch.float32
             if override == "cpu":
                 return "cpu", torch.float32
-            logger.warning("Requested inference device %s unavailable; falling back to auto-selection", override)
+            logger.warning(
+                "Requested inference device %s unavailable; falling back to auto-selection",
+                override,
+            )
 
         if torch.cuda.is_available():  # pragma: no cover - depends on hardware
             return "cuda", torch.float16
         if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # pragma: no cover
-            # Riffusion produces unstable outputs on MPS with float16; prefer float32 even if slower.
+            # Riffusion outputs distort on MPS with float16; prefer float32 even if slower.
             return "mps", torch.float32
         return "cpu", torch.float32
 

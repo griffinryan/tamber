@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
 
 from ..app.models import (
+    CompositionSection,
     CompositionPlan,
     GenerationArtifact,
     GenerationMetadata,
@@ -49,7 +49,9 @@ class ComposerOrchestrator:
         self,
         job_id: str,
         request: GenerationRequest,
-        progress_cb: Optional[Callable[[int, int, SectionRender], Awaitable[None]]] = None,
+        progress_cb: Optional[
+            Callable[[int, int, SectionRender], Awaitable[None]]
+        ] = None,
         mix_cb: Optional[Callable[[float], Awaitable[None]]] = None,
     ) -> GenerationArtifact:
         plan = request.plan or self._planner.build_plan(request)
@@ -57,20 +59,27 @@ class ComposerOrchestrator:
         renders: List[SectionRender] = []
         for index, section in enumerate(plan.sections):
             backend = self._select_backend(section.model_id or request.model_id or "")
+            render_hint = self._render_duration_hint(index, section, len(plan.sections))
             logger.debug(
-                "Rendering section %s via %s", section.section_id, backend.__class__.__name__
+                "Rendering section %s via %s (target %.2fs, render %.2fs)",
+                section.section_id,
+                backend.__class__.__name__,
+                section.target_seconds,
+                render_hint,
             )
             render = await backend.render_section(
                 request,
                 section,
                 plan=plan,
                 model_id=section.model_id or request.model_id,
+                render_seconds=render_hint,
             )
             renders.append(render)
             if progress_cb is not None:
                 await progress_cb(index + 1, len(plan.sections), render)
 
-        waveform, sample_rate, crossfades = self._combine_sections(plan, renders)
+        trimmed, sample_rate = self._prepare_section_waveforms(plan, renders)
+        waveform, crossfades = self._combine_sections(plan, trimmed, sample_rate)
         if mix_cb is not None:
             await mix_cb(len(waveform) / sample_rate)
 
@@ -80,7 +89,9 @@ class ComposerOrchestrator:
 
         extras: Dict[str, object] = {
             "backend": "composer",
-            "placeholder": any(render.extras.get("placeholder", False) for render in renders),
+            "placeholder": any(
+                render.extras.get("placeholder", False) for render in renders
+            ),
             "sections": [render.extras for render in renders],
             "mix": {
                 "sample_rate": sample_rate,
@@ -111,23 +122,73 @@ class ComposerOrchestrator:
             return self._musicgen
         return self._riffusion
 
-    def _combine_sections(
+    def _render_duration_hint(
+        self,
+        index: int,
+        section: CompositionSection,
+        total_sections: int,
+    ) -> float:
+        padding = 0.0
+        if total_sections > 1:
+            if index == 0 or index == total_sections - 1:
+                padding = 0.25
+            else:
+                padding = 0.5
+        return max(
+            float(section.target_seconds) + padding,
+            float(section.target_seconds),
+        )
+
+    def _prepare_section_waveforms(
         self,
         plan: CompositionPlan,
         renders: List[SectionRender],
-    ) -> Tuple[np.ndarray, int, List[Dict[str, object]]]:
+    ) -> Tuple[List[np.ndarray], int]:
         if not renders:
             raise RuntimeError("composition produced no sections")
-
+        prepared: List[np.ndarray] = []
         sample_rate = renders[0].sample_rate
-        combined = ensure_waveform_channels(renders[0].waveform)
-        crossfade_records: List[Dict[str, object]] = []
-
-        for index, render in enumerate(renders[1:], start=1):
+        for section, render in zip(plan.sections, renders, strict=True):
             if render.sample_rate != sample_rate:
                 raise RuntimeError("section sample rates diverged")
+            waveform = ensure_waveform_channels(render.waveform)
+            target_seconds = float(section.target_seconds)
+            target_samples = max(1, int(round(target_seconds * sample_rate)))
+            if waveform.shape[0] > target_samples:
+                start = max(0, (waveform.shape[0] - target_samples) // 2)
+                end = start + target_samples
+                prepared.append(waveform[start:end])
+            elif waveform.shape[0] < target_samples:
+                normalized = waveform if waveform.ndim == 2 else waveform.reshape(-1, 1)
+                channels = normalized.shape[1] if normalized.ndim == 2 else 1
+                pad = target_samples - normalized.shape[0]
+                padding = np.zeros((pad, channels), dtype=np.float32)
+                padded = np.vstack((normalized, padding))
+                if channels == 1:
+                    prepared.append(padded.reshape(-1))
+                else:
+                    prepared.append(padded)
+            else:
+                prepared.append(waveform)
+        if len(prepared) != len(plan.sections):
+            raise RuntimeError("prepared waveforms do not match plan sections")
+        return prepared, sample_rate
+
+    def _combine_sections(
+        self,
+        plan: CompositionPlan,
+        waveforms: List[np.ndarray],
+        sample_rate: int,
+    ) -> Tuple[np.ndarray, List[Dict[str, object]]]:
+        if not waveforms:
+            raise RuntimeError("composition produced no sections")
+
+        combined = waveforms[0]
+        crossfade_records: List[Dict[str, object]] = []
+
+        for index, waveform in enumerate(waveforms[1:], start=1):
             left = combined
-            right = ensure_waveform_channels(render.waveform)
+            right = waveform
             fade_seconds = self._crossfade_seconds(left, right, sample_rate)
             combined = self._crossfade_append(left, right, sample_rate, fade_seconds)
             crossfade_records.append(
@@ -142,7 +203,7 @@ class ComposerOrchestrator:
         if peak > 0.98:
             combined = combined / peak * 0.98
 
-        return combined.astype(np.float32), sample_rate, crossfade_records
+        return combined.astype(np.float32), crossfade_records
 
     def _crossfade_seconds(
         self,
@@ -162,7 +223,16 @@ class ComposerOrchestrator:
         sample_rate: int,
         fade_seconds: float,
     ) -> np.ndarray:
-        fade_samples = int(max(1, min(sample_rate * fade_seconds, left.shape[0] - 1, right.shape[0] - 1)))
+        fade_samples = int(
+            max(
+                1,
+                min(
+                    sample_rate * fade_seconds,
+                    left.shape[0] - 1,
+                    right.shape[0] - 1,
+                ),
+            )
+        )
         if fade_samples <= 1:
             return np.concatenate((left, right), axis=0)
 
