@@ -27,7 +27,7 @@ These notes track the current composition + mixing pipeline as of planner **v2**
   - If short, we loop the tail in tempo-sized slices with a quick crossfade. This fills missing beats instead of padding zeros.
 - **Crossfades**: beat-aware fades (0.5–1.5 beats) using the shared `crossfade_append` helper keep transitions musical. `mix.crossfades[*].seconds` documents the actual overlap to help future timeline visualisation.
 - **Master polish**: after concatenation we apply another loudness normalisation pass and a soft tanh limiter (0.98 threshold). This ensures headroom for user-side mastering while eliminating obvious clipping.
-- **Theme-aware prompting**: both Riffusion and MusicGen receive the plan’s `ThemeDescriptor` plus the previous section’s render metadata. We append motif/instrument/rhythm text to every inference prompt and ask the models to “flow from the previous section,” tightening continuity even without latent continuation.
+- **Theme-aware prompting + continuation**: both Riffusion and MusicGen receive the plan’s `ThemeDescriptor` plus the previous section’s render metadata and audio tail. Riffusion now re-encodes the prior section’s spectrogram and uses it as the init image, while MusicGen feeds the tail into `generate_continuation`. We still append motif/instrument/rhythm text, but the audio itself now evolves instead of rebooting each section.
 
 ### UX Hooks
 - `mix` extras now include `target_rms`, `section_rms`, and exact crossfade durations. The CLI feedback loop can visualise these to highlight overly quiet sections or abrupt transitions.

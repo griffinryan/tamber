@@ -263,7 +263,11 @@ def _template_to_drop(templates: List[SectionTemplate]) -> int:
 
 def _role_min_beats(role: SectionRole, seconds_per_beat: float) -> int:
     role_min = ROLE_MIN_BEATS.get(role, 4)
-    min_seconds_beats = math.ceil(MIN_SECTION_SECONDS / seconds_per_beat) if seconds_per_beat > 0 else 4
+    min_seconds_beats = (
+        math.ceil(MIN_SECTION_SECONDS / seconds_per_beat)
+        if seconds_per_beat > 0
+        else 4
+    )
     return int(max(role_min, min_seconds_beats))
 
 
@@ -392,8 +396,17 @@ def _render_prompt(
     descriptor: ThemeDescriptor,
     section_index: int,
 ) -> str:
-    instrumentation_text = ", ".join(descriptor.instrumentation) or ", ".join(DEFAULT_INSTRUMENTATION)
-    dynamic = descriptor.dynamic_curve[section_index] if section_index < len(descriptor.dynamic_curve) else descriptor.dynamic_curve[-1] if descriptor.dynamic_curve else "flowing dynamic"
+    instrumentation_text = (
+        ", ".join(descriptor.instrumentation)
+        or ", ".join(DEFAULT_INSTRUMENTATION)
+    )
+    if descriptor.dynamic_curve:
+        if section_index < len(descriptor.dynamic_curve):
+            dynamic = descriptor.dynamic_curve[section_index]
+        else:
+            dynamic = descriptor.dynamic_curve[-1]
+    else:
+        dynamic = "flowing dynamic"
     texture = descriptor.texture or DEFAULT_TEXTURE
     return template.format(
         prompt=prompt,

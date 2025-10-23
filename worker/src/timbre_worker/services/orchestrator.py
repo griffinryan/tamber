@@ -9,8 +9,8 @@ import numpy as np
 from loguru import logger
 
 from ..app.models import (
-    CompositionSection,
     CompositionPlan,
+    CompositionSection,
     GenerationArtifact,
     GenerationMetadata,
     GenerationRequest,

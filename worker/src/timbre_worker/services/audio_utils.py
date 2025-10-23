@@ -173,20 +173,13 @@ def fit_to_length(
         end = start + target_samples
         data = data[start:end]
     elif data.shape[0] < target_samples:
-        seconds_per_beat = 60.0 / max(tempo_bpm, 1)
-        loop_samples = int(max(seconds_per_beat * sample_rate, sample_rate * 0.5))
-        loop_samples = min(loop_samples, data.shape[0])
-        loop_samples = max(loop_samples, 1)
-        while data.shape[0] < target_samples:
-            remaining = target_samples - data.shape[0]
-            segment = data[-loop_samples:]
-            if remaining < segment.shape[0]:
-                segment = segment[:remaining]
-            fade = int(max(1, math.floor(sample_rate * 0.04)))
-            data = crossfade_append(data, segment, fade)
-            if data.shape[0] > target_samples:
-                data = data[:target_samples]
-                break
+        fade_samples = int(max(1, math.floor(sample_rate * 0.05)))
+        fade_samples = min(fade_samples, data.shape[0])
+        fade = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
+        tail = data[-fade_samples:]
+        data[-fade_samples:] = tail * fade
+        pad = np.zeros((target_samples - data.shape[0], data.shape[1]), dtype=np.float32)
+        data = np.vstack((data, pad))
 
     if was_mono:
         return data.reshape(-1)

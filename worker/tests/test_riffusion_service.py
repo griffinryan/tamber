@@ -356,7 +356,7 @@ def test_load_pipeline_uses_trust_remote_code(
             return fake_from_pretrained(model_id, **kwargs)
 
     fake_diffusers = types.ModuleType("diffusers")
-    setattr(fake_diffusers, "DiffusionPipeline", _StubDiffusionPipeline)
+    fake_diffusers.DiffusionPipeline = _StubDiffusionPipeline
 
     monkeypatch.setattr(
         "timbre_worker.services.riffusion.torch",

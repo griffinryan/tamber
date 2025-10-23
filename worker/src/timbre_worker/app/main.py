@@ -4,13 +4,13 @@ import asyncio
 
 from fastapi import FastAPI
 
-from .jobs import JobManager
-from .routes import router
-from .settings import get_settings
 from ..services.musicgen import MusicGenService
 from ..services.orchestrator import ComposerOrchestrator
 from ..services.planner import CompositionPlanner
 from ..services.riffusion import RiffusionService
+from .jobs import JobManager
+from .routes import router
+from .settings import get_settings
 
 
 def create_app() -> FastAPI:

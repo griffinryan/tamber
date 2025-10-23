@@ -1,5 +1,5 @@
 from timbre_worker.app.models import GenerationRequest, SectionRole
-from timbre_worker.services.planner import CompositionPlanner, PLAN_VERSION
+from timbre_worker.services.planner import PLAN_VERSION, CompositionPlanner
 
 
 def test_planner_builds_deterministic_plan() -> None:
