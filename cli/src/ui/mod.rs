@@ -429,8 +429,24 @@ fn handle_key(
                 }
             }
         }
-        KeyCode::Left if matches!(app.input_mode, InputMode::Normal) => app.focus_previous(),
-        KeyCode::Right if matches!(app.input_mode, InputMode::Normal) => app.focus_next(),
+        KeyCode::Left if matches!(app.input_mode, InputMode::Normal) => {
+            app.focused_pane = match app.focused_pane {
+                FocusedPane::Prompt => FocusedPane::Jobs,
+                FocusedPane::Conversation => FocusedPane::Status,
+                FocusedPane::Status => FocusedPane::Conversation,
+                FocusedPane::Jobs => FocusedPane::Status,
+                FocusedPane::StatusBar => FocusedPane::Status,
+            };
+        }
+        KeyCode::Right if matches!(app.input_mode, InputMode::Normal) => {
+            app.focused_pane = match app.focused_pane {
+                FocusedPane::Prompt => FocusedPane::Jobs,
+                FocusedPane::Conversation => FocusedPane::Status,
+                FocusedPane::Status => FocusedPane::Conversation,
+                FocusedPane::Jobs => FocusedPane::Prompt,
+                FocusedPane::StatusBar => FocusedPane::Status,
+            };
+        }
         KeyCode::Tab if matches!(app.input_mode, InputMode::Normal) => app.focus_next(),
         KeyCode::BackTab if matches!(app.input_mode, InputMode::Normal) => app.focus_previous(),
         KeyCode::Backspace
