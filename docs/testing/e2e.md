@@ -17,7 +17,7 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
    - `/cfg 6.5` or `/cfg off` tunes classifier-free guidance strength.
    - `/seed 42` (or `/seed off`) locks deterministic runs; `/reset` restores defaults.
 5. Watch the job transition `Queued → Running → Done`. Progress updates stream every few seconds.
-6. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `p` with the job highlighted to surface the path again.
+6. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `Ctrl+P` with the job highlighted to surface the path again.
 7. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the inference extras (torch, diffusers, transformers, Audiocraft) and will reflect the prompt more directly.
 8. Inspect `metadata.json` in the job directory to confirm prompt/model/duration values.
 

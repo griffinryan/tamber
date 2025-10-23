@@ -221,7 +221,7 @@ fn handle_key(
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
         KeyCode::Char('q') => return Ok(true),
-        KeyCode::Char('p') => {
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some((job_id, job)) = app.selected_job() {
                 if job.artifact.is_some() {
                     let _ = command_tx.send(AppCommand::PlayJob { job_id: job_id.clone() });
