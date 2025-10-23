@@ -221,3 +221,61 @@ def test_load_pipeline_uses_trust_remote_code(tmp_path: Path, monkeypatch: pytes
     assert captured_kwargs, "from_pretrained should have been invoked"
     first_call = captured_kwargs[0]
     assert first_call.get("trust_remote_code") is True
+
+
+def test_device_selection_prefers_mps_float32(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class _StubTorch:
+        float16 = np.float16
+        float32 = np.float32
+
+        class cuda:  # type: ignore[valid-type]
+            @staticmethod
+            def is_available() -> bool:
+                return False
+
+        class backends:  # type: ignore[valid-type]
+            class mps:  # type: ignore[valid-type]
+                @staticmethod
+                def is_available() -> bool:
+                    return True
+
+    monkeypatch.setattr("timbre_worker.services.riffusion.torch", _StubTorch, raising=False)
+    monkeypatch.setattr("timbre_worker.services.riffusion.TORCH_IMPORT_ERROR", None, raising=False)
+
+    settings = Settings(artifact_root=tmp_path / "artifacts", config_dir=tmp_path / "config")
+    settings.ensure_directories()
+    service = RiffusionService(settings)
+
+    assert service._device == "mps"
+    assert service._dtype == np.float32
+
+
+def test_device_override_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class _StubTorch:
+        float16 = np.float16
+        float32 = np.float32
+
+        class cuda:  # type: ignore[valid-type]
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+        class backends:  # type: ignore[valid-type]
+            class mps:  # type: ignore[valid-type]
+                @staticmethod
+                def is_available() -> bool:
+                    return True
+
+    monkeypatch.setattr("timbre_worker.services.riffusion.torch", _StubTorch, raising=False)
+    monkeypatch.setattr("timbre_worker.services.riffusion.TORCH_IMPORT_ERROR", None, raising=False)
+
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+        inference_device="cpu",
+    )
+    settings.ensure_directories()
+    service = RiffusionService(settings)
+
+    assert service._device == "cpu"
+    assert service._dtype == np.float32

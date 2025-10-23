@@ -64,6 +64,9 @@
   - Install PyTorch nightly for optimal MPS support if stable release lags.
   - Ensure `accelerate`, `safetensors`, `diffusers`, `soundfile`, and `torchaudio` compiled for ARM64.
   - Document optional `brew install ffmpeg` for future MP3 exports and playback fallback.
+- **Precision**: Riffusion inference defaults to float32 on MPS to prevent the high-frequency artefacts
+  observed when running the pipeline in float16. Override the device with `TIMBRE_INFERENCE_DEVICE`
+  if you need to force CPU/CUDA manually.
 - **Performance**: Monitor GPU memory usage; default to 5–10 s clip lengths during Phase 0. Provide configuration for downscaling resolution or using cached embeddings for speed.
 
 ## 5. Data & File Layout

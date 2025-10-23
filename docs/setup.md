@@ -66,6 +66,10 @@ Ensure PyTorch detects the Metal (MPS) backend if you plan to run on GPU:
 True
 ```
 
+If the MPS backend yields distorted or noisy audio, force the worker to fall back to CPU by exporting
+`TIMBRE_INFERENCE_DEVICE=cpu` before launching `make worker-serve`. The worker now also prefers
+float32 precision on MPS to avoid the white-noise artefacts seen with float16.
+
 ## Testing & Linting
 
 ```bash

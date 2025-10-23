@@ -70,7 +70,7 @@ class RiffusionService:
         self._pipelines: Dict[str, Optional[PipelineHandle]] = {}
         self._placeholder_reasons: Dict[str, str] = {}
         self._pipeline_lock = asyncio.Lock()
-        self._device = self._select_device()
+        self._device, self._dtype = self._select_device_and_dtype()
         self._pipeline_loader = pipeline_loader
 
     @property
@@ -97,6 +97,8 @@ class RiffusionService:
         if request.seed is not None:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
+
+        dtype_str = str(self._dtype) if self._dtype is not None else None
 
         if pipeline_handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
@@ -128,6 +130,8 @@ class RiffusionService:
                 "plan_version": plan.version,
             }
         )
+        if dtype_str is not None:
+            extras["dtype"] = dtype_str
         if placeholder_reason:
             extras["placeholder_reason"] = placeholder_reason
         if section_seed is not None:
@@ -167,6 +171,8 @@ class RiffusionService:
             "placeholder": any(placeholder_flags),
             "sections": [render.extras for render in renders],
         }
+        if self._dtype is not None:
+            extras["dtype"] = str(self._dtype)
         if guidance_values:
             extras["guidance_scale"] = guidance_values[0]
         if placeholder_reasons:
@@ -234,8 +240,7 @@ class RiffusionService:
             from diffusers import DiffusionPipeline
         except Exception as exc:  # noqa: BLE001
             raise GenerationFailure(f"diffusers_unavailable:{exc}") from exc
-
-        dtype = torch.float16 if self._device in {"cuda", "mps"} else torch.float32
+        dtype = self._dtype or torch.float32
         logger.info(
             "Loading Riffusion pipeline %s on %s with dtype %s",
             resolved_model_id,
@@ -420,14 +425,26 @@ class RiffusionService:
             return waveform.T
         return waveform
 
-    def _select_device(self) -> str:
+    def _select_device_and_dtype(self) -> Tuple[str, Optional[Any]]:
         if torch is None:
-            return "cpu"
+            return "cpu", None
+
+        override = (self._settings.inference_device or "").strip().lower()
+        if override:
+            if override == "cuda" and torch.cuda.is_available():  # pragma: no cover - hardware dependent
+                return "cuda", torch.float16
+            if override == "mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # pragma: no cover
+                return "mps", torch.float32
+            if override == "cpu":
+                return "cpu", torch.float32
+            logger.warning("Requested inference device %s unavailable; falling back to auto-selection", override)
+
         if torch.cuda.is_available():  # pragma: no cover - depends on hardware
-            return "cuda"
+            return "cuda", torch.float16
         if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # pragma: no cover
-            return "mps"
-        return "cpu"
+            # Riffusion produces unstable outputs on MPS with float16; prefer float32 even if slower.
+            return "mps", torch.float32
+        return "cpu", torch.float32
 
     def _missing_dependency_reason(self) -> str:
         if torch is None:
