@@ -126,6 +126,7 @@ async fn main() -> Result<()> {
 async fn seed_health_status(client: &api::Client, app: &mut AppState) {
     match client.health().await {
         Ok(body) => {
+            app.ingest_health_payload(&body);
             let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
             let default_model = body
                 .get("default_model_id")

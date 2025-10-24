@@ -14,11 +14,13 @@ from ..app.models import (
     CompositionPlan,
     CompositionSection,
     GenerationRequest,
+    SectionOrchestration,
+    SectionRole,
     ThemeDescriptor,
 )
 from ..app.settings import Settings
 from .audio_utils import ensure_waveform_channels, resample_waveform
-from .types import SectionRender
+from .types import BackendStatus, SectionRender
 
 try:  # pragma: no cover - deferred dependency import
     import torch
@@ -83,13 +85,36 @@ class MusicGenService:
         self._cfg_coef = settings.musicgen_cfg_coef if settings is not None else None
         self._two_step_cfg = settings.musicgen_two_step_cfg if settings is not None else None
         self._supports_two_step_cfg = True
+        self._last_status: Optional[BackendStatus] = None
 
     @property
     def default_model_id(self) -> str:
         return self._default_model_id
 
-    async def warmup(self) -> None:
-        await self._ensure_model(self._default_model_id)
+    async def warmup(self) -> BackendStatus:
+        handle, reason = await self._ensure_model(self._default_model_id)
+        ready = handle is not None
+        details: Dict[str, Any] = {}
+        if handle is not None:
+            details.update(
+                {
+                    "sample_rate": handle.sample_rate,
+                    "frame_rate": handle.frame_rate,
+                }
+            )
+        status = BackendStatus(
+            name="musicgen",
+            ready=ready,
+            device=self._device if ready else None,
+            dtype=None,
+            error=reason,
+            details=details,
+        )
+        self._last_status = status
+        return status
+
+    def backend_status(self) -> Optional[BackendStatus]:
+        return self._last_status
 
     async def render_section(
         self,
@@ -101,6 +126,7 @@ class MusicGenService:
         render_seconds: Optional[float] = None,
         theme: ThemeDescriptor | None = None,
         previous_render: SectionRender | None = None,
+        motif_seed: SectionRender | None = None,
     ) -> SectionRender:
         handle, placeholder_reason = await self._ensure_model(
             model_id or section.model_id or self._default_model_id
@@ -109,13 +135,20 @@ class MusicGenService:
         duration_hint = (
             render_seconds if render_seconds is not None else float(section.target_seconds)
         )
-        duration = float(max(1.0, duration_hint))
+        duration = float(max(1.0, min(duration_hint, 29.5)))
         section_seed: Optional[int] = None
         if request.seed is not None:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
-        prompt_text = self._compose_prompt(section.prompt, theme=theme, previous=previous_render)
+        arrangement_text = self._arrangement_sentence(section.orchestration, section.role)
+        prompt_text = self._compose_prompt(
+            section,
+            arrangement=arrangement_text,
+            theme=theme,
+            previous=previous_render,
+        )
+        conditioning_requested = motif_seed is not None or previous_render is not None
         top_k = request.musicgen_top_k if request.musicgen_top_k is not None else self._top_k
         top_p = request.musicgen_top_p if request.musicgen_top_p is not None else self._top_p
         temperature = (
@@ -129,6 +162,13 @@ class MusicGenService:
             two_step_cfg = self._two_step_cfg
 
         if handle is None:
+            conditioning_extras: Dict[str, Any] = {
+                "audio_conditioning_requested": conditioning_requested,
+                "audio_conditioning_applied": False,
+                "conditioning_reason": placeholder_reason or "musicgen_unavailable",
+                "audio_prompt_segments": [],
+                "audio_prompt_seconds": 0.0,
+            }
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._placeholder_waveform,
                 prompt_text,
@@ -145,9 +185,18 @@ class MusicGenService:
             extras["backend"] = "musicgen"
             extras["device"] = "placeholder"
         else:
+            inputs, conditioning_args, conditioning_extras = self._prepare_model_inputs(
+                handle,
+                prompt_text,
+                motif_seed=motif_seed,
+                previous_render=previous_render,
+                conditioning_requested=conditioning_requested,
+            )
             waveform, sample_rate, extras = await asyncio.to_thread(
                 self._generate_waveform,
                 handle,
+                inputs,
+                conditioning_args,
                 prompt_text,
                 duration,
                 section_seed,
@@ -170,6 +219,8 @@ class MusicGenService:
                 "plan_version": plan.version,
                 "target_seconds": float(section.target_seconds),
                 "render_seconds": actual_seconds,
+                "orchestration": section.orchestration.model_dump(),
+                "arrangement_text": arrangement_text,
             }
         )
         if placeholder_reason:
@@ -178,6 +229,11 @@ class MusicGenService:
             extras["seed"] = section_seed
         if theme is not None:
             extras["theme"] = theme.model_dump()
+        extras.update(conditioning_extras)
+        if motif_seed is not None:
+            seed_section = motif_seed.extras.get("section_id") if isinstance(motif_seed.extras, dict) else None
+            if seed_section is not None:
+                extras["motif_seed_section"] = seed_section
         for key, value in (
             ("top_k", top_k),
             ("top_p", top_p),
@@ -269,6 +325,8 @@ class MusicGenService:
     def _generate_waveform(
         self,
         handle: ModelHandle,
+        inputs: Dict[str, "torch.Tensor"],
+        conditioning_args: Dict[str, "torch.Tensor"],
         prompt: str,
         duration_seconds: float,
         seed: Optional[int],
@@ -279,12 +337,11 @@ class MusicGenService:
         two_step_cfg: Optional[bool],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         assert torch is not None
-        inputs = handle.processor(
-            text=[prompt],
-            padding=True,
-            return_tensors="pt",
-        )
-        inputs = {key: value.to(self._device) for key, value in inputs.items()}
+        model_inputs = {key: value.to(self._device) for key, value in inputs.items()}
+        conditioning_payload = {
+            key: value.to(self._device)
+            for key, value in conditioning_args.items()
+        }
 
         generator = None
         if seed is not None:
@@ -302,7 +359,8 @@ class MusicGenService:
 
         with torch.no_grad():
             audio_tokens = handle.model.generate(
-                **inputs,
+                **model_inputs,
+                **conditioning_payload,
                 generator=generator,
                 **generation_kwargs,
             )
@@ -420,35 +478,275 @@ class MusicGenService:
 
     def _compose_prompt(
         self,
-        base_prompt: str,
+        section: CompositionSection,
         *,
+        arrangement: str,
         theme: ThemeDescriptor | None,
         previous: SectionRender | None,
     ) -> str:
-        segments: list[str] = [base_prompt.strip()]
+        base_prompt = section.prompt.strip()
+        segments: list[str] = [base_prompt]
+        if arrangement:
+            segments.append(arrangement)
         if theme is not None:
-            instrumentation = (
-                ", ".join(theme.instrumentation)
-                if theme.instrumentation
-                else "blended instrumentation"
-            )
-            parts = [
-                f"Keep the {theme.motif} motif",
-                f"with {instrumentation}",
-                f"locked to a {theme.rhythm}",
-            ]
+            motif_clause = f"Keep the {theme.motif} motif"
+            rhythm_clause = f"aligned with the {theme.rhythm}"
+            extras: list[str] = [motif_clause, rhythm_clause]
             if theme.texture:
-                parts.append(f"inside a {theme.texture}")
-            segments.append(" ".join(parts) + ".")
+                extras.append(f"inside a {theme.texture}")
+            if not arrangement and theme.instrumentation:
+                instrumentation = ", ".join(theme.instrumentation)
+                extras.append(f"using {instrumentation}")
+            segments.append(" ".join(extras) + ".")
         if previous is not None:
             prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
             descriptor = prev_label or "section"
             segments.append(
-                "Continue seamlessly from the previous "
-                f"{descriptor}, preserving tone and instrumentation while evolving the motif."
+                "Continue smoothly from the previous "
+                f"{descriptor}, preserving timbre while evolving the motif."
             )
         return " ".join(fragment.strip() for fragment in segments if fragment.strip())
+
+    def _arrangement_sentence(
+        self,
+        orchestration: SectionOrchestration,
+        role: SectionRole,
+    ) -> str:
+        phrases: list[str] = []
+        if orchestration.rhythm:
+            instruments = self._join_with_and(self._unique(orchestration.rhythm))
+            phrases.append(f"{instruments} driving the rhythm")
+        if orchestration.bass:
+            instruments = self._join_with_and(self._unique(orchestration.bass))
+            phrases.append(f"{instruments} grounding the low end")
+        if orchestration.harmony:
+            instruments = self._join_with_and(self._unique(orchestration.harmony))
+            phrases.append(f"{instruments} shaping the harmony")
+        if orchestration.lead:
+            instruments = self._join_with_and(self._unique(orchestration.lead))
+            phrases.append(f"{instruments} carrying the lead lines")
+        if orchestration.textures:
+            instruments = self._join_with_and(self._unique(orchestration.textures))
+            phrases.append(f"{instruments} colouring the textures")
+        if orchestration.vocals:
+            instruments = self._join_with_and(self._unique(orchestration.vocals))
+            phrases.append(f"{instruments} adding vocal nuance")
+        if not phrases:
+            return ""
+        action = {
+            SectionRole.INTRO: "Introduce",
+            SectionRole.MOTIF: "Feature",
+            SectionRole.CHORUS: "Elevate",
+            SectionRole.BRIDGE: "Transform",
+            SectionRole.DEVELOPMENT: "Develop",
+            SectionRole.RESOLUTION: "Resolve",
+            SectionRole.OUTRO: "Reimagine",
+        }.get(role, "Highlight")
+        return f"{action} the arrangement with {self._join_with_and(phrases)}."
+
+    def _join_with_and(self, items: list[str]) -> str:
+        filtered = [item for item in items if item]
+        if not filtered:
+            return ""
+        if len(filtered) == 1:
+            return filtered[0]
+        return ", ".join(filtered[:-1]) + f" and {filtered[-1]}"
+
+    def _unique(self, items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique_items: list[str] = []
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                unique_items.append(item)
+        return unique_items
 
     def _prompt_hash(self, prompt: str) -> str:
         digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
         return digest.hexdigest()
+
+    def _prepare_model_inputs(
+        self,
+        handle: ModelHandle,
+        prompt: str,
+        *,
+        motif_seed: SectionRender | None,
+        previous_render: SectionRender | None,
+        conditioning_requested: bool,
+    ) -> Tuple[Dict[str, "torch.Tensor"], Dict[str, "torch.Tensor"], Dict[str, Any]]:
+        audio_prompt, audio_meta = self._build_audio_prompt(
+            handle,
+            motif_seed=motif_seed,
+            previous_render=previous_render,
+        )
+        extras: Dict[str, Any] = {"audio_conditioning_requested": conditioning_requested}
+        extras.update(audio_meta)
+
+        try:
+            inputs = handle.processor(
+                text=[prompt],
+                padding=True,
+                return_tensors="pt",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MusicGen text processing failed: {}", exc)
+            raise
+
+        inputs = {key: value.to(self._device) for key, value in inputs.items()}
+
+        conditioning_args: Dict[str, "torch.Tensor"] = {}
+        if audio_prompt is not None:
+            try:
+                audio_features = handle.processor(
+                    audio=[audio_prompt],
+                    sampling_rate=handle.sample_rate,
+                    return_tensors="pt",
+                )
+                audio_values = audio_features.get("audio_values")
+                if audio_values is not None:
+                    conditioning_args["audio_prompt"] = audio_values.to(self._device)
+                attention_mask = audio_features.get("audio_attention_mask")
+                if attention_mask is not None:
+                    conditioning_args["audio_prompt_attention_mask"] = attention_mask.to(
+                        self._device
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("MusicGen audio conditioning failed to prepare: {}", exc)
+                extras["audio_conditioning_applied"] = False
+                extras["audio_conditioning_error"] = str(exc)
+                conditioning_args.clear()
+
+        return inputs, conditioning_args, extras
+
+    def _build_audio_prompt(
+        self,
+        handle: ModelHandle,
+        *,
+        motif_seed: SectionRender | None,
+        previous_render: SectionRender | None,
+    ) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
+        segments: list[np.ndarray] = []
+        segment_meta: list[Dict[str, Any]] = []
+        if motif_seed is not None:
+            motif_window = min(
+                16.0,
+                self._phrase_window_seconds(motif_seed, "seconds", default=6.0),
+            )
+            motif_audio = self._prepare_audio_prompt_segment(
+                motif_seed,
+                handle.sample_rate,
+                max_seconds=motif_window,
+                segment="head",
+            )
+            if motif_audio.size > 0:
+                segments.append(motif_audio)
+                segment_meta.append(
+                    {
+                        "source": "motif",
+                        "seconds": float(motif_audio.size / handle.sample_rate),
+                        "window_seconds": float(motif_window),
+                    }
+                )
+        if previous_render is not None:
+            tail_window = min(
+                16.0,
+                self._phrase_window_seconds(
+                    previous_render,
+                    "conditioning_tail_seconds",
+                    default=4.0,
+                ),
+            )
+            tail_audio = self._prepare_audio_prompt_segment(
+                previous_render,
+                handle.sample_rate,
+                max_seconds=tail_window,
+                segment="tail",
+            )
+            if tail_audio.size > 0:
+                segments.append(tail_audio)
+                segment_meta.append(
+                    {
+                        "source": "previous_tail",
+                        "seconds": float(tail_audio.size / handle.sample_rate),
+                        "window_seconds": float(tail_window),
+                    }
+                )
+
+        if not segments:
+            return None, {
+                "audio_conditioning_applied": False,
+                "audio_prompt_segments": [],
+                "audio_prompt_seconds": 0.0,
+            }
+
+        combined = np.concatenate(segments).astype(np.float32)
+        stereo = np.stack([combined, combined], axis=0).astype(np.float32)
+        return stereo, {
+            "audio_conditioning_applied": True,
+            "audio_prompt_seconds": float(combined.size / handle.sample_rate),
+            "audio_prompt_segments": segment_meta,
+            "audio_prompt_channels": 2,
+        }
+
+    def _prepare_audio_prompt_segment(
+        self,
+        render: SectionRender,
+        target_rate: int,
+        *,
+        max_seconds: float,
+        segment: str,
+    ) -> np.ndarray:
+        waveform = ensure_waveform_channels(render.waveform)
+        if waveform.ndim == 1:
+            mono = waveform.astype(np.float32)
+        else:
+            mono = waveform.mean(axis=1).astype(np.float32)
+        if render.sample_rate != target_rate:
+            resampled = resample_waveform(waveform, render.sample_rate, target_rate)
+            if resampled.ndim == 1:
+                mono = resampled.astype(np.float32)
+            else:
+                mono = resampled.mean(axis=1).astype(np.float32)
+
+        max_samples = int(max_seconds * target_rate)
+        if max_samples <= 0:
+            return np.zeros(0, dtype=np.float32)
+        if mono.size > max_samples:
+            if segment == "tail":
+                mono = mono[-max_samples:]
+            else:
+                mono = mono[:max_samples]
+
+        mono = mono.astype(np.float32, copy=True)
+        if mono.size == 0:
+            return mono
+        fade_samples = min(256, max(1, mono.size // 24))
+        if fade_samples > 0:
+            fade = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+            if segment == "tail":
+                mono[:fade_samples] *= fade
+            else:
+                mono[-fade_samples:] *= fade[::-1]
+        mono = np.clip(mono, -1.0, 1.0)
+        return mono
+
+    def _phrase_window_seconds(
+        self,
+        render: SectionRender,
+        key: str,
+        *,
+        default: float,
+    ) -> float:
+        extras = getattr(render, "extras", None)
+        if not isinstance(extras, dict):
+            return default
+        phrase = extras.get("phrase")
+        if not isinstance(phrase, dict):
+            return default
+        value = phrase.get(key)
+        if value is None and key == "conditioning_tail_seconds":
+            value = phrase.get("seconds")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default

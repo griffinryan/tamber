@@ -17,6 +17,7 @@ class JobState(str, Enum):
 class SectionRole(str, Enum):
     INTRO = "intro"
     MOTIF = "motif"
+    CHORUS = "chorus"
     DEVELOPMENT = "development"
     BRIDGE = "bridge"
     RESOLUTION = "resolution"
@@ -37,6 +38,15 @@ class ThemeDescriptor(BaseModel):
     texture: Optional[str] = Field(default=None, max_length=128)
 
 
+class SectionOrchestration(BaseModel):
+    rhythm: list[str] = Field(default_factory=list)
+    bass: list[str] = Field(default_factory=list)
+    harmony: list[str] = Field(default_factory=list)
+    lead: list[str] = Field(default_factory=list)
+    textures: list[str] = Field(default_factory=list)
+    vocals: list[str] = Field(default_factory=list)
+
+
 class CompositionSection(BaseModel):
     section_id: str = Field(..., min_length=2, max_length=32)
     role: SectionRole
@@ -48,6 +58,10 @@ class CompositionSection(BaseModel):
     model_id: Optional[str] = Field(default=None, max_length=128)
     seed_offset: Optional[int] = Field(default=None)
     transition: Optional[str] = Field(default=None, max_length=128)
+    motif_directive: Optional[str] = Field(default=None, max_length=128)
+    variation_axes: list[str] = Field(default_factory=list)
+    cadence_hint: Optional[str] = Field(default=None, max_length=128)
+    orchestration: SectionOrchestration = Field(default_factory=SectionOrchestration)
 
 
 class CompositionPlan(BaseModel):
@@ -64,7 +78,7 @@ class CompositionPlan(BaseModel):
 class GenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=512)
     seed: Optional[int] = Field(default=None, ge=0)
-    duration_seconds: int = Field(default=8, ge=1, le=30)
+    duration_seconds: int = Field(default=120, ge=1, le=300)
     model_id: str = Field(default="musicgen-stereo-medium")
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)

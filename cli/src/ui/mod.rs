@@ -3,7 +3,7 @@ use crate::{
         format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, InputMode,
         JobEntry,
     },
-    types::{CompositionSection, JobState, SectionEnergy},
+    types::{CompositionSection, JobState, SectionEnergy, SectionOrchestration},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -15,6 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
+use serde::Deserialize;
 use std::time::Duration;
 use std::{collections::HashMap, time::Duration as StdDuration};
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender};
@@ -74,11 +75,16 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
 
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(20),
+            Constraint::Percentage(30),
+        ])
         .split(layout[1]);
 
     render_jobs(frame, right[0], app);
-    render_status(frame, right[1], app);
+    render_backend_diagnostics(frame, right[1], app);
+    render_status(frame, right[2], app);
 }
 
 fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
@@ -149,6 +155,91 @@ fn render_jobs(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
         .block(block)
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
     frame.render_widget(list, area);
+}
+
+fn render_backend_diagnostics(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    if app.backend_status.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "Awaiting backend telemetry…",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    } else {
+        for status in &app.backend_status {
+            let style = if status.ready {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            };
+            let prefix = if status.ready { "✔" } else { "!" };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::raw(" "),
+                Span::styled(status.name.clone(), style),
+                Span::raw(" "),
+                Span::styled(status.summary(), Style::default().fg(Color::Gray)),
+            ]));
+            for (key, value) in &status.details {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {key}: {value}"),
+                    Style::default().fg(Color::DarkGray),
+                )]));
+            }
+            if let Some(error) = &status.error {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  error: {error}"),
+                    Style::default().fg(Color::Red),
+                )]));
+            }
+            if let Some(updated_at) = &status.updated_at {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  updated {updated_at}"),
+                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                )]));
+            }
+            lines.push(Line::default());
+        }
+        if lines.last().map(|line| line.spans.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+    }
+
+    if let Some((_id, job)) = app.selected_job() {
+        if let Some(summary) = conditioning_summary(job) {
+            lines.push(Line::default());
+            lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "Conditioning: {} sections (avg tail {:.2}s · max tail {:.2}s · avg pad {:.2}s)",
+                    summary.phrase_sections,
+                    summary.avg_tail,
+                    summary.max_tail,
+                    summary.avg_padding,
+                ),
+                Style::default().fg(Color::LightYellow),
+            )]));
+            if summary.missing_tails > 0 {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  missing tails: {}", summary.missing_tails),
+                    Style::default().fg(Color::Magenta),
+                )]));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "No backend data yet.",
+            Style::default().fg(Color::Gray),
+        )]));
+    }
+
+    let mut block = Block::default().title("Backends").borders(Borders::ALL);
+    if matches!(app.focused_pane, FocusedPane::Status) {
+        block = block.border_style(pane_border(app, FocusedPane::Status));
+    }
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
 }
 
 fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'static> {
@@ -575,8 +666,47 @@ fn plan_status_lines(job: &JobEntry) -> Vec<Line<'static>> {
     lines
 }
 
-fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> {
-    let mut map = HashMap::new();
+struct ConditioningSummary {
+    phrase_sections: usize,
+    avg_padding: f32,
+    avg_tail: f32,
+    max_tail: f32,
+    missing_tails: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SectionExtras {
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    placeholder: Option<bool>,
+    #[serde(default)]
+    render_seconds: Option<f32>,
+    #[serde(default)]
+    phrase: Option<PhraseExtras>,
+    #[serde(default)]
+    arrangement_text: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    orchestration: Option<SectionOrchestration>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PhraseExtras {
+    #[serde(default)]
+    seconds: Option<f32>,
+    #[serde(default)]
+    beats: Option<f32>,
+    #[serde(default)]
+    bars: Option<i32>,
+    #[serde(default)]
+    padding_seconds: Option<f32>,
+    #[serde(default)]
+    conditioning_tail_seconds: Option<f32>,
+}
+
+fn extract_section_extras(job: &JobEntry) -> HashMap<String, SectionExtras> {
+    let mut map: HashMap<String, SectionExtras> = HashMap::new();
     if let Some(artifact) = &job.artifact {
         if let Some(extras) = artifact.descriptor.metadata.extras.as_object() {
             if let Some(sections) = extras.get("sections").and_then(|value| value.as_array()) {
@@ -584,7 +714,36 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> 
                     if let Some(section_id) =
                         entry.get("section_id").and_then(|value| value.as_str())
                     {
-                        map.insert(section_id.to_string(), entry.clone());
+                        match serde_json::from_value::<SectionExtras>(entry.clone()) {
+                            Ok(parsed) => {
+                                map.insert(section_id.to_string(), parsed);
+                            }
+                            Err(err) => {
+                                map.insert(
+                                    section_id.to_string(),
+                                    SectionExtras {
+                                        backend: entry
+                                            .get("backend")
+                                            .and_then(|value| value.as_str())
+                                            .map(|s| s.to_string()),
+                                        placeholder: entry
+                                            .get("placeholder")
+                                            .and_then(|value| value.as_bool()),
+                                        render_seconds: entry
+                                            .get("render_seconds")
+                                            .and_then(|value| value.as_f64())
+                                            .map(|v| v as f32),
+                                        phrase: None,
+                                        arrangement_text: None,
+                                        orchestration: None,
+                                    },
+                                );
+                                eprintln!(
+                                    "failed to parse section extras for {}: {}",
+                                    section_id, err
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -593,9 +752,53 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> 
     map
 }
 
+fn conditioning_summary(job: &JobEntry) -> Option<ConditioningSummary> {
+    let extras = extract_section_extras(job);
+    if extras.is_empty() {
+        return None;
+    }
+
+    let mut phrase_sections = 0;
+    let mut padding_sum = 0.0;
+    let mut padding_count = 0;
+    let mut tail_sum = 0.0;
+    let mut tail_count = 0;
+    let mut max_tail = 0.0;
+    let mut missing_tails = 0;
+
+    for extra in extras.values() {
+        if let Some(phrase) = &extra.phrase {
+            phrase_sections += 1;
+            if let Some(padding) = phrase.padding_seconds {
+                padding_sum += padding;
+                padding_count += 1;
+            }
+            match phrase.conditioning_tail_seconds {
+                Some(tail) if tail > 0.0 => {
+                    tail_sum += tail;
+                    tail_count += 1;
+                    if tail > max_tail {
+                        max_tail = tail;
+                    }
+                }
+                _ => missing_tails += 1,
+            }
+        }
+    }
+
+    if phrase_sections == 0 {
+        return None;
+    }
+
+    let avg_padding = if padding_count > 0 { padding_sum / padding_count as f32 } else { 0.0 };
+    let avg_tail = if tail_count > 0 { tail_sum / tail_count as f32 } else { 0.0 };
+
+    Some(ConditioningSummary { phrase_sections, avg_padding, avg_tail, max_tail, missing_tails })
+}
+
 fn plan_section_line(
     section: &CompositionSection,
-    extras: &HashMap<String, serde_json::Value>,
+    extras: &HashMap<String, SectionExtras>,
     active_label: Option<&str>,
 ) -> Line<'static> {
     let is_active =
@@ -623,14 +826,47 @@ fn plan_section_line(
     ));
 
     if let Some(extra) = extras.get(&section.section_id) {
-        if let Some(backend) = extra.get("backend").and_then(|value| value.as_str()) {
+        if let Some(ref backend) = extra.backend {
             spans.push(Span::styled(format!(" · {}", backend), Style::default().fg(Color::Cyan)));
         }
-        if extra.get("continuation").is_some() {
-            spans.push(Span::styled(" · ↺", Style::default().fg(Color::LightMagenta)));
-        }
-        if extra.get("placeholder").and_then(|value| value.as_bool()).unwrap_or(false) {
+        if extra.placeholder.unwrap_or(false) {
             spans.push(Span::styled(" · placeholder", Style::default().fg(Color::Magenta)));
+        }
+        if let Some(render_seconds) = extra.render_seconds {
+            spans.push(Span::styled(
+                format!(" · render {:.2}s", render_seconds),
+                Style::default().fg(Color::LightGreen),
+            ));
+        }
+        if let Some(arrangement) =
+            extra.arrangement_text.as_ref().filter(|text| !text.trim().is_empty())
+        {
+            spans.push(Span::raw(" · "));
+            spans.push(Span::styled(
+                truncate_text(arrangement, 80),
+                Style::default().fg(Color::LightBlue),
+            ));
+        }
+        if let Some(phrase) = &extra.phrase {
+            let seconds = phrase.seconds.unwrap_or(section.target_seconds);
+            let beats =
+                phrase.beats.map(|b| format!("{b:.1} beats")).unwrap_or_else(|| "- beats".into());
+            let bars = phrase.bars.map(|b| format!("{b} bars")).unwrap_or_else(|| "- bars".into());
+            let padding = phrase
+                .padding_seconds
+                .map(|p| format!("pad {:.2}s", p))
+                .unwrap_or_else(|| "pad 0.00s".into());
+            spans.push(Span::raw(" · "));
+            spans.push(Span::styled(
+                format!("phrase {:.2}s · {beats} · {bars} · {padding}", seconds),
+                Style::default().fg(Color::LightYellow),
+            ));
+            if let Some(tail) = phrase.conditioning_tail_seconds {
+                spans.push(Span::styled(
+                    format!(" (tail {:.2}s)", tail),
+                    Style::default().fg(Color::LightMagenta),
+                ));
+            }
         }
     }
 
@@ -680,8 +916,7 @@ fn insert_border_style() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SectionRole;
-    use serde_json::json;
+    use crate::types::{SectionOrchestration, SectionRole};
 
     #[test]
     fn format_section_line_includes_backend_and_active_marker() {
@@ -696,20 +931,41 @@ mod tests {
             model_id: None,
             seed_offset: Some(0),
             transition: None,
+            motif_directive: Some("state motif".to_string()),
+            variation_axes: vec!["motif fidelity".to_string()],
+            cadence_hint: Some("open cadence".to_string()),
+            orchestration: SectionOrchestration::default(),
         };
-        let mut extras = HashMap::new();
+        let mut extras: HashMap<String, SectionExtras> = HashMap::new();
         extras.insert(
             "s00".to_string(),
-            json!({
-                "backend": "musicgen",
-                "section_id": "s00",
-                "placeholder": false
-            }),
+            SectionExtras {
+                backend: Some("musicgen".to_string()),
+                placeholder: Some(false),
+                render_seconds: Some(8.4),
+                phrase: Some(PhraseExtras {
+                    seconds: Some(8.4),
+                    beats: Some(16.0),
+                    bars: Some(4),
+                    padding_seconds: Some(0.35),
+                    conditioning_tail_seconds: Some(3.2),
+                }),
+                arrangement_text: Some("Feature the arrangement with layered guitars.".to_string()),
+                orchestration: Some(SectionOrchestration {
+                    lead: vec!["layered guitars".to_string()],
+                    ..SectionOrchestration::default()
+                }),
+            },
         );
 
         let line = plan_section_line(&section, &extras, Some("Theme"));
         let rendered = line.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
         assert!(rendered.contains("musicgen"));
+        assert!(rendered.contains("render 8.40s"));
+        assert!(rendered.contains("16.0 beats"));
+        assert!(rendered.contains("4 bars"));
         assert!(rendered.trim_start().starts_with("▶"));
+        assert!(rendered.contains("phrase"));
+        assert!(rendered.contains("tail 3.20s"));
     }
 }

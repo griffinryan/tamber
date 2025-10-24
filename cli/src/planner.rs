@@ -1,32 +1,27 @@
 use crate::types::{
-    CompositionPlan, CompositionSection, SectionEnergy, SectionRole, ThemeDescriptor,
+    CompositionPlan, CompositionSection, SectionEnergy, SectionOrchestration, SectionRole,
+    ThemeDescriptor,
 };
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 
-const PLAN_VERSION: &str = "v2";
-const MIN_TEMPO: u16 = 60;
-const MAX_TEMPO: u16 = 140;
+const PLAN_VERSION: &str = "v3";
+const MIN_TEMPO: u16 = 68;
+const MAX_TEMPO: u16 = 128;
 const DEFAULT_TIME_SIGNATURE: &str = "4/4";
-const MIN_SECTION_SECONDS: f32 = 5.0;
-const MIN_TOTAL_SECONDS: f32 = 12.0;
-
-const ROLE_MIN_BEATS: &[(SectionRole, u16)] = &[
-    (SectionRole::Intro, 4),
-    (SectionRole::Motif, 8),
-    (SectionRole::Development, 8),
-    (SectionRole::Bridge, 4),
-    (SectionRole::Resolution, 4),
-    (SectionRole::Outro, 4),
-];
+const SHORT_MIN_TOTAL_SECONDS: f32 = 2.0;
+const SHORT_MIN_SECTION_SECONDS: f32 = 2.0;
+const LONG_FORM_THRESHOLD: f32 = 90.0;
+const LONG_MIN_SECTION_SECONDS: f32 = 16.0;
 
 const ADD_PRIORITY: &[SectionRole] = &[
+    SectionRole::Chorus,
     SectionRole::Motif,
-    SectionRole::Development,
     SectionRole::Bridge,
-    SectionRole::Resolution,
+    SectionRole::Development,
     SectionRole::Intro,
     SectionRole::Outro,
+    SectionRole::Resolution,
 ];
 
 const REMOVE_PRIORITY: &[SectionRole] = &[
@@ -36,6 +31,7 @@ const REMOVE_PRIORITY: &[SectionRole] = &[
     SectionRole::Resolution,
     SectionRole::Development,
     SectionRole::Motif,
+    SectionRole::Chorus,
 ];
 
 const INSTRUMENT_KEYWORDS: &[(&str, &str)] = &[
@@ -45,6 +41,7 @@ const INSTRUMENT_KEYWORDS: &[(&str, &str)] = &[
     ("synth", "lush synth pads"),
     ("modular", "modular synth textures"),
     ("guitar", "ambient guitar"),
+    ("guitars", "layered guitars"),
     ("bass", "deep bass"),
     ("drum", "tight drums"),
     ("percussion", "organic percussion"),
@@ -53,9 +50,17 @@ const INSTRUMENT_KEYWORDS: &[(&str, &str)] = &[
     ("cello", "warm cello"),
     ("choir", "airy choir voices"),
     ("vocal", "ethereal vocals"),
+    ("singer", "soulful vocalist"),
+    ("vocalist", "soaring vocals"),
     ("brass", "smooth brass"),
+    ("horn", "bold brass horns"),
     ("sax", "saxophone lead"),
+    ("trumpet", "radiant trumpet lead"),
+    ("trombone", "velvet trombone swells"),
     ("flute", "breathy flute"),
+    ("clarinet", "warm clarinet"),
+    ("oboe", "lyrical oboe"),
+    ("harp", "glittering harp arpeggios"),
     ("ambient", "atmospheric textures"),
     ("lofi", "dusty keys"),
 ];
@@ -91,11 +96,82 @@ const TEXTURE_KEYWORDS: &[(&str, &str)] = &[
 const DEFAULT_INSTRUMENTATION: &[&str] = &["blended instrumentation"];
 const DEFAULT_TEXTURE: &str = "immersive atmosphere";
 
+struct LayerCounts {
+    rhythm: u8,
+    bass: u8,
+    harmony: u8,
+    lead: u8,
+    textures: u8,
+    vocals: u8,
+}
+
+impl LayerCounts {
+    const fn new(rhythm: u8, bass: u8, harmony: u8, lead: u8, textures: u8, vocals: u8) -> Self {
+        Self { rhythm, bass, harmony, lead, textures, vocals }
+    }
+}
+
+#[derive(Default, Clone)]
+struct InstrumentPalette {
+    rhythm: Vec<String>,
+    bass: Vec<String>,
+    harmony: Vec<String>,
+    lead: Vec<String>,
+    textures: Vec<String>,
+    vocals: Vec<String>,
+}
+
+fn directives_for_role(role: &SectionRole) -> (Option<String>, Vec<String>, Option<String>) {
+    match role {
+        SectionRole::Intro => (
+            Some("foreshadow motif".to_string()),
+            vec!["texture".to_string(), "register preview".to_string()],
+            Some("establish tonic pedal".to_string()),
+        ),
+        SectionRole::Motif => (
+            Some("state motif".to_string()),
+            vec!["motif fidelity".to_string()],
+            Some("open cadence".to_string()),
+        ),
+        SectionRole::Chorus => (
+            Some("amplify motif".to_string()),
+            vec![
+                "dynamics".to_string(),
+                "call-and-response".to_string(),
+                "countermelody".to_string(),
+            ],
+            Some("anthemic cadence".to_string()),
+        ),
+        SectionRole::Development => (
+            Some("develop motif".to_string()),
+            vec!["rhythm".to_string(), "harmony".to_string(), "counterpoint".to_string()],
+            None,
+        ),
+        SectionRole::Bridge => (
+            Some("modulate motif".to_string()),
+            vec!["harmony".to_string(), "timbre".to_string()],
+            Some("pivot modulation".to_string()),
+        ),
+        SectionRole::Resolution => (
+            Some("resolve motif".to_string()),
+            vec!["harmony".to_string(), "dynamics".to_string()],
+            Some("authentic cadence".to_string()),
+        ),
+        SectionRole::Outro => (
+            Some("dissolve motif".to_string()),
+            vec!["texture".to_string(), "space".to_string()],
+            Some("fade tonic drone".to_string()),
+        ),
+    }
+}
+
 struct SectionTemplate {
     role: SectionRole,
     label: &'static str,
     energy: SectionEnergy,
-    bars: u8,
+    base_bars: u16,
+    min_bars: u16,
+    max_bars: u16,
     prompt_template: &'static str,
     transition: Option<&'static str>,
 }
@@ -114,47 +190,64 @@ impl CompositionPlanner {
         duration_seconds: u8,
         seed: Option<u64>,
     ) -> CompositionPlan {
-        let seconds_total = f32::max(duration_seconds as f32, MIN_TOTAL_SECONDS);
-        let templates = prune_templates(seconds_total, select_templates(duration_seconds));
-        let raw_bars: u16 = templates.iter().map(|tpl| tpl.bars as u16).sum();
-        let raw_tempo = if seconds_total > 0.0 {
-            (240.0 * raw_bars as f32 / seconds_total).round() as u16
-        } else {
-            90
-        };
-        let tempo_bpm = select_tempo(raw_tempo);
-        let seconds_per_beat = 60.0 / tempo_bpm as f32;
+        if (duration_seconds as f32) >= LONG_FORM_THRESHOLD {
+            return self.build_long_form_plan(prompt, duration_seconds, seed);
+        }
+        self.build_short_form_plan(prompt, duration_seconds, seed)
+    }
+
+    fn build_long_form_plan(
+        &self,
+        prompt: &str,
+        duration_seconds: u8,
+        seed: Option<u64>,
+    ) -> CompositionPlan {
+        let seconds_total = f32::max(duration_seconds as f32, LONG_FORM_THRESHOLD);
+        let templates = select_long_templates(seconds_total);
+        let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
+        let tempo_hint = tempo_hint(seconds_total, &templates, beats_per_bar);
+        let tempo_bpm = select_tempo(tempo_hint);
+        let seconds_per_bar = (60.0 / tempo_bpm as f32) * beats_per_bar as f32;
+
+        let bars = allocate_bars(&templates, seconds_total, seconds_per_bar);
+        let descriptor = build_theme_descriptor(prompt, &templates);
+        let palette = categorise_instrumentation(&descriptor, prompt);
+        let orchestrations = plan_orchestrations(&templates, &palette);
 
         let base_seed = seed.unwrap_or_else(|| deterministic_seed(prompt));
         let key = select_key(base_seed);
 
-        let beats = allocate_beats(&templates, seconds_total, seconds_per_beat);
-        let total_bars = ((beats.iter().sum::<u32>() as f32) / 4.0).round() as u16;
-        let total_bars = total_bars.max(1);
-        let seconds_per_section: Vec<f32> =
-            beats.iter().map(|count| *count as f32 * seconds_per_beat).collect();
-
-        let descriptor = build_theme_descriptor(prompt, &templates);
         let mut sections: Vec<CompositionSection> = Vec::with_capacity(templates.len());
+        let mut total_bars: u16 = 0;
 
-        for (index, (template, section_seconds)) in
-            templates.iter().zip(seconds_per_section).enumerate()
-        {
+        for (index, template) in templates.iter().enumerate() {
+            let arrangement = describe_orchestration(&orchestrations[index]);
             let section_prompt =
-                render_prompt(template.prompt_template, prompt, &descriptor, index);
-            let target_seconds = section_seconds.max(MIN_SECTION_SECONDS);
+                render_prompt(template.prompt_template, prompt, &descriptor, index, &arrangement);
+            let (motif_directive, variation_axes, cadence_hint) =
+                directives_for_role(&template.role);
+            let bar_count = bars[index].max(1);
+            total_bars += bar_count;
+            let mut target_seconds = bar_count as f32 * seconds_per_bar;
+            if target_seconds < LONG_MIN_SECTION_SECONDS {
+                target_seconds = LONG_MIN_SECTION_SECONDS;
+            }
 
             sections.push(CompositionSection {
                 section_id: format!("s{:02}", index),
                 role: template.role.clone(),
                 label: template.label.to_string(),
                 prompt: section_prompt,
-                bars: template.bars,
+                bars: bar_count as u8,
                 target_seconds,
                 energy: template.energy.clone(),
                 model_id: None,
                 seed_offset: Some(index as i32),
                 transition: template.transition.map(|text| text.to_string()),
+                motif_directive,
+                variation_axes,
+                cadence_hint,
+                orchestration: orchestrations[index].clone(),
             });
         }
 
@@ -165,6 +258,95 @@ impl CompositionPlanner {
             key,
             total_bars,
             total_duration_seconds: sections.iter().map(|s| s.target_seconds).sum(),
+            theme: Some(descriptor.clone()),
+            sections,
+        }
+    }
+
+    fn build_short_form_plan(
+        &self,
+        prompt: &str,
+        duration_seconds: u8,
+        seed: Option<u64>,
+    ) -> CompositionPlan {
+        let seconds_total = f32::max(duration_seconds as f32, SHORT_MIN_TOTAL_SECONDS);
+        let templates = select_short_templates(seconds_total);
+        let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
+        let total_weight: u32 = templates.iter().map(|tpl| tpl.base_bars as u32).sum();
+        let weight =
+            if total_weight == 0 { (templates.len().max(1) as u32) * 4 } else { total_weight };
+        let raw_tempo = if seconds_total > 0.0 {
+            (240.0 * weight as f32 / seconds_total).round() as u16
+        } else {
+            90
+        };
+        let tempo_bpm = select_tempo(raw_tempo);
+        let seconds_per_bar = (60.0 / tempo_bpm as f32) * beats_per_bar as f32;
+
+        let descriptor = build_theme_descriptor(prompt, &templates);
+        let palette = categorise_instrumentation(&descriptor, prompt);
+        let orchestrations = plan_orchestrations(&templates, &palette);
+
+        let base_seed = seed.unwrap_or_else(|| deterministic_seed(prompt));
+        let key = select_key(base_seed);
+
+        let mut sections: Vec<CompositionSection> = Vec::with_capacity(templates.len());
+        let mut total_bars: u16 = 0;
+        let mut total_duration = 0.0f32;
+
+        for (index, template) in templates.iter().enumerate() {
+            let arrangement = describe_orchestration(&orchestrations[index]);
+            let section_prompt =
+                render_prompt(template.prompt_template, prompt, &descriptor, index, &arrangement);
+            let (motif_directive, variation_axes, cadence_hint) =
+                directives_for_role(&template.role);
+
+            let ratio = template.base_bars as f32 / (weight.max(1) as f32);
+            let mut target_seconds = (seconds_total * ratio).max(SHORT_MIN_SECTION_SECONDS);
+            let mut bar_count = if seconds_per_bar > 0.0 {
+                (target_seconds / seconds_per_bar).round() as i32
+            } else {
+                template.base_bars as i32
+            };
+            if bar_count < template.min_bars as i32 {
+                bar_count = template.min_bars as i32;
+            }
+            if bar_count > template.max_bars as i32 {
+                bar_count = template.max_bars as i32;
+            }
+            if bar_count < 1 {
+                bar_count = 1;
+            }
+
+            target_seconds = (bar_count as f32 * seconds_per_bar).max(SHORT_MIN_SECTION_SECONDS);
+            total_bars += bar_count as u16;
+            total_duration += target_seconds;
+
+            sections.push(CompositionSection {
+                section_id: format!("s{:02}", index),
+                role: template.role.clone(),
+                label: template.label.to_string(),
+                prompt: section_prompt,
+                bars: bar_count as u8,
+                target_seconds,
+                energy: template.energy.clone(),
+                model_id: None,
+                seed_offset: Some(index as i32),
+                transition: template.transition.map(|text| text.to_string()),
+                motif_directive,
+                variation_axes,
+                cadence_hint,
+                orchestration: orchestrations[index].clone(),
+            });
+        }
+
+        CompositionPlan {
+            version: PLAN_VERSION.to_string(),
+            tempo_bpm,
+            time_signature: DEFAULT_TIME_SIGNATURE.to_string(),
+            key,
+            total_bars,
+            total_duration_seconds: total_duration,
             theme: Some(descriptor.clone()),
             sections,
         }
@@ -186,29 +368,16 @@ fn deterministic_seed(prompt: &str) -> u64 {
     hasher.finish()
 }
 
-fn prune_templates(
-    seconds_total: f32,
-    mut templates: Vec<SectionTemplate>,
-) -> Vec<SectionTemplate> {
-    while templates.len() > 1 && seconds_total < MIN_SECTION_SECONDS * templates.len() as f32 {
-        let drop_index = template_to_drop(&templates);
-        templates.remove(drop_index);
-    }
-    templates
-}
-
 fn select_tempo(raw_tempo: u16) -> u16 {
     let clamped = raw_tempo.clamp(MIN_TEMPO, MAX_TEMPO);
     let mut best = clamped;
-    let mut best_error =
-        if raw_tempo > clamped { raw_tempo - clamped } else { clamped - raw_tempo };
+    let mut best_error = raw_tempo.abs_diff(clamped);
     for delta in 1..16 {
         for candidate in [clamped.saturating_sub(delta), clamped.saturating_add(delta)] {
             if candidate < MIN_TEMPO || candidate > MAX_TEMPO {
                 continue;
             }
-            let error =
-                if raw_tempo > candidate { raw_tempo - candidate } else { candidate - raw_tempo };
+            let error = raw_tempo.abs_diff(candidate);
             if error < best_error {
                 best = candidate;
                 best_error = error;
@@ -218,123 +387,71 @@ fn select_tempo(raw_tempo: u16) -> u16 {
     best
 }
 
-fn template_to_drop(templates: &[SectionTemplate]) -> usize {
-    fn role_priority(role: &SectionRole) -> u8 {
-        match role {
-            SectionRole::Outro => 0,
-            SectionRole::Intro => 1,
-            SectionRole::Bridge => 2,
-            SectionRole::Resolution => 3,
-            SectionRole::Development => 4,
-            SectionRole::Motif => 5,
-        }
+fn tempo_hint(seconds_total: f32, templates: &[SectionTemplate], beats_per_bar: u16) -> u16 {
+    if seconds_total <= 0.0 {
+        return 96;
     }
-
-    let mut best_index = 0usize;
-    let mut best_key = (role_priority(&templates[0].role), templates[0].bars, 0usize);
-
-    for (index, template) in templates.iter().enumerate().skip(1) {
-        let key = (role_priority(&template.role), template.bars, index);
-        if key < best_key {
-            best_index = index;
-            best_key = key;
-        }
-    }
-
-    best_index
+    let base_bars: u32 = templates.iter().map(|tpl| tpl.base_bars as u32).sum();
+    let base_bars = if base_bars == 0 { (templates.len().max(1) as u32) * 8 } else { base_bars };
+    let beats = base_bars * beats_per_bar as u32;
+    let raw = (60.0 * beats as f32 / seconds_total).round() as u16;
+    raw.max(MIN_TEMPO)
 }
 
-fn role_min_beats(role: &SectionRole, seconds_per_beat: f32) -> u32 {
-    let role_min = ROLE_MIN_BEATS
-        .iter()
-        .find_map(|(candidate, beats)| if candidate == role { Some(*beats as u32) } else { None })
-        .unwrap_or(4);
-    let min_by_seconds = if seconds_per_beat > 0.0 {
-        (MIN_SECTION_SECONDS / seconds_per_beat).ceil() as u32
-    } else {
-        4
-    };
-    std::cmp::max(role_min, min_by_seconds)
+fn beats_per_bar(signature: &str) -> u16 {
+    signature.split('/').next().and_then(|value| value.parse::<u16>().ok()).unwrap_or(4).max(1)
 }
 
-fn allocate_beats(
+fn allocate_bars(
     templates: &[SectionTemplate],
     seconds_total: f32,
-    seconds_per_beat: f32,
-) -> Vec<u32> {
+    seconds_per_bar: f32,
+) -> Vec<u16> {
     if templates.is_empty() {
         return Vec::new();
     }
+    let seconds_per_bar = seconds_per_bar.max(1.0);
+    let target_float = seconds_total / seconds_per_bar;
+    let min_total: u16 = templates.iter().map(|tpl| tpl.min_bars).sum();
+    let target = target_float.round() as i32;
+    let target = std::cmp::max(target, min_total as i32) as u16;
+    let base_total: u16 = templates.iter().map(|tpl| tpl.base_bars).sum();
+    let scale = if base_total == 0 { 1.0 } else { target as f32 / base_total as f32 };
 
-    let total_beats_raw: f32 =
-        templates.iter().map(|template| template.bars as f32 * 4.0).sum::<f32>().max(1.0);
-    let min_beats: Vec<u32> =
-        templates.iter().map(|template| role_min_beats(&template.role, seconds_per_beat)).collect();
-    let target_beats = {
-        let desired = (seconds_total / seconds_per_beat).round() as i32;
-        let minimum: u32 = min_beats.iter().copied().sum();
-        let desired = std::cmp::max(desired, 1) as u32;
-        std::cmp::max(minimum, desired)
-    };
-
-    let scale = target_beats as f32 / total_beats_raw;
-    let mut provisional: Vec<u32> = templates
+    let mut bars: Vec<u16> = templates
         .iter()
-        .zip(min_beats.iter())
-        .map(|(template, min_count)| {
-            let scaled = (template.bars as f32 * 4.0 * scale).round() as i32;
-            let scaled = std::cmp::max(scaled, 1);
-            std::cmp::max(*min_count as i32, scaled) as u32
+        .map(|tpl| {
+            let scaled = (tpl.base_bars as f32 * scale).round() as i32;
+            let bounded = scaled.clamp(tpl.min_bars as i32, tpl.max_bars as i32).max(1);
+            bounded as u16
         })
         .collect();
 
-    rebalance_beats(templates, &mut provisional, &min_beats, target_beats);
-    provisional
+    rebalance_bars(templates, &mut bars, target);
+    bars
 }
 
-fn rebalance_beats(
-    templates: &[SectionTemplate],
-    beats: &mut [u32],
-    min_beats: &[u32],
-    target_beats: u32,
-) {
-    let mut total: i32 = beats.iter().sum::<u32>() as i32;
-    let target = target_beats as i32;
-
-    let expand_priority = |priority: &[SectionRole]| -> Vec<usize> {
-        let mut order = Vec::new();
-        for role in priority {
-            for (index, template) in templates.iter().enumerate() {
-                if &template.role == role && !order.contains(&index) {
-                    order.push(index);
-                }
-            }
-        }
-        if order.len() < templates.len() {
-            for index in 0..templates.len() {
-                if !order.contains(&index) {
-                    order.push(index);
-                }
-            }
-        }
-        order
-    };
-
-    let add_order = expand_priority(ADD_PRIORITY);
-    let remove_order = expand_priority(REMOVE_PRIORITY);
+fn rebalance_bars(templates: &[SectionTemplate], bars: &mut [u16], target_bars: u16) {
+    let mut total: i32 = bars.iter().map(|value| *value as i32).sum();
+    let target = target_bars as i32;
+    let add_order = expand_priority(templates, ADD_PRIORITY);
+    let remove_order = expand_priority(templates, REMOVE_PRIORITY);
 
     let mut safety = 0;
     while total < target && safety < 4096 {
-        let mut modified = false;
+        let mut adjusted = false;
         for idx in &add_order {
-            beats[*idx] += 1;
-            total += 1;
-            modified = true;
-            if total >= target {
-                break;
+            let template = &templates[*idx];
+            if bars[*idx] < template.max_bars {
+                bars[*idx] += 1;
+                total += 1;
+                adjusted = true;
+                if total >= target {
+                    break;
+                }
             }
         }
-        if !modified {
+        if !adjusted {
             break;
         }
         safety += 1;
@@ -342,22 +459,255 @@ fn rebalance_beats(
 
     safety = 0;
     while total > target && safety < 4096 {
-        let mut modified = false;
+        let mut adjusted = false;
         for idx in &remove_order {
-            if beats[*idx] > min_beats[*idx] {
-                beats[*idx] -= 1;
+            let template = &templates[*idx];
+            if bars[*idx] > template.min_bars {
+                bars[*idx] -= 1;
                 total -= 1;
-                modified = true;
+                adjusted = true;
                 if total <= target {
                     break;
                 }
             }
         }
-        if !modified {
+        if !adjusted {
             break;
         }
         safety += 1;
     }
+}
+
+fn expand_priority(templates: &[SectionTemplate], priority: &[SectionRole]) -> Vec<usize> {
+    let mut order = Vec::new();
+    for role in priority {
+        for (index, template) in templates.iter().enumerate() {
+            if &template.role == role && !order.contains(&index) {
+                order.push(index);
+            }
+        }
+    }
+    for index in 0..templates.len() {
+        if !order.contains(&index) {
+            order.push(index);
+        }
+    }
+    order
+}
+
+fn layer_counts_for_role(role: &SectionRole) -> LayerCounts {
+    match role {
+        SectionRole::Intro => LayerCounts::new(1, 1, 3, 1, 2, 0),
+        SectionRole::Motif => LayerCounts::new(2, 1, 2, 1, 1, 0),
+        SectionRole::Chorus => LayerCounts::new(2, 1, 2, 2, 1, 1),
+        SectionRole::Bridge => LayerCounts::new(1, 1, 2, 1, 2, 1),
+        SectionRole::Development => LayerCounts::new(2, 1, 2, 2, 2, 1),
+        SectionRole::Resolution => LayerCounts::new(1, 1, 2, 1, 2, 1),
+        SectionRole::Outro => LayerCounts::new(1, 1, 2, 1, 2, 0),
+    }
+}
+
+fn categorise_instrumentation(descriptor: &ThemeDescriptor, prompt: &str) -> InstrumentPalette {
+    let mut palette = InstrumentPalette::default();
+    for label in &descriptor.instrumentation {
+        let lower = label.to_lowercase();
+        let mut matched = false;
+        for category in ["rhythm", "bass", "harmony", "lead", "textures", "vocals"] {
+            if category_keywords(category).iter().any(|keyword| lower.contains(keyword)) {
+                push_category(&mut palette, category, label.clone());
+                matched = true;
+            }
+        }
+        if !matched {
+            palette.textures.push(label.clone());
+        }
+    }
+
+    let prompt_lower = prompt.to_lowercase();
+    if category_keywords("vocals").iter().any(|keyword| prompt_lower.contains(keyword)) {
+        palette.vocals.push("expressive vocals".to_string());
+    }
+
+    palette.rhythm =
+        if palette.rhythm.is_empty() { fallback_layer("rhythm") } else { dedupe(palette.rhythm) };
+    palette.bass =
+        if palette.bass.is_empty() { fallback_layer("bass") } else { dedupe(palette.bass) };
+    palette.harmony = if palette.harmony.is_empty() {
+        fallback_layer("harmony")
+    } else {
+        dedupe(palette.harmony)
+    };
+    palette.lead =
+        if palette.lead.is_empty() { fallback_layer("lead") } else { dedupe(palette.lead) };
+    palette.textures = if palette.textures.is_empty() {
+        fallback_layer("textures")
+    } else {
+        dedupe(palette.textures)
+    };
+    palette.vocals = dedupe(palette.vocals);
+
+    palette
+}
+
+fn push_category(palette: &mut InstrumentPalette, category: &str, value: String) {
+    match category {
+        "rhythm" => palette.rhythm.push(value),
+        "bass" => palette.bass.push(value),
+        "harmony" => palette.harmony.push(value),
+        "lead" => palette.lead.push(value),
+        "textures" => palette.textures.push(value),
+        "vocals" => palette.vocals.push(value),
+        _ => {}
+    }
+}
+
+fn plan_orchestrations(
+    templates: &[SectionTemplate],
+    palette: &InstrumentPalette,
+) -> Vec<SectionOrchestration> {
+    templates
+        .iter()
+        .enumerate()
+        .map(|(index, template)| {
+            let counts = layer_counts_for_role(&template.role);
+            build_orchestration(counts, palette, index)
+        })
+        .collect()
+}
+
+fn build_orchestration(
+    counts: LayerCounts,
+    palette: &InstrumentPalette,
+    offset: usize,
+) -> SectionOrchestration {
+    let mut orchestration = SectionOrchestration::default();
+    orchestration.rhythm = select_layer("rhythm", &palette.rhythm, counts.rhythm, offset);
+    orchestration.bass = select_layer("bass", &palette.bass, counts.bass, offset);
+    orchestration.harmony = select_layer("harmony", &palette.harmony, counts.harmony, offset);
+    orchestration.lead = select_layer("lead", &palette.lead, counts.lead, offset);
+    orchestration.textures = select_layer("textures", &palette.textures, counts.textures, offset);
+    orchestration.vocals = if palette.vocals.is_empty() {
+        Vec::new()
+    } else {
+        select_layer("vocals", &palette.vocals, counts.vocals, offset)
+    };
+    orchestration
+}
+
+fn select_layer(category: &str, source: &[String], count: u8, offset: usize) -> Vec<String> {
+    if count == 0 {
+        return Vec::new();
+    }
+    if !source.is_empty() {
+        return cycle_slice(source, count as usize, offset);
+    }
+    if category == "vocals" {
+        return Vec::new();
+    }
+    let fallback = fallback_layer(category);
+    if fallback.is_empty() {
+        Vec::new()
+    } else {
+        cycle_slice(&fallback, count as usize, offset)
+    }
+}
+
+fn fallback_layer(category: &str) -> Vec<String> {
+    default_layer_fallback(category).iter().map(|value| (*value).to_string()).collect()
+}
+
+fn cycle_slice(source: &[String], count: usize, offset: usize) -> Vec<String> {
+    if source.is_empty() || count == 0 {
+        return Vec::new();
+    }
+    (0..count).map(|index| source[(offset + index) % source.len()].clone()).collect()
+}
+
+fn describe_orchestration(orchestration: &SectionOrchestration) -> String {
+    let mut parts = Vec::new();
+    if !orchestration.rhythm.is_empty() {
+        parts.push(orchestration.rhythm.join(", "));
+    }
+    if !orchestration.bass.is_empty() {
+        parts.push(orchestration.bass.join(", "));
+    }
+    if !orchestration.harmony.is_empty() {
+        parts.push(orchestration.harmony.join(", "));
+    }
+    if !orchestration.lead.is_empty() {
+        parts.push(orchestration.lead.join(", "));
+    }
+    if !orchestration.textures.is_empty() {
+        parts.push(orchestration.textures.join(", "));
+    }
+    if !orchestration.vocals.is_empty() {
+        parts.push(orchestration.vocals.join(", "));
+    }
+    parts.join(", ")
+}
+
+fn category_keywords(category: &str) -> &'static [&'static str] {
+    match category {
+        "rhythm" => &[
+            "drum",
+            "percussion",
+            "beat",
+            "groove",
+            "rhythm",
+            "kick",
+            "hip hop",
+            "boom bap",
+            "house",
+            "techno",
+            "trance",
+            "breakbeat",
+            "trap",
+        ],
+        "bass" => &["bass", "sub", "808", "low end", "low-end"],
+        "harmony" => &[
+            "piano", "keys", "synth", "pad", "string", "chord", "organ", "rhodes", "guitar", "harp",
+        ],
+        "lead" => &[
+            "lead", "guitar", "solo", "brass", "sax", "horn", "trumpet", "violin", "flute",
+            "clarinet", "oboe",
+        ],
+        "textures" => &[
+            "ambient",
+            "texture",
+            "pad",
+            "choir",
+            "atmosphere",
+            "reverb",
+            "noise",
+            "wash",
+            "drone",
+        ],
+        "vocals" => &["vocal", "voice", "singer", "choir", "chant", "lyric"],
+        _ => &[],
+    }
+}
+
+fn default_layer_fallback(category: &str) -> &'static [&'static str] {
+    match category {
+        "rhythm" => &["tight drums", "organic percussion"],
+        "bass" => &["pulsing bass", "sub bass swell"],
+        "harmony" => &["lush keys", "stacked synth pads"],
+        "lead" => &["expressive guitar lead", "soulful brass line"],
+        "textures" => &["airy ambient swells", "granular noise beds"],
+        "vocals" => &["wordless vocal pads"],
+        _ => &[],
+    }
+}
+
+fn dedupe(items: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for item in items {
+        if seen.insert(item.clone()) {
+            result.push(item);
+        }
+    }
+    result
 }
 
 fn build_theme_descriptor(prompt: &str, templates: &[SectionTemplate]) -> ThemeDescriptor {
@@ -454,6 +804,12 @@ fn dynamic_label(role: &SectionRole, energy: &SectionEnergy, index: usize, total
         }
         return "resolved cadence".to_string();
     }
+    if matches!(role, SectionRole::Chorus) {
+        return "anthemic peak".to_string();
+    }
+    if matches!(role, SectionRole::Bridge) {
+        return "suspended tension".to_string();
+    }
     match energy {
         SectionEnergy::High => "heightened intensity".to_string(),
         SectionEnergy::Medium => "building drive".to_string(),
@@ -466,6 +822,7 @@ fn render_prompt(
     prompt: &str,
     descriptor: &ThemeDescriptor,
     index: usize,
+    arrangement: &str,
 ) -> String {
     let instrumentation_text = if descriptor.instrumentation.is_empty() {
         DEFAULT_INSTRUMENTATION.join(", ")
@@ -478,6 +835,8 @@ fn render_prompt(
         .cloned()
         .unwrap_or_else(|| "flowing dynamic".to_string());
     let texture = descriptor.texture.clone().unwrap_or_else(|| DEFAULT_TEXTURE.to_string());
+    let arrangement_text =
+        if arrangement.is_empty() { instrumentation_text.clone() } else { arrangement.to_string() };
 
     let mut rendered = template.to_string();
     rendered = rendered.replace("{prompt}", prompt);
@@ -486,17 +845,120 @@ fn render_prompt(
     rendered = rendered.replace("{rhythm}", descriptor.rhythm.as_str());
     rendered = rendered.replace("{texture}", texture.as_str());
     rendered = rendered.replace("{dynamic}", dynamic.as_str());
+    rendered = rendered.replace("{arrangement}", arrangement_text.as_str());
     rendered.trim().to_string()
 }
 
-fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
-    if duration_seconds >= 24 {
-        vec![
+fn select_long_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
+    if duration_seconds >= 150.0 {
+        return vec![
+            SectionTemplate {
+                role: SectionRole::Intro,
+                label: "Intro",
+                energy: SectionEnergy::Low,
+                base_bars: 16,
+                min_bars: 10,
+                max_bars: 18,
+                prompt_template: "Set the stage with {arrangement}, foreshadowing the {motif} motif over a {rhythm} pulse and {texture} atmosphere.",
+                transition: Some("Invite motif"),
+            },
+            SectionTemplate {
+                role: SectionRole::Motif,
+                label: "Motif",
+                energy: SectionEnergy::Medium,
+                base_bars: 20,
+                min_bars: 16,
+                max_bars: 24,
+                prompt_template: "State the {motif} motif in full, letting {arrangement} lock into the {rhythm} while {dynamic} blooms.",
+                transition: Some("Build anticipation"),
+            },
+            SectionTemplate {
+                role: SectionRole::Bridge,
+                label: "Bridge",
+                energy: SectionEnergy::Medium,
+                base_bars: 12,
+                min_bars: 8,
+                max_bars: 16,
+                prompt_template: "Recast the {motif} motif by thinning the layers so {arrangement} can explore contrasting colours before the chorus returns.",
+                transition: Some("Spark chorus"),
+            },
+            SectionTemplate {
+                role: SectionRole::Chorus,
+                label: "Chorus",
+                energy: SectionEnergy::High,
+                base_bars: 24,
+                min_bars: 20,
+                max_bars: 28,
+                prompt_template: "Lift the {motif} motif into an anthemic chorus where {arrangement} drives the groove and {dynamic} peaks.",
+                transition: Some("Glide to outro"),
+            },
+            SectionTemplate {
+                role: SectionRole::Outro,
+                label: "Outro",
+                energy: SectionEnergy::Medium,
+                base_bars: 14,
+                min_bars: 8,
+                max_bars: 18,
+                prompt_template: "Close by reshaping the {motif} motif, letting {arrangement} ease the {rhythm} into a reflective {texture} fade.",
+                transition: Some("Fade to silence"),
+            },
+        ];
+    }
+
+    vec![
+        SectionTemplate {
+            role: SectionRole::Intro,
+            label: "Intro",
+            energy: SectionEnergy::Low,
+            base_bars: 12,
+            min_bars: 8,
+            max_bars: 16,
+            prompt_template: "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop.",
+            transition: Some("Reveal motif"),
+        },
+        SectionTemplate {
+            role: SectionRole::Motif,
+            label: "Motif",
+            energy: SectionEnergy::Medium,
+            base_bars: 18,
+            min_bars: 14,
+            max_bars: 22,
+            prompt_template: "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies.",
+            transition: Some("Ignite chorus"),
+        },
+        SectionTemplate {
+            role: SectionRole::Chorus,
+            label: "Chorus",
+            energy: SectionEnergy::High,
+            base_bars: 24,
+            min_bars: 18,
+            max_bars: 26,
+            prompt_template: "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest.",
+            transition: Some("Settle to outro"),
+        },
+        SectionTemplate {
+            role: SectionRole::Outro,
+            label: "Outro",
+            energy: SectionEnergy::Medium,
+            base_bars: 12,
+            min_bars: 8,
+            max_bars: 16,
+            prompt_template: "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}.",
+            transition: Some("Fade to silence"),
+        },
+    ]
+}
+
+fn select_short_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
+    if duration_seconds >= 24.0 {
+        return vec![
             SectionTemplate {
                 role: SectionRole::Intro,
                 label: "Arrival",
                 energy: SectionEnergy::Low,
-                bars: 4,
+                base_bars: 4,
+                min_bars: 3,
+                max_bars: 6,
                 prompt_template: "Set a {texture} scene for {prompt} by introducing the {motif} motif with {instrumentation} over a {rhythm} pulse.",
                 transition: Some("Fade in layers"),
             },
@@ -504,7 +966,9 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Motif,
                 label: "Statement",
                 energy: SectionEnergy::Medium,
-                bars: 8,
+                base_bars: 8,
+                min_bars: 6,
+                max_bars: 10,
                 prompt_template: "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins.",
                 transition: Some("Build momentum"),
             },
@@ -512,23 +976,19 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Development,
                 label: "Development",
                 energy: SectionEnergy::High,
-                bars: 8,
+                base_bars: 8,
+                min_bars: 6,
+                max_bars: 10,
                 prompt_template: "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds.",
                 transition: Some("Evolve harmonies"),
-            },
-            SectionTemplate {
-                role: SectionRole::Bridge,
-                label: "Bridge",
-                energy: SectionEnergy::Medium,
-                bars: 4,
-                prompt_template: "Shift the palette gently, morphing {instrumentation} into new colours yet echoing the {motif} motif within the {rhythm} feel.",
-                transition: Some("Prepare resolution"),
             },
             SectionTemplate {
                 role: SectionRole::Resolution,
                 label: "Resolution",
                 energy: SectionEnergy::Medium,
-                bars: 4,
+                base_bars: 4,
+                min_bars: 3,
+                max_bars: 6,
                 prompt_template: "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}.",
                 transition: Some("Return home"),
             },
@@ -536,18 +996,24 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Outro,
                 label: "Release",
                 energy: SectionEnergy::Low,
-                bars: 4,
+                base_bars: 4,
+                min_bars: 2,
+                max_bars: 6,
                 prompt_template: "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey.",
                 transition: Some("Fade to silence"),
             },
-        ]
-    } else if duration_seconds >= 16 {
-        vec![
+        ];
+    }
+
+    if duration_seconds >= 16.0 {
+        return vec![
             SectionTemplate {
                 role: SectionRole::Intro,
                 label: "Lead-in",
                 energy: SectionEnergy::Low,
-                bars: 4,
+                base_bars: 4,
+                min_bars: 2,
+                max_bars: 6,
                 prompt_template: "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}.",
                 transition: Some("Invite motif"),
             },
@@ -555,7 +1021,9 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Motif,
                 label: "Motif A",
                 energy: SectionEnergy::Medium,
-                bars: 8,
+                base_bars: 8,
+                min_bars: 6,
+                max_bars: 10,
                 prompt_template: "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows.",
                 transition: Some("Increase energy"),
             },
@@ -563,7 +1031,9 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Development,
                 label: "Variation",
                 energy: SectionEnergy::High,
-                bars: 6,
+                base_bars: 6,
+                min_bars: 4,
+                max_bars: 8,
                 prompt_template: "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies.",
                 transition: Some("Soften textures"),
             },
@@ -571,7 +1041,9 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Resolution,
                 label: "Cadence",
                 energy: SectionEnergy::Medium,
-                bars: 4,
+                base_bars: 4,
+                min_bars: 2,
+                max_bars: 6,
                 prompt_template: "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}.",
                 transition: Some("Release"),
             },
@@ -579,39 +1051,37 @@ fn select_templates(duration_seconds: u8) -> Vec<SectionTemplate> {
                 role: SectionRole::Outro,
                 label: "Tail",
                 energy: SectionEnergy::Low,
-                bars: 2,
+                base_bars: 2,
+                min_bars: 1,
+                max_bars: 4,
                 prompt_template: "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out.",
                 transition: Some("Fade"),
             },
-        ]
-    } else {
-        vec![
-            SectionTemplate {
-                role: SectionRole::Intro,
-                label: "Intro",
-                energy: SectionEnergy::Low,
-                bars: 2,
-                prompt_template: "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}.",
-                transition: Some("Introduce motif"),
-            },
-            SectionTemplate {
-                role: SectionRole::Motif,
-                label: "Motif",
-                energy: SectionEnergy::Medium,
-                bars: 6,
-                prompt_template: "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands.",
-                transition: Some("Lift energy"),
-            },
-            SectionTemplate {
-                role: SectionRole::Resolution,
-                label: "Resolve",
-                energy: SectionEnergy::Medium,
-                bars: 4,
-                prompt_template: "Resolve the story with {instrumentation}, letting the {motif} motif relax across the {rhythm} as {dynamic} softens.",
-                transition: Some("Fade out"),
-            },
-        ]
+        ];
     }
+
+    vec![
+        SectionTemplate {
+            role: SectionRole::Intro,
+            label: "Intro",
+            energy: SectionEnergy::Low,
+            base_bars: 2,
+            min_bars: 1,
+            max_bars: 4,
+            prompt_template: "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}.",
+            transition: Some("Introduce motif"),
+        },
+        SectionTemplate {
+            role: SectionRole::Motif,
+            label: "Motif",
+            energy: SectionEnergy::Medium,
+            base_bars: 6,
+            min_bars: 4,
+            max_bars: 8,
+            prompt_template: "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands.",
+            transition: Some("Lift energy"),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -621,12 +1091,18 @@ mod tests {
     #[test]
     fn builds_plan_with_at_least_three_sections() {
         let planner = CompositionPlanner::new();
-        let plan = planner.build_plan("dreamy piano", 16, Some(42));
+        let requested = 16;
+        let plan = planner.build_plan("dreamy piano", requested, Some(42));
         assert!(plan.sections.len() >= 3);
         assert_eq!(plan.version, PLAN_VERSION);
         assert!(plan.total_duration_seconds > 0.0);
-        assert!(plan.total_duration_seconds >= MIN_TOTAL_SECONDS);
+        assert!(plan.total_duration_seconds + 1.0 >= requested as f32);
         assert!(plan.theme.is_some());
+        assert!(plan.sections.iter().all(|section| section.motif_directive.is_some()));
+        assert!(plan
+            .sections
+            .iter()
+            .any(|section| section.motif_directive.as_deref() == Some("state motif")));
     }
 
     #[test]
@@ -637,5 +1113,6 @@ mod tests {
         assert!(plan.sections.iter().any(|section| matches!(section.role, SectionRole::Motif)));
         assert!(plan.sections.iter().all(|section| section.target_seconds >= 2.0));
         assert!(plan.theme.is_some());
+        assert!(plan.sections.iter().all(|section| section.motif_directive.is_some()));
     }
 }

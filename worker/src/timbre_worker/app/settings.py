@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     config_dir: Path = Field(default_factory=_default_config_dir)
     artifact_root: Path = Field(default_factory=_default_artifact_root)
     default_model_id: str = "musicgen-stereo-medium"
-    default_duration_seconds: int = Field(default=24, ge=1, le=30)
+    default_duration_seconds: int = Field(default=120, ge=1, le=300)
     inference_device: str | None = Field(
         default=None,
         description="Override inference device selection (cpu, mps, cuda).",
@@ -114,6 +114,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _align_backend_defaults(self) -> "Settings":
+        min_duration = 90
+        max_duration = 180
+        if self.default_duration_seconds < min_duration:
+            self.default_duration_seconds = min_duration
+        elif self.default_duration_seconds > max_duration:
+            self.default_duration_seconds = max_duration
+
         if "musicgen_default_model_id" not in self.model_fields_set:
             if self.default_model_id.lower().startswith("musicgen"):
                 self.musicgen_default_model_id = self.default_model_id

@@ -11,6 +11,8 @@ use std::time::Duration as StdDuration;
 
 const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
+const MIN_DURATION_SECONDS: u8 = 90;
+const MAX_DURATION_SECONDS: u8 = 180;
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -71,6 +73,76 @@ pub struct ChatEntry {
 pub struct LocalArtifact {
     pub descriptor: GenerationArtifact,
     pub local_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackendHealthStatus {
+    pub name: String,
+    pub ready: bool,
+    pub device: Option<String>,
+    pub dtype: Option<String>,
+    pub error: Option<String>,
+    pub details: Vec<(String, String)>,
+    pub updated_at: Option<String>,
+}
+
+impl BackendHealthStatus {
+    fn from_json(name: &str, value: &Value) -> Self {
+        let ready = value.get("ready").and_then(Value::as_bool).unwrap_or(false);
+        let device = value.get("device").and_then(Value::as_str).map(ToString::to_string);
+        let dtype = value.get("dtype").and_then(Value::as_str).map(ToString::to_string);
+        let error = value.get("error").and_then(Value::as_str).map(ToString::to_string);
+        let updated_at = value.get("updated_at").and_then(Value::as_str).map(ToString::to_string);
+        let details = value
+            .get("details")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .map(|(key, val)| (key.clone(), format_detail_value(val)))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Self { name: name.to_string(), ready, device, dtype, error, details, updated_at }
+    }
+
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(device) = &self.device {
+            parts.push(format!("dev {device}"));
+        }
+        if let Some(dtype) = &self.dtype {
+            parts.push(format!("dtype {dtype}"));
+        }
+        if parts.is_empty() {
+            if self.ready {
+                parts.push("ready".to_string());
+            } else {
+                parts.push("warming".to_string());
+            }
+        }
+        parts.join(", ")
+    }
+}
+
+fn format_detail_value(value: &Value) -> String {
+    match value {
+        Value::Bool(v) => v.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Null => "null".to_string(),
+        Value::Array(items) => {
+            let joined = items.iter().map(format_detail_value).collect::<Vec<_>>().join(", ");
+            format!("[{joined}]")
+        }
+        Value::Object(map) => {
+            let joined = map
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", format_detail_value(v)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{{joined}}}")
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +220,7 @@ pub struct AppState {
     pub chat_following: bool,
     pub status_following: bool,
     pub input_mode: InputMode,
+    pub backend_status: Vec<BackendHealthStatus>,
     app_config: AppConfig,
     generation_config: GenerationConfig,
     playback: Option<PlaybackState>,
@@ -169,6 +242,7 @@ impl AppState {
             chat_following: true,
             status_following: true,
             input_mode: InputMode::Normal,
+            backend_status: Vec::new(),
             playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
@@ -280,6 +354,17 @@ impl AppState {
         }
     }
 
+    pub fn ingest_health_payload(&mut self, payload: &Value) {
+        if let Some(map) = payload.get("backend_status").and_then(Value::as_object) {
+            let mut statuses: Vec<BackendHealthStatus> = map
+                .iter()
+                .map(|(name, value)| BackendHealthStatus::from_json(name, value))
+                .collect();
+            statuses.sort_by(|a, b| a.name.cmp(&b.name));
+            self.backend_status = statuses;
+        }
+    }
+
     pub fn append_chat(&mut self, role: ChatRole, content: String) {
         self.chat.push(ChatEntry { role, content, timestamp: Utc::now() });
         if self.chat.len() > MAX_CHAT_ENTRIES {
@@ -355,9 +440,11 @@ impl AppState {
                     .first()
                     .ok_or_else(|| "Usage: /duration <seconds>".to_string())?
                     .parse::<u8>()
-                    .map_err(|_| "Duration must be an integer (1-30)".to_string())?;
-                if !(1..=30).contains(&value) {
-                    return Err("Duration must be between 1 and 30 seconds".to_string());
+                    .map_err(|_| "Duration must be an integer (90-180)".to_string())?;
+                if value < MIN_DURATION_SECONDS || value > MAX_DURATION_SECONDS {
+                    return Err(format!(
+                        "Duration must be between {MIN_DURATION_SECONDS} and {MAX_DURATION_SECONDS} seconds"
+                    ));
                 }
                 self.generation_config.duration_seconds = value;
                 Ok(format!("Duration set to {value}s"))
@@ -409,8 +496,9 @@ impl AppState {
             }
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
-                "Commands: /duration <1-30>, /model <id>, /cfg <scale|off>, /seed <value|off>, /show, /reset"
-                    .to_string(),
+                format!(
+                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /cfg <scale|off>, /seed <value|off>, /show, /reset"
+                ),
             ),
             other => Err(format!("Unknown command `{other}`")),
         }
@@ -643,6 +731,17 @@ fn plan_summary(plan: &CompositionPlan) -> String {
         .collect::<Vec<String>>()
         .join(" → ");
     parts.push(format!("flow: {flow}"));
+    if plan.sections.iter().any(|section| section.motif_directive.is_some()) {
+        let motif_arc = plan
+            .sections
+            .iter()
+            .map(|section| {
+                section.motif_directive.clone().unwrap_or_else(|| format!("{:?}", section.role))
+            })
+            .collect::<Vec<String>>()
+            .join(" → ");
+        parts.push(format!("motif arc: {motif_arc}"));
+    }
     parts.join(" | ")
 }
 
@@ -808,9 +907,9 @@ mod tests {
     #[test]
     fn handle_command_updates_duration() {
         let mut state = AppState::new(AppConfig::default());
-        let result = state.handle_command("/duration 12");
+        let result = state.handle_command("/duration 120");
         assert!(result.is_ok());
-        assert_eq!(state.generation_config.duration_seconds, 12);
+        assert_eq!(state.generation_config.duration_seconds, 120);
     }
 
     #[test]
@@ -823,15 +922,38 @@ mod tests {
     #[test]
     fn build_request_reflects_generation_config() {
         let mut state = AppState::new(AppConfig::default());
-        let _ = state.handle_command("/duration 10");
+        let _ = state.handle_command("/duration 120");
         let _ = state.handle_command("/cfg 6.5");
         let _ = state.handle_command("/seed 77");
         let (request, plan) = state.build_generation_payload("lively strings");
-        assert_eq!(request.duration_seconds, 10);
+        assert_eq!(request.duration_seconds, 120);
         assert_eq!(request.cfg_scale, Some(6.5));
         assert_eq!(request.seed, Some(77));
         assert_eq!(request.model_id, "musicgen-stereo-medium");
         assert!(request.plan.is_some());
         assert_eq!(plan.sections.len(), request.plan.as_ref().unwrap().sections.len());
+    }
+
+    #[test]
+    fn ingest_health_payload_populates_backend_status() {
+        let mut state = AppState::new(AppConfig::default());
+        let payload = json!({
+            "backend_status": {
+                "musicgen": {
+                    "ready": true,
+                    "device": "cpu",
+                    "details": {"sample_rate": 32000},
+                    "updated_at": "2024-01-01T00:00:00Z"
+                }
+            }
+        });
+
+        state.ingest_health_payload(&payload);
+        assert_eq!(state.backend_status.len(), 1);
+        let status = &state.backend_status[0];
+        assert_eq!(status.name, "musicgen");
+        assert!(status.ready);
+        assert_eq!(status.device.as_deref(), Some("cpu"));
+        assert!(status.details.iter().any(|(key, value)| key == "sample_rate" && value == "32000"));
     }
 }

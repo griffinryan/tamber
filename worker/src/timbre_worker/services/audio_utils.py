@@ -175,17 +175,32 @@ def fit_to_length(
     data, was_mono = _as_two_dimensional(trimmed)
 
     if data.shape[0] > target_samples:
-        start = max(0, (data.shape[0] - target_samples) // 2)
-        end = start + target_samples
-        data = data[start:end]
+        start = max(0, data.shape[0] - target_samples)
+        data = data[start:]
     elif data.shape[0] < target_samples:
-        fade_samples = int(max(1, math.floor(sample_rate * 0.05)))
-        fade_samples = min(fade_samples, data.shape[0])
-        fade = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
-        tail = data[-fade_samples:]
-        data[-fade_samples:] = tail * fade
-        pad = np.zeros((target_samples - data.shape[0], data.shape[1]), dtype=np.float32)
-        data = np.vstack((data, pad))
+        loop_window = min(data.shape[0], max(1, int(sample_rate * 0.5)))
+        if loop_window <= 1:
+            pad = np.zeros(
+                (target_samples - data.shape[0], data.shape[1]),
+                dtype=np.float32,
+            )
+            data = np.vstack((data, pad))
+        else:
+            fade_samples = int(max(1, math.floor(sample_rate * 0.05)))
+            fade_samples = min(fade_samples, loop_window - 1)
+            loop_segment = data[-loop_window:].copy()
+            extended = data.copy()
+            while extended.shape[0] < target_samples:
+                remaining = target_samples - extended.shape[0]
+                chunk = loop_segment
+                if remaining < loop_segment.shape[0]:
+                    chunk = loop_segment[-remaining:].copy()
+                extended = crossfade_append(
+                    extended,
+                    chunk,
+                    max(1, fade_samples),
+                )
+            data = extended[:target_samples]
 
     if was_mono:
         return data.reshape(-1)
