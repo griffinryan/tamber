@@ -82,6 +82,8 @@ class MusicGenService:
         self._temperature = settings.musicgen_temperature if settings is not None else None
         self._cfg_coef = settings.musicgen_cfg_coef if settings is not None else None
         self._two_step_cfg = settings.musicgen_two_step_cfg if settings is not None else None
+        self._supports_two_step_cfg = False
+        self._two_step_warning_emitted = False
 
     @property
     def default_model_id(self) -> str:
@@ -236,6 +238,42 @@ class MusicGenService:
             self._handles[model_id] = handle
         return handle, None
 
+    def _build_generation_kwargs(
+        self,
+        *,
+        max_new_tokens: int,
+        top_k: Optional[int],
+        top_p: Optional[float],
+        temperature: Optional[float],
+        cfg_coef: Optional[float],
+        two_step_cfg: Optional[bool],
+    ) -> Tuple[Dict[str, Any], bool]:
+        """Assemble arguments for MusicGen.generate and report two-step CFG usage."""
+        generation_kwargs: Dict[str, Any] = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": True,
+        }
+        if top_k is not None and top_k > 0:
+            generation_kwargs["top_k"] = int(top_k)
+        if top_p is not None and 0.0 < top_p <= 1.0:
+            generation_kwargs["top_p"] = float(top_p)
+        if temperature is not None and temperature > 0.0:
+            generation_kwargs["temperature"] = float(temperature)
+        if cfg_coef is not None and cfg_coef > 0.0:
+            generation_kwargs["guidance_scale"] = float(cfg_coef)
+
+        requested_two_step = bool(two_step_cfg) if two_step_cfg is not None else None
+        applied_two_step = bool(requested_two_step) and self._supports_two_step_cfg
+        if requested_two_step and not self._supports_two_step_cfg:
+            if not self._two_step_warning_emitted:
+                logger.warning(
+                    "MusicGen two-step classifier-free guidance is not supported by the current "
+                    "transformers backend; ignoring request."
+                )
+                self._two_step_warning_emitted = True
+
+        return generation_kwargs, applied_two_step
+
     def _generate_waveform(
         self,
         handle: ModelHandle,
@@ -261,20 +299,14 @@ class MusicGenService:
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
         tokens = self._seconds_to_tokens(duration_seconds, handle)
-        generation_kwargs: Dict[str, Any] = {
-            "max_new_tokens": tokens,
-            "do_sample": True,
-        }
-        if top_k is not None and top_k > 0:
-            generation_kwargs["top_k"] = int(top_k)
-        if top_p is not None and 0.0 < top_p <= 1.0:
-            generation_kwargs["top_p"] = float(top_p)
-        if temperature is not None and temperature > 0.0:
-            generation_kwargs["temperature"] = float(temperature)
-        if cfg_coef is not None and cfg_coef > 0.0:
-            generation_kwargs["guidance_scale"] = float(cfg_coef)
-        if two_step_cfg is not None:
-            generation_kwargs["do_classifier_free_guidance"] = bool(two_step_cfg)
+        generation_kwargs, two_step_applied = self._build_generation_kwargs(
+            max_new_tokens=tokens,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            cfg_coef=cfg_coef,
+            two_step_cfg=two_step_cfg,
+        )
 
         with torch.no_grad():
             audio_tokens = handle.model.generate(
@@ -308,6 +340,10 @@ class MusicGenService:
         }
         if seed is not None:
             extras["seed"] = seed
+        if two_step_cfg is not None:
+            extras["two_step_cfg"] = bool(two_step_cfg)
+            extras["two_step_cfg_applied"] = two_step_applied
+            extras["two_step_cfg_supported"] = self._supports_two_step_cfg
 
         return waveform, sample_rate, extras
 
@@ -353,10 +389,13 @@ class MusicGenService:
             ("top_p", top_p),
             ("temperature", temperature),
             ("cfg_coef", cfg_coef),
-            ("two_step_cfg", two_step_cfg),
         ):
             if value is not None:
                 extras[key] = value
+        if two_step_cfg is not None:
+            extras["two_step_cfg"] = bool(two_step_cfg)
+            extras["two_step_cfg_applied"] = bool(two_step_cfg) and self._supports_two_step_cfg
+            extras["two_step_cfg_supported"] = self._supports_two_step_cfg
 
         return waveform, sample_rate, extras
 
