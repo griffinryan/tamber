@@ -31,7 +31,7 @@ from .audio_utils import (
 from .musicgen import MusicGenService
 from .planner import CompositionPlanner
 from .riffusion import RiffusionService
-from .types import SectionPhrase, SectionRender, SectionTrack
+from .types import BackendStatus, SectionPhrase, SectionRender, SectionTrack
 
 
 class ComposerOrchestrator:
@@ -49,16 +49,18 @@ class ComposerOrchestrator:
         self._riffusion = riffusion
         self._musicgen = musicgen
         self._artifact_root = settings.artifact_root
+        self._backend_status: Dict[str, BackendStatus] = {}
 
     async def warmup(
         self,
         plan: Optional[CompositionPlan] = None,
         model_hint: Optional[str] = None,
-    ) -> None:
+    ) -> Dict[str, BackendStatus]:
         tokens = self._collect_backend_tokens(plan=plan, model_hint=model_hint)
         if plan is None and model_hint is None:
             tokens.update({"musicgen", "riffusion"})
-        await self._warmup_backends(tokens)
+        statuses = await self._warmup_backends(tokens)
+        return statuses
 
     async def generate(
         self,
@@ -263,15 +265,40 @@ class ComposerOrchestrator:
             return "musicgen"
         return "musicgen"
 
-    async def _warmup_backends(self, tokens: Iterable[str]) -> None:
-        tasks = []
+    async def _warmup_backends(self, tokens: Iterable[str]) -> Dict[str, BackendStatus]:
         token_set = set(tokens)
+        task_map: list[tuple[str, asyncio.Task[BackendStatus]]] = []
         if "musicgen" in token_set:
-            tasks.append(self._musicgen.warmup())
+            task_map.append(("musicgen", asyncio.create_task(self._musicgen.warmup())))
         if "riffusion" in token_set:
-            tasks.append(self._riffusion.warmup())
-        if tasks:
-            await asyncio.gather(*tasks)
+            task_map.append(("riffusion", asyncio.create_task(self._riffusion.warmup())))
+
+        statuses: Dict[str, BackendStatus] = {}
+        if not task_map:
+            return statuses
+
+        for name, task in task_map:
+            try:
+                status = await task
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Backend %s warmup failed", name)
+                status = BackendStatus(
+                    name=name,
+                    ready=False,
+                    device=None,
+                    dtype=None,
+                    error=str(exc),
+                )
+            self._backend_status[name] = status
+            statuses[name] = status
+        logger.info(
+            "Backend warmup status: %s",
+            {name: status.ready for name, status in statuses.items()},
+        )
+        return statuses
+
+    def backend_status(self) -> Dict[str, BackendStatus]:
+        return dict(self._backend_status)
 
     def _build_phrase_plan(self, plan: CompositionPlan) -> List[SectionPhrase]:
         tempo = max(plan.tempo_bpm, 1)

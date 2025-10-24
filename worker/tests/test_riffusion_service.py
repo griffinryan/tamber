@@ -67,6 +67,22 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_riffusion_warmup_reports_status(tmp_path: Path) -> None:
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+        riffusion_allow_inference=False,
+    )
+    settings.ensure_directories()
+    service = RiffusionService(settings)
+
+    status = await service.warmup()
+    assert status.name == "riffusion"
+    assert status.ready is False
+    assert status.details.get("pipeline_loaded") is False
+
+
+@pytest.mark.asyncio
 async def test_placeholder_audio_varies_by_prompt(tmp_path: Path) -> None:
     settings = Settings(
         artifact_root=tmp_path / "artifacts",

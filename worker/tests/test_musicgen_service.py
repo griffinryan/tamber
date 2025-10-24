@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from timbre_worker.services.musicgen import MusicGenService
 
@@ -40,3 +41,18 @@ def test_placeholder_waveform_reports_two_step_support() -> None:
     assert extras["two_step_cfg"] is True
     assert extras["two_step_cfg_applied"] is True
     assert extras["two_step_cfg_supported"] is True
+
+
+@pytest.mark.asyncio
+async def test_musicgen_warmup_reports_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = MusicGenService()
+
+    async def _fake_ensure(model_id: str):  # type: ignore[override]
+        return None, "load_skipped"
+
+    monkeypatch.setattr(service, "_ensure_model", _fake_ensure)
+
+    status = await service.warmup()
+    assert status.name == "musicgen"
+    assert status.ready is False
+    assert status.error == "load_skipped"

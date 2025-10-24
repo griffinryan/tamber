@@ -42,7 +42,7 @@ from .audio_utils import (
     write_waveform,
 )
 from .riffusion_spectrogram import SpectrogramImageDecoder, SpectrogramParams
-from .types import SectionRender
+from .types import BackendStatus, SectionRender
 
 try:  # pragma: no cover - optional dependency imports are validated at runtime
     import torch
@@ -97,13 +97,51 @@ class RiffusionService:
         self._default_steps = settings.riffusion_num_inference_steps
         self._default_scheduler = settings.riffusion_scheduler
         self._enable_phase_refinement = settings.riffusion_enable_phase_refinement
+        self._last_status: Optional[BackendStatus] = None
 
     @property
     def default_model_id(self) -> str:
         return self._default_model_id
 
-    async def warmup(self) -> None:
-        await self._ensure_pipeline(self._default_model_id)
+    async def warmup(self) -> BackendStatus:
+        handle, reason = await self._ensure_pipeline(self._default_model_id)
+        pipeline_ready = handle is not None
+        decoder_ready = False
+        decoder_error = None
+        decoder_mode = None
+        if pipeline_ready:
+            decoder = self._resolve_spectrogram_decoder(handle.sample_rate)
+            decoder_ready = decoder is not None
+            decoder_mode = self._spectrogram_mode
+            if not decoder_ready:
+                decoder_error = self._spectrogram_error
+        else:
+            decoder_error = reason
+
+        ready = pipeline_ready and decoder_ready
+        details: Dict[str, Any] = {
+            "pipeline_loaded": pipeline_ready,
+            "decoder_ready": decoder_ready,
+        }
+        if decoder_mode:
+            details["decoder_mode"] = decoder_mode
+        if handle is not None:
+            details["sample_rate"] = handle.sample_rate
+        if reason and not pipeline_ready:
+            details["pipeline_error"] = reason
+        status = BackendStatus(
+            name="riffusion",
+            ready=ready,
+            device=self._device if pipeline_ready else None,
+            dtype=str(self._dtype) if self._dtype is not None and pipeline_ready else None,
+            error=decoder_error,
+            details=details,
+        )
+        self._last_status = status
+        return status
+
+    def backend_status(self) -> Optional[BackendStatus]:
+        return self._last_status
 
     async def render_section(
         self,

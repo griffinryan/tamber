@@ -74,6 +74,76 @@ pub struct LocalArtifact {
 }
 
 #[derive(Debug, Clone)]
+pub struct BackendHealthStatus {
+    pub name: String,
+    pub ready: bool,
+    pub device: Option<String>,
+    pub dtype: Option<String>,
+    pub error: Option<String>,
+    pub details: Vec<(String, String)>,
+    pub updated_at: Option<String>,
+}
+
+impl BackendHealthStatus {
+    fn from_json(name: &str, value: &Value) -> Self {
+        let ready = value.get("ready").and_then(Value::as_bool).unwrap_or(false);
+        let device = value.get("device").and_then(Value::as_str).map(ToString::to_string);
+        let dtype = value.get("dtype").and_then(Value::as_str).map(ToString::to_string);
+        let error = value.get("error").and_then(Value::as_str).map(ToString::to_string);
+        let updated_at = value.get("updated_at").and_then(Value::as_str).map(ToString::to_string);
+        let details = value
+            .get("details")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .map(|(key, val)| (key.clone(), format_detail_value(val)))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Self { name: name.to_string(), ready, device, dtype, error, details, updated_at }
+    }
+
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(device) = &self.device {
+            parts.push(format!("dev {device}"));
+        }
+        if let Some(dtype) = &self.dtype {
+            parts.push(format!("dtype {dtype}"));
+        }
+        if parts.is_empty() {
+            if self.ready {
+                parts.push("ready".to_string());
+            } else {
+                parts.push("warming".to_string());
+            }
+        }
+        parts.join(", ")
+    }
+}
+
+fn format_detail_value(value: &Value) -> String {
+    match value {
+        Value::Bool(v) => v.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Null => "null".to_string(),
+        Value::Array(items) => {
+            let joined = items.iter().map(format_detail_value).collect::<Vec<_>>().join(", ");
+            format!("[{joined}]")
+        }
+        Value::Object(map) => {
+            let joined = map
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", format_detail_value(v)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{{joined}}}")
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct JobEntry {
     pub prompt: String,
     pub request: GenerationRequest,
@@ -148,6 +218,7 @@ pub struct AppState {
     pub chat_following: bool,
     pub status_following: bool,
     pub input_mode: InputMode,
+    pub backend_status: Vec<BackendHealthStatus>,
     app_config: AppConfig,
     generation_config: GenerationConfig,
     playback: Option<PlaybackState>,
@@ -169,6 +240,7 @@ impl AppState {
             chat_following: true,
             status_following: true,
             input_mode: InputMode::Normal,
+            backend_status: Vec::new(),
             playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
@@ -277,6 +349,17 @@ impl AppState {
             AppEvent::WorkerNudge { message } => {
                 self.append_chat(ChatRole::Worker, message);
             }
+        }
+    }
+
+    pub fn ingest_health_payload(&mut self, payload: &Value) {
+        if let Some(map) = payload.get("backend_status").and_then(Value::as_object) {
+            let mut statuses: Vec<BackendHealthStatus> = map
+                .iter()
+                .map(|(name, value)| BackendHealthStatus::from_json(name, value))
+                .collect();
+            statuses.sort_by(|a, b| a.name.cmp(&b.name));
+            self.backend_status = statuses;
         }
     }
 
@@ -844,5 +927,28 @@ mod tests {
         assert_eq!(request.model_id, "musicgen-stereo-medium");
         assert!(request.plan.is_some());
         assert_eq!(plan.sections.len(), request.plan.as_ref().unwrap().sections.len());
+    }
+
+    #[test]
+    fn ingest_health_payload_populates_backend_status() {
+        let mut state = AppState::new(AppConfig::default());
+        let payload = json!({
+            "backend_status": {
+                "musicgen": {
+                    "ready": true,
+                    "device": "cpu",
+                    "details": {"sample_rate": 32000},
+                    "updated_at": "2024-01-01T00:00:00Z"
+                }
+            }
+        });
+
+        state.ingest_health_payload(&payload);
+        assert_eq!(state.backend_status.len(), 1);
+        let status = &state.backend_status[0];
+        assert_eq!(status.name, "musicgen");
+        assert!(status.ready);
+        assert_eq!(status.device.as_deref(), Some("cpu"));
+        assert!(status.details.iter().any(|(key, value)| key == "sample_rate" && value == "32000"));
     }
 }

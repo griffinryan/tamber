@@ -20,9 +20,23 @@ def get_job_manager(request: Request) -> JobManager:
 async def health(request: Request) -> dict[str, object]:
     settings = cast(Settings, request.app.state.settings)
     composer = getattr(request.app.state, "composer", None)
-    available_backends: list[str] = []
+    status_map = getattr(request.app.state, "backend_status", {})
+    backend_status: dict[str, object] = {}
+    if isinstance(status_map, dict):
+        for name, status in status_map.items():
+            if hasattr(status, "as_dict"):
+                backend_status[name] = status.as_dict()  # type: ignore[attr-defined]
+            else:
+                backend_status[name] = status
     if composer is not None:
-        available_backends = ["riffusion", "musicgen"]
+        composer_status = composer.backend_status()
+        for name, status in composer_status.items():
+            backend_status[name] = status.as_dict()
+
+    available_backends = sorted(backend_status.keys())
+    warmup_complete = bool(backend_status) and all(
+        isinstance(value, dict) and value.get("ready") for value in backend_status.values()
+    )
     return {
         "status": "ok",
         "default_model_id": settings.default_model_id,
@@ -31,6 +45,8 @@ async def health(request: Request) -> dict[str, object]:
         "artifact_root": str(settings.artifact_root),
         "planner_version": PLAN_VERSION,
         "available_backends": available_backends,
+        "backend_status": backend_status,
+        "warmup_complete": warmup_complete,
     }
 
 

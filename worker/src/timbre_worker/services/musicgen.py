@@ -18,7 +18,7 @@ from ..app.models import (
 )
 from ..app.settings import Settings
 from .audio_utils import ensure_waveform_channels, resample_waveform
-from .types import SectionRender
+from .types import BackendStatus, SectionRender
 
 try:  # pragma: no cover - deferred dependency import
     import torch
@@ -83,13 +83,36 @@ class MusicGenService:
         self._cfg_coef = settings.musicgen_cfg_coef if settings is not None else None
         self._two_step_cfg = settings.musicgen_two_step_cfg if settings is not None else None
         self._supports_two_step_cfg = True
+        self._last_status: Optional[BackendStatus] = None
 
     @property
     def default_model_id(self) -> str:
         return self._default_model_id
 
-    async def warmup(self) -> None:
-        await self._ensure_model(self._default_model_id)
+    async def warmup(self) -> BackendStatus:
+        handle, reason = await self._ensure_model(self._default_model_id)
+        ready = handle is not None
+        details: Dict[str, Any] = {}
+        if handle is not None:
+            details.update(
+                {
+                    "sample_rate": handle.sample_rate,
+                    "frame_rate": handle.frame_rate,
+                }
+            )
+        status = BackendStatus(
+            name="musicgen",
+            ready=ready,
+            device=self._device if ready else None,
+            dtype=None,
+            error=reason,
+            details=details,
+        )
+        self._last_status = status
+        return status
+
+    def backend_status(self) -> Optional[BackendStatus]:
+        return self._last_status
 
     async def render_section(
         self,

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -51,3 +52,30 @@ class SectionTrack:
         return float(
             np.asarray(waveform, dtype=np.float32).shape[0] / self.render.sample_rate
         )
+
+
+@dataclass
+class BackendStatus:
+    name: str
+    ready: bool
+    device: Optional[str]
+    dtype: Optional[str]
+    error: Optional[str]
+    details: Dict[str, Any] = field(default_factory=dict)
+    updated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+
+    def as_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "name": self.name,
+            "ready": self.ready,
+            "updated_at": self.updated_at.isoformat(),
+        }
+        if self.device is not None:
+            payload["device"] = self.device
+        if self.dtype is not None:
+            payload["dtype"] = self.dtype
+        if self.error is not None:
+            payload["error"] = self.error
+        if self.details:
+            payload["details"] = self.details
+        return payload

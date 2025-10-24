@@ -75,11 +75,16 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
 
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(20),
+            Constraint::Percentage(30),
+        ])
         .split(layout[1]);
 
     render_jobs(frame, right[0], app);
-    render_status(frame, right[1], app);
+    render_backend_diagnostics(frame, right[1], app);
+    render_status(frame, right[2], app);
 }
 
 fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
@@ -150,6 +155,91 @@ fn render_jobs(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
         .block(block)
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
     frame.render_widget(list, area);
+}
+
+fn render_backend_diagnostics(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    if app.backend_status.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "Awaiting backend telemetry…",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    } else {
+        for status in &app.backend_status {
+            let style = if status.ready {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            };
+            let prefix = if status.ready { "✔" } else { "!" };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::raw(" "),
+                Span::styled(status.name.clone(), style),
+                Span::raw(" "),
+                Span::styled(status.summary(), Style::default().fg(Color::Gray)),
+            ]));
+            for (key, value) in &status.details {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {key}: {value}"),
+                    Style::default().fg(Color::DarkGray),
+                )]));
+            }
+            if let Some(error) = &status.error {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  error: {error}"),
+                    Style::default().fg(Color::Red),
+                )]));
+            }
+            if let Some(updated_at) = &status.updated_at {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  updated {updated_at}"),
+                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                )]));
+            }
+            lines.push(Line::default());
+        }
+        if lines.last().map(|line| line.spans.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+    }
+
+    if let Some((_id, job)) = app.selected_job() {
+        if let Some(summary) = conditioning_summary(job) {
+            lines.push(Line::default());
+            lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "Conditioning: {} sections (avg tail {:.2}s · max tail {:.2}s · avg pad {:.2}s)",
+                    summary.phrase_sections,
+                    summary.avg_tail,
+                    summary.max_tail,
+                    summary.avg_padding,
+                ),
+                Style::default().fg(Color::LightYellow),
+            )]));
+            if summary.missing_tails > 0 {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  missing tails: {}", summary.missing_tails),
+                    Style::default().fg(Color::Magenta),
+                )]));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "No backend data yet.",
+            Style::default().fg(Color::Gray),
+        )]));
+    }
+
+    let mut block = Block::default().title("Backends").borders(Borders::ALL);
+    if matches!(app.focused_pane, FocusedPane::Status) {
+        block = block.border_style(pane_border(app, FocusedPane::Status));
+    }
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
 }
 
 fn job_list_item(app: &AppState, job_id: &str, job: &JobEntry) -> ListItem<'static> {
@@ -576,6 +666,14 @@ fn plan_status_lines(job: &JobEntry) -> Vec<Line<'static>> {
     lines
 }
 
+struct ConditioningSummary {
+    phrase_sections: usize,
+    avg_padding: f32,
+    avg_tail: f32,
+    max_tail: f32,
+    missing_tails: usize,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct SectionExtras {
     #[serde(default)]
@@ -645,6 +743,50 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, SectionExtras> {
         }
     }
     map
+}
+
+fn conditioning_summary(job: &JobEntry) -> Option<ConditioningSummary> {
+    let extras = extract_section_extras(job);
+    if extras.is_empty() {
+        return None;
+    }
+
+    let mut phrase_sections = 0;
+    let mut padding_sum = 0.0;
+    let mut padding_count = 0;
+    let mut tail_sum = 0.0;
+    let mut tail_count = 0;
+    let mut max_tail = 0.0;
+    let mut missing_tails = 0;
+
+    for extra in extras.values() {
+        if let Some(phrase) = &extra.phrase {
+            phrase_sections += 1;
+            if let Some(padding) = phrase.padding_seconds {
+                padding_sum += padding;
+                padding_count += 1;
+            }
+            match phrase.conditioning_tail_seconds {
+                Some(tail) if tail > 0.0 => {
+                    tail_sum += tail;
+                    tail_count += 1;
+                    if tail > max_tail {
+                        max_tail = tail;
+                    }
+                }
+                _ => missing_tails += 1,
+            }
+        }
+    }
+
+    if phrase_sections == 0 {
+        return None;
+    }
+
+    let avg_padding = if padding_count > 0 { padding_sum / padding_count as f32 } else { 0.0 };
+    let avg_tail = if tail_count > 0 { tail_sum / tail_count as f32 } else { 0.0 };
+
+    Some(ConditioningSummary { phrase_sections, avg_padding, avg_tail, max_tail, missing_tails })
 }
 
 fn plan_section_line(
