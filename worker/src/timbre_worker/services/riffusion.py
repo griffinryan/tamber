@@ -4,11 +4,23 @@ import asyncio
 import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 from loguru import logger
-from PIL import Image
+
+try:  # pragma: no cover - optional dependency import
+    from PIL import Image
+except Exception as exc:  # noqa: BLE001
+    Image = None  # type: ignore[assignment]
+    PIL_IMPORT_ERROR = exc
+else:  # pragma: no cover
+    PIL_IMPORT_ERROR = None
+
+if TYPE_CHECKING:  # pragma: no cover - typing aid only
+    from PIL import Image as PILImage  # noqa: F401
+else:
+    PILImage = Any
 
 from ..app.models import (
     CompositionPlan,
@@ -531,7 +543,7 @@ class RiffusionService:
         duration_seconds: float,
         guidance_scale: float,
         seed: Optional[int],
-        init_image: Optional[Image.Image],
+        init_image: Optional[PILImage],
         init_strength: Optional[float],
         num_inference_steps: int,
         scheduler_name: Optional[str],
@@ -735,6 +747,11 @@ class RiffusionService:
             return f"torch_unavailable:{detail};{guidance}"
         return "unknown"
 
+    def _pillow_reason(self) -> str:
+        guidance = "run `uv sync --project worker --extra inference` to install pillow"
+        detail = PIL_IMPORT_ERROR or "not installed"
+        return f"pillow_unavailable:{detail};{guidance}"
+
     def _compose_prompt(
         self,
         base_prompt: str,
@@ -796,7 +813,9 @@ class RiffusionService:
         )
         return decoder
 
-    def _prepare_init_image(self, render: SectionRender) -> Optional[Image.Image]:
+    def _prepare_init_image(self, render: SectionRender) -> Optional[PILImage]:
+        if Image is None:
+            return None
         if render.waveform.size == 0:
             return None
         decoder = self._resolve_spectrogram_decoder(render.sample_rate)
@@ -820,12 +839,15 @@ class RiffusionService:
         result: Any,
         default_sample_rate: int,
     ) -> Tuple[np.ndarray, int]:
+        if Image is None:
+            raise GenerationFailure(self._pillow_reason())
+
         images = getattr(result, "images", None)
         if not images:
             raise GenerationFailure("pipeline returned empty audio result")
 
         raw_image = images[0]
-        if isinstance(raw_image, Image.Image):
+        if Image is not None and isinstance(raw_image, Image.Image):
             pil_image = raw_image
         else:
             array = np.asarray(raw_image)
@@ -834,6 +856,8 @@ class RiffusionService:
                 if upper_bound <= 1.0:
                     array = np.clip(array, 0.0, 1.0) * 255.0
                 array = np.clip(array, 0.0, 255.0).astype(np.uint8)
+            if Image is None:
+                raise GenerationFailure(self._pillow_reason())
             if array.ndim == 2:
                 pil_image = Image.fromarray(array, mode="L").convert("RGB")
             else:

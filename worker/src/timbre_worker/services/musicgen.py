@@ -154,7 +154,7 @@ class MusicGenService:
             extras["backend"] = "musicgen"
             extras["device"] = "placeholder"
         else:
-            inputs, conditioning_extras = self._prepare_model_inputs(
+            inputs, conditioning_args, conditioning_extras = self._prepare_model_inputs(
                 handle,
                 prompt_text,
                 motif_seed=motif_seed,
@@ -165,6 +165,7 @@ class MusicGenService:
                 self._generate_waveform,
                 handle,
                 inputs,
+                conditioning_args,
                 prompt_text,
                 duration,
                 section_seed,
@@ -291,7 +292,8 @@ class MusicGenService:
     def _generate_waveform(
         self,
         handle: ModelHandle,
-        inputs: Any,
+        inputs: Dict[str, "torch.Tensor"],
+        conditioning_args: Dict[str, "torch.Tensor"],
         prompt: str,
         duration_seconds: float,
         seed: Optional[int],
@@ -302,14 +304,11 @@ class MusicGenService:
         two_step_cfg: Optional[bool],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         assert torch is not None
-        if hasattr(inputs, "to"):
-            inputs = inputs.to(self._device)
-        else:
-            inputs = {key: value.to(self._device) for key, value in inputs.items()}
-        if hasattr(inputs, "data"):
-            model_inputs = dict(inputs.data)
-        else:
-            model_inputs = inputs
+        model_inputs = {key: value.to(self._device) for key, value in inputs.items()}
+        conditioning_payload = {
+            key: value.to(self._device)
+            for key, value in conditioning_args.items()
+        }
 
         generator = None
         if seed is not None:
@@ -328,6 +327,7 @@ class MusicGenService:
         with torch.no_grad():
             audio_tokens = handle.model.generate(
                 **model_inputs,
+                **conditioning_payload,
                 generator=generator,
                 **generation_kwargs,
             )
@@ -486,38 +486,50 @@ class MusicGenService:
         motif_seed: SectionRender | None,
         previous_render: SectionRender | None,
         conditioning_requested: bool,
-    ) -> Tuple[Any, Dict[str, Any]]:
+    ) -> Tuple[Dict[str, "torch.Tensor"], Dict[str, "torch.Tensor"], Dict[str, Any]]:
         audio_prompt, audio_meta = self._build_audio_prompt(
             handle,
             motif_seed=motif_seed,
             previous_render=previous_render,
         )
-        extras: Dict[str, Any] = {
-            "audio_conditioning_requested": conditioning_requested,
-        }
+        extras: Dict[str, Any] = {"audio_conditioning_requested": conditioning_requested}
         extras.update(audio_meta)
 
-        processor_kwargs: Dict[str, Any] = {
-            "text": [prompt],
-            "padding": True,
-            "return_tensors": "pt",
-        }
-        if audio_prompt is not None:
-            processor_kwargs["audio"] = [audio_prompt]
-            processor_kwargs["sampling_rate"] = handle.sample_rate
-
         try:
-            inputs = handle.processor(**processor_kwargs)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("MusicGen conditioning failed during preprocessing: %s", exc)
-            extras["audio_conditioning_applied"] = False
-            extras["audio_conditioning_error"] = str(exc)
             inputs = handle.processor(
                 text=[prompt],
                 padding=True,
                 return_tensors="pt",
             )
-        return inputs, extras
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MusicGen text processing failed: {}", exc)
+            raise
+
+        inputs = {key: value.to(self._device) for key, value in inputs.items()}
+
+        conditioning_args: Dict[str, "torch.Tensor"] = {}
+        if audio_prompt is not None:
+            try:
+                audio_features = handle.processor(
+                    audio=[audio_prompt],
+                    sampling_rate=handle.sample_rate,
+                    return_tensors="pt",
+                )
+                audio_values = audio_features.get("audio_values")
+                if audio_values is not None:
+                    conditioning_args["audio_prompt"] = audio_values.to(self._device)
+                attention_mask = audio_features.get("audio_attention_mask")
+                if attention_mask is not None:
+                    conditioning_args["audio_prompt_attention_mask"] = attention_mask.to(
+                        self._device
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("MusicGen audio conditioning failed to prepare: {}", exc)
+                extras["audio_conditioning_applied"] = False
+                extras["audio_conditioning_error"] = str(exc)
+                conditioning_args.clear()
+
+        return inputs, conditioning_args, extras
 
     def _build_audio_prompt(
         self,
@@ -567,10 +579,12 @@ class MusicGenService:
             }
 
         combined = np.concatenate(segments).astype(np.float32)
-        return combined, {
+        stereo = np.stack([combined, combined], axis=0).astype(np.float32)
+        return stereo, {
             "audio_conditioning_applied": True,
             "audio_prompt_seconds": float(combined.size / handle.sample_rate),
             "audio_prompt_segments": segment_meta,
+            "audio_prompt_channels": 2,
         }
 
     def _prepare_audio_prompt_segment(
