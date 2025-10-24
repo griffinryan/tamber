@@ -82,8 +82,7 @@ class MusicGenService:
         self._temperature = settings.musicgen_temperature if settings is not None else None
         self._cfg_coef = settings.musicgen_cfg_coef if settings is not None else None
         self._two_step_cfg = settings.musicgen_two_step_cfg if settings is not None else None
-        self._supports_two_step_cfg = False
-        self._two_step_warning_emitted = False
+        self._supports_two_step_cfg = True
 
     @property
     def default_model_id(self) -> str:
@@ -262,15 +261,8 @@ class MusicGenService:
         if cfg_coef is not None and cfg_coef > 0.0:
             generation_kwargs["guidance_scale"] = float(cfg_coef)
 
-        requested_two_step = bool(two_step_cfg) if two_step_cfg is not None else None
-        applied_two_step = bool(requested_two_step) and self._supports_two_step_cfg
-        if requested_two_step and not self._supports_two_step_cfg:
-            if not self._two_step_warning_emitted:
-                logger.warning(
-                    "MusicGen two-step classifier-free guidance is not supported by the current "
-                    "transformers backend; ignoring request."
-                )
-                self._two_step_warning_emitted = True
+        requested_two_step = bool(two_step_cfg) if two_step_cfg is not None else False
+        applied_two_step = requested_two_step and self._supports_two_step_cfg
 
         return generation_kwargs, applied_two_step
 
@@ -314,8 +306,13 @@ class MusicGenService:
                 generator=generator,
                 **generation_kwargs,
             )
+        decode_tokens = audio_tokens
+        if hasattr(audio_tokens, "device"):
+            device_type = getattr(audio_tokens.device, "type", None)
+            if device_type == "mps":
+                decode_tokens = audio_tokens.cpu()
 
-        decoded_batch = handle.processor.batch_decode(audio_tokens, return_tensors=True)
+        decoded_batch = handle.processor.batch_decode(decode_tokens, return_tensors=True)
         decoded = decoded_batch[0]
         if hasattr(decoded, "cpu"):
             decoded = decoded.cpu()

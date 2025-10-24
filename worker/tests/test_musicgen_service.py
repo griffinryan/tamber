@@ -17,8 +17,7 @@ def test_build_generation_kwargs_handles_two_step_flag() -> None:
 
     assert "do_classifier_free_guidance" not in kwargs
     assert kwargs["guidance_scale"] == 3.0
-    assert applied is False
-    assert service._two_step_warning_emitted is True  # type: ignore[protected-access]
+    assert applied is True
 
 
 def test_placeholder_waveform_reports_two_step_support() -> None:
@@ -39,5 +38,5 @@ def test_placeholder_waveform_reports_two_step_support() -> None:
     assert isinstance(waveform, np.ndarray)
     assert sample_rate == 32000
     assert extras["two_step_cfg"] is True
-    assert extras["two_step_cfg_applied"] is False
-    assert extras["two_step_cfg_supported"] is False
+    assert extras["two_step_cfg_applied"] is True
+    assert extras["two_step_cfg_supported"] is True
