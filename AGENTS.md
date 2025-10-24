@@ -1,17 +1,17 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `cli/` hosts the Ratatui-based terminal client; `src/main.rs` wires the event loop, `app.rs` models shared state/events, `ui/` renders widgets, `config.rs` loads settings, and `api.rs` wraps worker calls.
-- `worker/` contains the FastAPI backend under `src/timbre_worker`; `app/` defines routers and startup, `services/` owns business logic, and `tests/` mirrors service modules with `test_*.py`.
-- `docs/` stores architectural notes, JSON schemas (`docs/schemas/*.json`), and ADRs; review `docs/architecture.md` before large changes. Automation hooks live in the `Makefile`, with `scripts/` reserved for future helpers.
+- `cli/` hosts the Ratatui client; `src/app.rs` drives state + HTTP, `planner.rs` mirrors the Python planner, `ui/` renders widgets, and `config.rs` loads env/TOML settings. See `cli/README.md` for quick commands.
+- `worker/` contains the FastAPI backend (`src/timbre_worker/app` for routers/settings, `services/` for planner v3, orchestrator, backends, and audio utils). `worker/README.md` documents common workflows.
+- `docs/` holds the authoritative references: `architecture.md`, `COMPOSITION.md`, setup/testing guides, schemas, and ADRs. Automation helpers live in `scripts/`.
 
 ## Build, Test, and Development Commands
 - `make setup` installs Python dependencies via `uv sync --project worker` and prefetches Rust crates.
 - `make setup-musicgen` installs the full inference stack (PyTorch/Diffusers + transformers) so the MusicGen backend returns real audio.
-- `make cli-run` launches the TUI (`cargo run -p timbre-cli`) for manual smoke testing.
-- `make worker-serve` starts the API locally at `http://localhost:8000` with autoreload.
-- `make test` executes the full Rust + Python test matrix; run before pushing.
-- `make lint` runs `cargo fmt --check`, `cargo clippy`, `ruff check`, and `mypy`; resolve warnings or missing fixes.
+- `make cli-run` launches the TUI (`cargo run -p timbre-cli`).
+- `make worker-serve` starts the API locally at `http://localhost:8000` with auto-reload.
+- `make test` runs `cargo test` and `uv run --project worker pytest`; required before pushing.
+- `make lint` runs `cargo fmt --check`, `cargo clippy`, `ruff check`, and `mypy`; fix warnings instead of ignoring them.
 
 ## Coding Style & Naming Conventions
 - Rust targets edition 2021 with `rustfmt` (`rustfmt.toml`); keep modules snake_case, types PascalCase, and favour explicit error propagation with `anyhow::Result`.
@@ -19,22 +19,22 @@
 - Format with `cargo fmt` and `uv run --project worker ruff check --fix` when safe; commit lints separately from feature work.
 
 ## Configuration & Environment
-- User config defaults live at `~/.config/timbre/config.toml`; override with `TIMBRE_CONFIG_PATH` or specific keys (`TIMBRE_WORKER_URL`, `TIMBRE_DEFAULT_MODEL`, `TIMBRE_DEFAULT_DURATION`, `TIMBRE_ARTIFACT_DIR`). Backend defaults can be tuned through `TIMBRE_RIFFUSION_DEFAULT_MODEL_ID`, `TIMBRE_MUSICGEN_DEFAULT_MODEL_ID`, `TIMBRE_EXPORT_SAMPLE_RATE`, etc.
-- Worker settings mirror these via `pydantic-settings`, ensuring directories exist under `~/Music/Timbre` for artifacts.
-- Keep secrets (API keys, tokens) out of config files; export them as env vars within shell profiles instead.
+- User config defaults live at `~/.config/timbre/config.toml`; override with `TIMBRE_CONFIG_PATH` or individual keys (`TIMBRE_WORKER_URL`, `TIMBRE_DEFAULT_MODEL`, `TIMBRE_DEFAULT_DURATION`, `TIMBRE_ARTIFACT_DIR`).
+- Worker settings mirror these via `pydantic-settings`. Relevant overrides: `TIMBRE_RIFFUSION_ALLOW_INFERENCE`, `TIMBRE_INFERENCE_DEVICE`, `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH`, default model IDs, etc. Planner v3 now emits orchestration metadata—keep Python + Rust planners in sync when editing templates.
+- Never commit secrets (API keys, tokens). Export them via environment variables or shell profiles.
 
 ## TUI Interaction Patterns
-- Run `make cli-run` to open the chat-style interface: left pane shows conversation history (timestamped), right rail lists active jobs and status logs.
-- Submit prompts with `Enter`; use `↑/↓` to focus jobs; press `p` on a completed job to surface the local artifact path for manual playback.
-- Tune generation settings inline with slash commands (e.g., `/duration 12`, `/model riffusion-v1`, `/cfg 6.5`, `/reset`) before sending the next prompt.
+- Run `make cli-run` to open the chat-style interface. Left pane = conversation history; right rail = job list + status log.
+- Submit prompts with `Enter`; use `↑/↓` to change focus; press `Ctrl+P` on a completed job to print the artifact path.
+- Slash commands: `/duration 120` (UI clamps 90–180 s), `/model musicgen-stereo-medium`, `/cfg 6.5` or `/cfg off`, `/seed 42`, `/reset`. Short clips (< 90 s) remain available via the worker API for tests.
 - The CLI polls `/status`, fetches `/artifact/{job_id}`, and copies audio + metadata into `~/Music/Timbre/<job_id>/`; see `metadata.json` for prompt/model details.
 - Status lines surface worker health, queue updates, and errors so issues show without leaving the TUI.
 
 ## Testing Guidelines
-- Rust: add `#[cfg(test)] mod tests` alongside implementation or integration suites under `cli/tests` as the surface grows; name cases `handles_*` or `returns_*`.
-- Python: place API tests in `worker/tests` and name files `test_<feature>.py`; lean on `pytest` fixtures and `httpx.AsyncClient` for request flow coverage.
-- When touching request/response contracts, add schema assertions in Rust (serde round-trips) and Python (FastAPI validation).
-- Manual end-to-end validation steps live in `docs/testing/e2e.md`; run them before cutting releases or after backend upgrades.
+- Rust: add `#[cfg(test)]` modules near implementations (or under `cli/tests`) and name cases `handles_*` / `returns_*`.
+- Python: place tests in `worker/tests/test_*.py`, prefer pytest fixtures + `httpx.AsyncClient` for HTTP flows.
+- When touching request/response contracts, update JSON schemas, Rust `types.rs`, and worker Pydantic models together. Add round-trip tests on both sides.
+- Manual E2E checklist lives in `docs/testing/e2e.md`; run it before releases or after backend upgrades.
 
 ## Commit & Pull Request Guidelines
 - Follow the concise, imperative log style already in history (`rust scaffolding`, `roadmap`); keep subjects ≤ 72 chars and prefix scope (`cli:`, `worker:`) when touching one side.

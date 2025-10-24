@@ -1,78 +1,157 @@
 # Timbre
 
-Hybrid Ratatui (Rust) and FastAPI (Python) system for text-to-music experimentation.
+Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pairs with a FastAPI (Python) worker to plan, render, and stitch multi-section audio clips. The stack targets Apple Silicon for Phase 0, but the codebase is organised so additional clients and backends can slot in without rewriting the core flow.
 
-## Requirements
-- macOS on Apple Silicon (Phase 0 target) with Rust 1.75+ and Python 3.11+ installed.
-- [`uv`](https://github.com/astral-sh/uv) for Python dependency management.
-- Optional: Homebrew packages `ffmpeg`, `pkg-config`, `libsndfile` to support future audio workflows.
+---
 
-## Initial Setup
+## Repository At A Glance
 
-1. Review the direction in `ROADMAP.md`, `PHASE0_PLAN.md`, and `docs/architecture.md`.
-2. Install dependencies via `make setup` (runs `uv sync --project worker` and `cargo fetch`). If `uv` selects Python 3.14, pin to a supported runtime first:
+```
+├─ cli/                 # Ratatui application, planner mirror, HTTP client
+├─ worker/              # FastAPI app, composition planner, orchestrator & backends
+├─ docs/                # Architecture notes, setup guides, testing playbooks, ADRs
+├─ scripts/             # Standalone helpers (e.g., riffusion smoke test)
+├─ docs/schemas/        # JSON Schemas kept in sync with Rust/Python models
+├─ Makefile             # Convenience entrypoints (setup, lint, test, run targets)
+└─ ROADMAP.md, ADRs     # Directional planning material
+```
+
+---
+
+## Quick Start
+
+1. **Clone & bootstrap**
+
+   ```bash
+   git clone <repo-url>
+   cd tamber
+   make setup          # cargo fetch + uv sync (runtime deps only)
+   ```
+
+   If `uv` chooses an unsupported interpreter, pin Python 3.11 first:
 
    ```bash
    uv python pin 3.11
    ```
 
-   ```bash
-   make setup
-   ```
-
-3. (Optional, larger downloads) Layer in extras as you advance:
-
-```bash
-# enable lint/test tooling
-uv sync --project worker --extra dev
-
-# pull down full inference stack (MusicGen-ready). Equivalent to `make setup-musicgen`.
-uv sync --project worker --extra inference
-```
-
-   Or run the convenience target:
+2. **Add extras (optional)**
 
    ```bash
-make setup-musicgen
+   # Tooling and lint/test extras
+   uv sync --project worker --extra dev
+
+   # Full inference stack: torch, diffusers, transformers, torchaudio
+   uv sync --project worker --extra inference   # same as `make setup-musicgen`
    ```
 
-   After installing the inference stack you can verify the backend with a one-off smoke run:
+3. **Run the services**
 
    ```bash
-   uv run --project worker python ../scripts/riffusion_smoke.py
+   # Terminal 1 – worker with auto-reload (FastAPI + Uvicorn)
+   make worker-serve
+
+   # Terminal 2 – Ratatui CLI
+   make cli-run
    ```
 
-## Running the Prototype
+   The CLI defaults to `http://localhost:8000`. Point to another machine with
 
-Start the worker and CLI in separate terminals from the repository root:
+   ```bash
+   TIMBRE_WORKER_URL="http://192.168.1.20:8000" make cli-run
+   ```
+
+4. **Smoke-test the backend**
+
+   ```bash
+   uv run --project worker python scripts/riffusion_smoke.py --prompt "dreamy lo-fi piano"
+   ```
+
+---
+
+## Runtime Overview
+
+### Planner & Orchestrator
+
+- Planner **v3** emits a `CompositionPlan` with:
+  - Long-form templates (intro → motif → chorus → outro with optional bridge) above 90 s.
+  - Short-form templates (intro → motif → resolve) for quick clips and unit tests.
+  - Theme metadata: motif phrase, instrumentation palette, rhythm tag, dynamic curve, texture.
+  - Section orchestration layers (rhythm, bass, harmony, lead, textures, vocals) that drive richer prompts and feed the CLI status panel.
+- The orchestrator renders sections sequentially, captures motif seeds, trims/normalises loudness, then butt-joins sections with micro fades (longer crossfades only when conditioning is missing). Mix metadata includes per-section RMS, crossfade strategies, and mastering parameters.
+
+### Backends
+
+- **MusicGen** (transformers) renders text-to-music clips, conditioned by motif audio tails and arrangement sentences.
+- **Riffusion** remains available for diffusion-based spectrogram synthesis; when dependencies are missing we emit deterministic placeholders so the CLI flow stays testable.
+- The system can be forced into placeholder mode via `TIMBRE_RIFFUSION_ALLOW_INFERENCE=0` or `TIMBRE_INFERENCE_DEVICE=cpu` when MPS isn’t desirable.
+
+### CLI UX Highlights
+
+- Slash commands let you tweak generations in place:
+  - `/duration 120` (range 90–180 in the UI) keeps the worker in long-form mode.
+  - `/model musicgen-stereo-medium`, `/cfg 6.5`, `/seed 42`, `/reset`, etc.
+- The status pane mirrors the worker planner, listing sections with roles, bar counts, target seconds, backend, placeholder flags, and active render indicator.
+- Completed jobs copy exports to `~/Music/Timbre/<job_id>/`, alongside `metadata.json` (plan + mix info) and optional motif stems.
+
+---
+
+## Configuration Reference
+
+| Variable | Description |
+| --- | --- |
+| `TIMBRE_WORKER_URL` | Override CLI → worker base URL (default `http://localhost:8000`). |
+| `TIMBRE_DEFAULT_MODEL` / `TIMBRE_DEFAULT_DURATION` | CLI defaults used on startup (`musicgen-stereo-medium` / `120`). |
+| `TIMBRE_ARTIFACT_DIR` | Destination for copied artifacts (CLI). |
+| `TIMBRE_RIFFUSION_ALLOW_INFERENCE` | Set `0` to force placeholder renders. |
+| `TIMBRE_INFERENCE_DEVICE` | Force `cpu`, `mps`, or `cuda` regardless of auto-detection. |
+| `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH` | Worker mastering overrides (48 kHz / pcm24 by default). |
+
+See `worker/src/timbre_worker/app/settings.py` and `cli/src/config.rs` for the full settings surface.
+
+---
+
+## Testing & Tooling
 
 ```bash
-# Terminal 1 – FastAPI worker with auto-reload
-make worker-serve
+# Combined check
+make test            # cargo test + pytest (needs inference extras for live audio)
 
-# Terminal 2 – Ratatui shell
-make cli-run
+# Lint pass
+make lint            # cargo fmt --check, cargo clippy, ruff, mypy
+
+# Targeted commands
+cargo test           # Rust unit tests
+uv run --project worker pytest
+uv run --project worker ruff check
+uv run --project worker mypy
 ```
 
-With the inference extras installed the worker runs the real Riffusion pipeline; without them it falls back to deterministic placeholder audio so the flow stays testable.
+`scripts/riffusion_smoke.py` remains useful to validate the worker in isolation; use `--duration` to exercise both short- and long-form planning.
 
-Generate a standalone clip without the HTTP API via:
+---
 
-```bash
-uv run --project worker python -m timbre_worker.generate --prompt "dreamy piano over rain"
-```
+## Documentation Map
 
-The CLI looks for the worker URL via `TIMBRE_WORKER_URL` (defaults to `http://localhost:8000`). Override when targeting remote workers:
+- `docs/architecture.md` – system topology, planner/orchestrator internals, metadata contracts.
+- `docs/COMPOSITION.md` – in-depth composition + mixing pipeline notes (planner v3).
+- `docs/setup.md` – environment prerequisites, dependency layers, optional GPU considerations.
+- `docs/testing/e2e.md` – manual validation checklist for CLI ↔ worker flows.
+- `docs/adrs/` – decision history.
+- `docs/schemas/README.md` – JSON schema guidance.
 
-```bash
-TIMBRE_WORKER_URL="http://192.168.1.20:8000" make cli-run
-```
+Please keep Markdown files up to date when code changes (planner versions, mix behaviour, slash commands, configuration).
 
-## Documentation
-- `PHASE0_PLAN.md` – execution plan for current milestone.
-- `docs/setup.md` – developer environment details.
-- `docs/architecture.md` – system topology and shared schemas.
-- `docs/adrs/` – architecture decision records (coming soon).
+---
 
-## Licensing
-Project status: private R&D. Review third-party model licenses before redistribution.
+## Contributing
+
+1. Branch off, run `make lint` + `make test` before pushing.
+2. Update documentation and schemas alongside behavioural changes.
+3. Record significant architectural shifts in a new ADR.
+4. Use conventional, scoped commit subjects (`cli:`, `worker:`) to match existing history.
+
+---
+
+## License & Usage
+
+The project is private R&D. Review upstream model licences (Meta MusicGen, Riffusion) before distributing weights or generated assets.
