@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--duration",
         type=int,
-        default=90,
-        help="Clip duration in seconds (90-180).",
+        default=12,
+        help="Clip duration in seconds (1-180).",
     )
     parser.add_argument(
         "--model-id",

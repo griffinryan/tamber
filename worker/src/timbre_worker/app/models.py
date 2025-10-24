@@ -78,7 +78,7 @@ class CompositionPlan(BaseModel):
 class GenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=512)
     seed: Optional[int] = Field(default=None, ge=0)
-    duration_seconds: int = Field(default=90, ge=90, le=180)
+    duration_seconds: int = Field(default=120, ge=1, le=300)
     model_id: str = Field(default="musicgen-stereo-medium")
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)

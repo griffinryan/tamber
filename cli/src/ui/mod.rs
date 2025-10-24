@@ -687,6 +687,7 @@ struct SectionExtras {
     #[serde(default)]
     arrangement_text: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     orchestration: Option<SectionOrchestration>,
 }
 
@@ -915,7 +916,7 @@ fn insert_border_style() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SectionRole;
+    use crate::types::{SectionOrchestration, SectionRole};
 
     #[test]
     fn format_section_line_includes_backend_and_active_marker() {
@@ -933,6 +934,7 @@ mod tests {
             motif_directive: Some("state motif".to_string()),
             variation_axes: vec!["motif fidelity".to_string()],
             cadence_hint: Some("open cadence".to_string()),
+            orchestration: SectionOrchestration::default(),
         };
         let mut extras: HashMap<String, SectionExtras> = HashMap::new();
         extras.insert(
@@ -947,6 +949,11 @@ mod tests {
                     bars: Some(4),
                     padding_seconds: Some(0.35),
                     conditioning_tail_seconds: Some(3.2),
+                }),
+                arrangement_text: Some("Feature the arrangement with layered guitars.".to_string()),
+                orchestration: Some(SectionOrchestration {
+                    lead: vec!["layered guitars".to_string()],
+                    ..SectionOrchestration::default()
                 }),
             },
         );

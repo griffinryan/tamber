@@ -907,9 +907,9 @@ mod tests {
     #[test]
     fn handle_command_updates_duration() {
         let mut state = AppState::new(AppConfig::default());
-        let result = state.handle_command("/duration 12");
+        let result = state.handle_command("/duration 120");
         assert!(result.is_ok());
-        assert_eq!(state.generation_config.duration_seconds, 12);
+        assert_eq!(state.generation_config.duration_seconds, 120);
     }
 
     #[test]
@@ -922,11 +922,11 @@ mod tests {
     #[test]
     fn build_request_reflects_generation_config() {
         let mut state = AppState::new(AppConfig::default());
-        let _ = state.handle_command("/duration 10");
+        let _ = state.handle_command("/duration 120");
         let _ = state.handle_command("/cfg 6.5");
         let _ = state.handle_command("/seed 77");
         let (request, plan) = state.build_generation_payload("lively strings");
-        assert_eq!(request.duration_seconds, 10);
+        assert_eq!(request.duration_seconds, 120);
         assert_eq!(request.cfg_scale, Some(6.5));
         assert_eq!(request.seed, Some(77));
         assert_eq!(request.model_id, "musicgen-stereo-medium");

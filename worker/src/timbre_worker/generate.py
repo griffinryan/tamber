@@ -58,11 +58,6 @@ async def _run(
     artifact_dir: Optional[Path],
     config_dir: Optional[Path],
 ) -> None:
-    if duration is not None:
-        if duration < 90:
-            raise SystemExit("Duration must be at least 90 seconds for full-length compositions.")
-        if duration > 180:
-            raise SystemExit("Duration must be at most 180 seconds.")
     settings_kwargs: dict[str, object] = {}
     if artifact_dir is not None:
         settings_kwargs["artifact_root"] = artifact_dir

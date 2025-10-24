@@ -9,8 +9,10 @@ const PLAN_VERSION: &str = "v3";
 const MIN_TEMPO: u16 = 68;
 const MAX_TEMPO: u16 = 128;
 const DEFAULT_TIME_SIGNATURE: &str = "4/4";
-const MIN_SECTION_SECONDS: f32 = 16.0;
-const MIN_TOTAL_SECONDS: f32 = 90.0;
+const SHORT_MIN_TOTAL_SECONDS: f32 = 2.0;
+const SHORT_MIN_SECTION_SECONDS: f32 = 2.0;
+const LONG_FORM_THRESHOLD: f32 = 90.0;
+const LONG_MIN_SECTION_SECONDS: f32 = 16.0;
 
 const ADD_PRIORITY: &[SectionRole] = &[
     SectionRole::Chorus,
@@ -188,8 +190,20 @@ impl CompositionPlanner {
         duration_seconds: u8,
         seed: Option<u64>,
     ) -> CompositionPlan {
-        let seconds_total = f32::max(duration_seconds as f32, MIN_TOTAL_SECONDS);
-        let templates = select_templates(seconds_total);
+        if (duration_seconds as f32) >= LONG_FORM_THRESHOLD {
+            return self.build_long_form_plan(prompt, duration_seconds, seed);
+        }
+        self.build_short_form_plan(prompt, duration_seconds, seed)
+    }
+
+    fn build_long_form_plan(
+        &self,
+        prompt: &str,
+        duration_seconds: u8,
+        seed: Option<u64>,
+    ) -> CompositionPlan {
+        let seconds_total = f32::max(duration_seconds as f32, LONG_FORM_THRESHOLD);
+        let templates = select_long_templates(seconds_total);
         let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
         let tempo_hint = tempo_hint(seconds_total, &templates, beats_per_bar);
         let tempo_bpm = select_tempo(tempo_hint);
@@ -215,8 +229,8 @@ impl CompositionPlanner {
             let bar_count = bars[index].max(1);
             total_bars += bar_count;
             let mut target_seconds = bar_count as f32 * seconds_per_bar;
-            if target_seconds < MIN_SECTION_SECONDS {
-                target_seconds = MIN_SECTION_SECONDS;
+            if target_seconds < LONG_MIN_SECTION_SECONDS {
+                target_seconds = LONG_MIN_SECTION_SECONDS;
             }
 
             sections.push(CompositionSection {
@@ -244,6 +258,95 @@ impl CompositionPlanner {
             key,
             total_bars,
             total_duration_seconds: sections.iter().map(|s| s.target_seconds).sum(),
+            theme: Some(descriptor.clone()),
+            sections,
+        }
+    }
+
+    fn build_short_form_plan(
+        &self,
+        prompt: &str,
+        duration_seconds: u8,
+        seed: Option<u64>,
+    ) -> CompositionPlan {
+        let seconds_total = f32::max(duration_seconds as f32, SHORT_MIN_TOTAL_SECONDS);
+        let templates = select_short_templates(seconds_total);
+        let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
+        let total_weight: u32 = templates.iter().map(|tpl| tpl.base_bars as u32).sum();
+        let weight =
+            if total_weight == 0 { (templates.len().max(1) as u32) * 4 } else { total_weight };
+        let raw_tempo = if seconds_total > 0.0 {
+            (240.0 * weight as f32 / seconds_total).round() as u16
+        } else {
+            90
+        };
+        let tempo_bpm = select_tempo(raw_tempo);
+        let seconds_per_bar = (60.0 / tempo_bpm as f32) * beats_per_bar as f32;
+
+        let descriptor = build_theme_descriptor(prompt, &templates);
+        let palette = categorise_instrumentation(&descriptor, prompt);
+        let orchestrations = plan_orchestrations(&templates, &palette);
+
+        let base_seed = seed.unwrap_or_else(|| deterministic_seed(prompt));
+        let key = select_key(base_seed);
+
+        let mut sections: Vec<CompositionSection> = Vec::with_capacity(templates.len());
+        let mut total_bars: u16 = 0;
+        let mut total_duration = 0.0f32;
+
+        for (index, template) in templates.iter().enumerate() {
+            let arrangement = describe_orchestration(&orchestrations[index]);
+            let section_prompt =
+                render_prompt(template.prompt_template, prompt, &descriptor, index, &arrangement);
+            let (motif_directive, variation_axes, cadence_hint) =
+                directives_for_role(&template.role);
+
+            let ratio = template.base_bars as f32 / (weight.max(1) as f32);
+            let mut target_seconds = (seconds_total * ratio).max(SHORT_MIN_SECTION_SECONDS);
+            let mut bar_count = if seconds_per_bar > 0.0 {
+                (target_seconds / seconds_per_bar).round() as i32
+            } else {
+                template.base_bars as i32
+            };
+            if bar_count < template.min_bars as i32 {
+                bar_count = template.min_bars as i32;
+            }
+            if bar_count > template.max_bars as i32 {
+                bar_count = template.max_bars as i32;
+            }
+            if bar_count < 1 {
+                bar_count = 1;
+            }
+
+            target_seconds = (bar_count as f32 * seconds_per_bar).max(SHORT_MIN_SECTION_SECONDS);
+            total_bars += bar_count as u16;
+            total_duration += target_seconds;
+
+            sections.push(CompositionSection {
+                section_id: format!("s{:02}", index),
+                role: template.role.clone(),
+                label: template.label.to_string(),
+                prompt: section_prompt,
+                bars: bar_count as u8,
+                target_seconds,
+                energy: template.energy.clone(),
+                model_id: None,
+                seed_offset: Some(index as i32),
+                transition: template.transition.map(|text| text.to_string()),
+                motif_directive,
+                variation_axes,
+                cadence_hint,
+                orchestration: orchestrations[index].clone(),
+            });
+        }
+
+        CompositionPlan {
+            version: PLAN_VERSION.to_string(),
+            tempo_bpm,
+            time_signature: DEFAULT_TIME_SIGNATURE.to_string(),
+            key,
+            total_bars,
+            total_duration_seconds: total_duration,
             theme: Some(descriptor.clone()),
             sections,
         }
@@ -746,9 +849,9 @@ fn render_prompt(
     rendered.trim().to_string()
 }
 
-fn select_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
+fn select_long_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
     if duration_seconds >= 150.0 {
-        vec![
+        return vec![
             SectionTemplate {
                 role: SectionRole::Intro,
                 label: "Intro",
@@ -799,51 +902,186 @@ fn select_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
                 prompt_template: "Close by reshaping the {motif} motif, letting {arrangement} ease the {rhythm} into a reflective {texture} fade.",
                 transition: Some("Fade to silence"),
             },
-        ]
-    } else {
-        vec![
+        ];
+    }
+
+    vec![
+        SectionTemplate {
+            role: SectionRole::Intro,
+            label: "Intro",
+            energy: SectionEnergy::Low,
+            base_bars: 12,
+            min_bars: 8,
+            max_bars: 16,
+            prompt_template: "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop.",
+            transition: Some("Reveal motif"),
+        },
+        SectionTemplate {
+            role: SectionRole::Motif,
+            label: "Motif",
+            energy: SectionEnergy::Medium,
+            base_bars: 18,
+            min_bars: 14,
+            max_bars: 22,
+            prompt_template: "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies.",
+            transition: Some("Ignite chorus"),
+        },
+        SectionTemplate {
+            role: SectionRole::Chorus,
+            label: "Chorus",
+            energy: SectionEnergy::High,
+            base_bars: 24,
+            min_bars: 18,
+            max_bars: 26,
+            prompt_template: "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest.",
+            transition: Some("Settle to outro"),
+        },
+        SectionTemplate {
+            role: SectionRole::Outro,
+            label: "Outro",
+            energy: SectionEnergy::Medium,
+            base_bars: 12,
+            min_bars: 8,
+            max_bars: 16,
+            prompt_template: "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}.",
+            transition: Some("Fade to silence"),
+        },
+    ]
+}
+
+fn select_short_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
+    if duration_seconds >= 24.0 {
+        return vec![
             SectionTemplate {
                 role: SectionRole::Intro,
-                label: "Intro",
+                label: "Arrival",
                 energy: SectionEnergy::Low,
-                base_bars: 12,
-                min_bars: 8,
-                max_bars: 16,
-                prompt_template: "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop.",
-                transition: Some("Reveal motif"),
+                base_bars: 4,
+                min_bars: 3,
+                max_bars: 6,
+                prompt_template: "Set a {texture} scene for {prompt} by introducing the {motif} motif with {instrumentation} over a {rhythm} pulse.",
+                transition: Some("Fade in layers"),
             },
             SectionTemplate {
                 role: SectionRole::Motif,
-                label: "Motif",
+                label: "Statement",
                 energy: SectionEnergy::Medium,
-                base_bars: 18,
-                min_bars: 14,
-                max_bars: 22,
-                prompt_template: "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies.",
-                transition: Some("Ignite chorus"),
+                base_bars: 8,
+                min_bars: 6,
+                max_bars: 10,
+                prompt_template: "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins.",
+                transition: Some("Build momentum"),
             },
             SectionTemplate {
-                role: SectionRole::Chorus,
-                label: "Chorus",
+                role: SectionRole::Development,
+                label: "Development",
                 energy: SectionEnergy::High,
-                base_bars: 24,
-                min_bars: 18,
-                max_bars: 26,
-                prompt_template: "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest.",
-                transition: Some("Settle to outro"),
+                base_bars: 8,
+                min_bars: 6,
+                max_bars: 10,
+                prompt_template: "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds.",
+                transition: Some("Evolve harmonies"),
+            },
+            SectionTemplate {
+                role: SectionRole::Resolution,
+                label: "Resolution",
+                energy: SectionEnergy::Medium,
+                base_bars: 4,
+                min_bars: 3,
+                max_bars: 6,
+                prompt_template: "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}.",
+                transition: Some("Return home"),
             },
             SectionTemplate {
                 role: SectionRole::Outro,
-                label: "Outro",
-                energy: SectionEnergy::Medium,
-                base_bars: 12,
-                min_bars: 8,
-                max_bars: 16,
-                prompt_template: "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}.",
+                label: "Release",
+                energy: SectionEnergy::Low,
+                base_bars: 4,
+                min_bars: 2,
+                max_bars: 6,
+                prompt_template: "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey.",
                 transition: Some("Fade to silence"),
             },
-        ]
+        ];
     }
+
+    if duration_seconds >= 16.0 {
+        return vec![
+            SectionTemplate {
+                role: SectionRole::Intro,
+                label: "Lead-in",
+                energy: SectionEnergy::Low,
+                base_bars: 4,
+                min_bars: 2,
+                max_bars: 6,
+                prompt_template: "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}.",
+                transition: Some("Invite motif"),
+            },
+            SectionTemplate {
+                role: SectionRole::Motif,
+                label: "Motif A",
+                energy: SectionEnergy::Medium,
+                base_bars: 8,
+                min_bars: 6,
+                max_bars: 10,
+                prompt_template: "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows.",
+                transition: Some("Increase energy"),
+            },
+            SectionTemplate {
+                role: SectionRole::Development,
+                label: "Variation",
+                energy: SectionEnergy::High,
+                base_bars: 6,
+                min_bars: 4,
+                max_bars: 8,
+                prompt_template: "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies.",
+                transition: Some("Soften textures"),
+            },
+            SectionTemplate {
+                role: SectionRole::Resolution,
+                label: "Cadence",
+                energy: SectionEnergy::Medium,
+                base_bars: 4,
+                min_bars: 2,
+                max_bars: 6,
+                prompt_template: "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}.",
+                transition: Some("Release"),
+            },
+            SectionTemplate {
+                role: SectionRole::Outro,
+                label: "Tail",
+                energy: SectionEnergy::Low,
+                base_bars: 2,
+                min_bars: 1,
+                max_bars: 4,
+                prompt_template: "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out.",
+                transition: Some("Fade"),
+            },
+        ];
+    }
+
+    vec![
+        SectionTemplate {
+            role: SectionRole::Intro,
+            label: "Intro",
+            energy: SectionEnergy::Low,
+            base_bars: 2,
+            min_bars: 1,
+            max_bars: 4,
+            prompt_template: "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}.",
+            transition: Some("Introduce motif"),
+        },
+        SectionTemplate {
+            role: SectionRole::Motif,
+            label: "Motif",
+            energy: SectionEnergy::Medium,
+            base_bars: 6,
+            min_bars: 4,
+            max_bars: 8,
+            prompt_template: "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands.",
+            transition: Some("Lift energy"),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -853,11 +1091,12 @@ mod tests {
     #[test]
     fn builds_plan_with_at_least_three_sections() {
         let planner = CompositionPlanner::new();
-        let plan = planner.build_plan("dreamy piano", 16, Some(42));
+        let requested = 16;
+        let plan = planner.build_plan("dreamy piano", requested, Some(42));
         assert!(plan.sections.len() >= 3);
         assert_eq!(plan.version, PLAN_VERSION);
         assert!(plan.total_duration_seconds > 0.0);
-        assert!(plan.total_duration_seconds >= MIN_TOTAL_SECONDS);
+        assert!(plan.total_duration_seconds + 1.0 >= requested as f32);
         assert!(plan.theme.is_some());
         assert!(plan.sections.iter().all(|section| section.motif_directive.is_some()));
         assert!(plan
