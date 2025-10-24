@@ -7,11 +7,17 @@ import wave
 from pathlib import Path
 
 import numpy as np
+from loguru import logger
 
 try:  # pragma: no cover
     import soundfile as sf
 except Exception:  # noqa: BLE001
     sf = None  # type: ignore[assignment]
+
+try:  # pragma: no cover
+    import torchaudio
+except Exception:  # noqa: BLE001
+    torchaudio = None  # type: ignore[assignment]
 
 
 def ensure_waveform_channels(waveform: np.ndarray) -> np.ndarray:
@@ -186,25 +192,187 @@ def fit_to_length(
     return data
 
 
-def write_waveform(path: Path, waveform: np.ndarray, sample_rate: int) -> None:
+def resample_waveform(
+    waveform: np.ndarray,
+    src_rate: int,
+    dst_rate: int,
+) -> np.ndarray:
+    """Resample waveform to a new sample rate using polyphase when available."""
+
+    if src_rate <= 0 or dst_rate <= 0 or src_rate == dst_rate:
+        return ensure_waveform_channels(waveform)
+
+    data = ensure_waveform_channels(waveform)
+    mono = False
+    if data.ndim == 1:
+        data = data[:, None]
+        mono = True
+
+    if torchaudio is not None:  # pragma: no cover - optional dependency
+        try:
+            import torch
+
+            tensor = torch.as_tensor(data.T, dtype=torch.float32)
+            resampled = torchaudio.functional.resample(  # type: ignore[attr-defined]
+                tensor,
+                orig_freq=src_rate,
+                new_freq=dst_rate,
+            )
+            result = resampled.T.cpu().numpy().astype(np.float32)
+            if mono:
+                return result[:, 0]
+            return result
+        except Exception:  # noqa: BLE001
+            pass
+
+    scale = dst_rate / src_rate
+    target_length = int(round(data.shape[0] * scale))
+    if target_length <= 0:
+        if mono:
+            return np.zeros((0,), dtype=np.float32)
+        return np.zeros((0, data.shape[1]), dtype=np.float32)
+
+    x_old = np.linspace(0.0, 1.0, num=data.shape[0], endpoint=False, dtype=np.float64)
+    x_new = np.linspace(0.0, 1.0, num=target_length, endpoint=False, dtype=np.float64)
+    resampled = np.empty((target_length, data.shape[1]), dtype=np.float32)
+    for channel in range(data.shape[1]):
+        resampled[:, channel] = np.interp(x_new, x_old, data[:, channel])
+    if mono:
+        return resampled[:, 0].astype(np.float32)
+    return resampled.astype(np.float32)
+
+
+def tilt_highs(
+    waveform: np.ndarray,
+    sample_rate: int,
+    *,
+    gain_db: float = 2.5,
+    exponent: float = 1.2,
+) -> np.ndarray:
+    """Apply a gentle high-frequency tilt to restore brilliance."""
+
+    if gain_db <= 0.0 or sample_rate <= 0:
+        return ensure_waveform_channels(waveform)
+
+    data = ensure_waveform_channels(waveform).astype(np.float32)
+    mono = False
+    if data.ndim == 1:
+        data = data[:, None]
+        mono = True
+    if data.shape[0] < 4:
+        return data[:, 0] if mono else data
+
+    spectrum = np.fft.rfft(data, axis=0)
+    freqs = np.fft.rfftfreq(data.shape[0], d=1.0 / sample_rate)
+    if freqs.size == 0:
+        return data[:, 0] if mono else data
+
+    nyquist = float(freqs[-1]) if freqs[-1] > 0.0 else float(sample_rate) / 2.0
+    ratio = np.clip(freqs / max(nyquist, 1.0), 0.0, 1.0)
+    high_gain = 10.0 ** (gain_db / 20.0)
+    curve = 1.0 + (high_gain - 1.0) * np.power(ratio, exponent, where=ratio > 0.0)
+    curve = curve.astype(np.float32)
+    if spectrum.ndim == 1:
+        spectrum *= curve
+    else:
+        spectrum *= curve[:, None]
+    boosted = np.fft.irfft(spectrum, n=data.shape[0], axis=0)
+    boosted = boosted.real.astype(np.float32)
+
+    peak = float(np.max(np.abs(boosted))) if boosted.size else 0.0
+    if peak > 1.0:
+        boosted = boosted / peak
+    if mono:
+        return boosted[:, 0]
+    return boosted
+
+
+def _bit_depth_to_int(bit_depth: str) -> int:
+    mapping = {
+        "pcm16": 16,
+        "pcm24": 24,
+        "pcm32": 32,
+        "float32": 32,
+    }
+    return mapping.get(bit_depth.lower(), 16)
+
+
+def _soundfile_subtype(bit_depth: str) -> str:
+    mapping = {
+        "pcm16": "PCM_16",
+        "pcm24": "PCM_24",
+        "pcm32": "PCM_32",
+        "float32": "FLOAT",
+    }
+    return mapping.get(bit_depth.lower(), "PCM_16")
+
+
+def _apply_tpdf_dither(data: np.ndarray, bit_depth: int) -> np.ndarray:
+    if bit_depth <= 0:
+        return data
+    step = 1.0 / float(2 ** (bit_depth - 1))
+    rng = np.random.default_rng()
+    noise = (rng.random(data.shape, dtype=np.float32) - rng.random(data.shape, dtype=np.float32)) * step
+    return np.clip(data + noise, -1.0, 1.0).astype(np.float32)
+
+
+def write_waveform(
+    path: Path,
+    waveform: np.ndarray,
+    sample_rate: int,
+    *,
+    bit_depth: str = "pcm24",
+    audio_format: str = "wav",
+    dither: bool = True,
+) -> None:
     """Persist waveform to disk, preferring soundfile when available."""
 
     data = ensure_waveform_channels(waveform)
 
-    if sf is not None:
-        sf.write(path, data, sample_rate, subtype="PCM_16")
+    format_token = audio_format.lower()
+    depth_token = bit_depth.lower()
+
+    if sf is not None and format_token == "wav":  # pragma: no cover - depends on optional lib
+        subtype = _soundfile_subtype(depth_token)
+        export = data.astype(np.float32)
+        if dither and subtype != "FLOAT":
+            export = _apply_tpdf_dither(export, _bit_depth_to_int(depth_token))
+        sf.write(path, export, sample_rate, subtype=subtype)
         return
 
-    pcm = (data * 32767).astype(np.int16)
-    if pcm.ndim == 1:
-        channels = 1
-        frames = pcm
-    else:
-        channels = pcm.shape[1]
-        frames = pcm
+    if format_token != "wav":
+        logger.warning(
+            "Falling back to WAV output for %s; soundfile dependency required for other formats",
+            audio_format,
+        )
 
+    target_bit_depth = _bit_depth_to_int(depth_token)
+    if target_bit_depth != 16:
+        logger.warning(
+            "PCM %s export requires soundfile; emitting 16-bit WAV instead",
+            bit_depth,
+        )
+        target_bit_depth = 16
+
+    export = data.astype(np.float32, copy=True)
+    if dither:
+        export = _apply_tpdf_dither(export, target_bit_depth)
+    scale = float(2 ** (target_bit_depth - 1) - 1)
+    pcm = np.clip(export, -1.0, 1.0)
+    pcm = (pcm * scale).astype(np.int32)
+    if target_bit_depth == 16:
+        frames = pcm.astype(np.int16)
+    else:
+        frames = pcm.astype(np.int32)
+
+    if frames.ndim == 1:
+        channels = 1
+    else:
+        channels = frames.shape[1]
+
+    sampwidth = 2 if target_bit_depth == 16 else 4
     with wave.open(str(path), "wb") as wav_file:  # type: ignore[attr-defined]
         wav_file.setnchannels(channels)
-        wav_file.setsampwidth(2)
+        wav_file.setsampwidth(sampwidth)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(frames.tobytes())

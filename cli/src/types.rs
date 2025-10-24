@@ -26,6 +26,28 @@ pub struct GenerationRequest {
     pub model_id: String,
     pub cfg_scale: Option<f32>,
     pub scheduler: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub riffusion_num_inference_steps: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub riffusion_guidance_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub riffusion_scheduler: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicgen_top_k: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicgen_top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicgen_temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicgen_cfg_coef: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicgen_two_step_cfg: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_sample_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_bit_depth: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<CompositionPlan>,
 }

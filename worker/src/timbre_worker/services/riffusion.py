@@ -21,7 +21,14 @@ from ..app.models import (
     ThemeDescriptor,
 )
 from ..app.settings import Settings
-from .audio_utils import ensure_waveform_channels, write_waveform
+from .audio_utils import (
+    ensure_waveform_channels,
+    normalise_loudness,
+    resample_waveform,
+    soft_limiter,
+    tilt_highs,
+    write_waveform,
+)
 from .riffusion_spectrogram import SpectrogramImageDecoder, SpectrogramParams
 from .types import SectionRender
 
@@ -34,7 +41,7 @@ else:  # pragma: no cover
     TORCH_IMPORT_ERROR = None
 
 
-DEFAULT_GUIDANCE_SCALE = 7.0
+DEFAULT_GUIDANCE_SCALE = 8.5
 MIN_RENDER_SECONDS = 5.0
 MODEL_REGISTRY = {
     "riffusion-v1": "riffusion/riffusion-model-v1",
@@ -62,7 +69,7 @@ class RiffusionService:
     ):
         self._settings = settings
         self._artifact_root = settings.artifact_root
-        self._default_model_id = settings.default_model_id
+        self._default_model_id = settings.riffusion_default_model_id
         self._pipelines: Dict[str, Optional[PipelineHandle]] = {}
         self._placeholder_reasons: Dict[str, str] = {}
         self._pipeline_lock = asyncio.Lock()
@@ -73,6 +80,10 @@ class RiffusionService:
         self._spectrogram_params = SpectrogramParams()
         self._spectrogram_error: Optional[str] = None
         self._spectrogram_mode: Optional[str] = None
+        self._default_guidance = settings.riffusion_guidance_scale
+        self._default_steps = settings.riffusion_num_inference_steps
+        self._default_scheduler = settings.riffusion_scheduler
+        self._enable_phase_refinement = settings.riffusion_enable_phase_refinement
 
     @property
     def default_model_id(self) -> str:
@@ -100,8 +111,25 @@ class RiffusionService:
             render_seconds if render_seconds is not None else float(section.target_seconds)
         )
         duration = max(MIN_RENDER_SECONDS, max(1.0, float(duration_hint)))
-        guidance_scale = (
-            request.cfg_scale if request.cfg_scale is not None else DEFAULT_GUIDANCE_SCALE
+        guidance_source = (
+            request.riffusion_guidance_scale
+            if request.riffusion_guidance_scale is not None
+            else (request.cfg_scale if request.cfg_scale is not None else self._default_guidance)
+        )
+        guidance_scale = float(
+            guidance_source if guidance_source is not None else DEFAULT_GUIDANCE_SCALE
+        )
+        num_inference_steps = int(
+            request.riffusion_num_inference_steps
+            if request.riffusion_num_inference_steps is not None
+            else self._default_steps
+        )
+        num_inference_steps = max(1, num_inference_steps)
+        scheduler_name = (
+            request.riffusion_scheduler
+            or request.scheduler
+            or self._default_scheduler
+            or None
         )
         section_seed: Optional[int] = None
         if request.seed is not None:
@@ -139,6 +167,9 @@ class RiffusionService:
                 duration,
                 placeholder_reason or "pipeline_unavailable",
                 section_seed,
+                guidance_scale,
+                num_inference_steps,
+                scheduler_name,
             )
         else:
             try:
@@ -151,6 +182,8 @@ class RiffusionService:
                     section_seed,
                     init_image,
                     init_strength,
+                    num_inference_steps,
+                    scheduler_name,
                 )
             except GenerationFailure as exc:
                 logger.warning(
@@ -167,6 +200,9 @@ class RiffusionService:
                     duration,
                     placeholder_reason,
                     section_seed,
+                    guidance_scale,
+                    num_inference_steps,
+                    scheduler_name,
                 )
         actual_seconds = len(ensure_waveform_channels(waveform)) / float(sample_rate)
 
@@ -182,12 +218,15 @@ class RiffusionService:
                 "plan_version": plan.version,
                 "render_seconds": actual_seconds,
                 "target_seconds": float(section.target_seconds),
+                "num_inference_steps": num_inference_steps,
             }
         )
         if dtype_str is not None:
             extras["dtype"] = dtype_str
         if placeholder_reason:
             extras["placeholder_reason"] = placeholder_reason
+        if scheduler_name and extras.get("scheduler") is None:
+            extras["scheduler"] = scheduler_name
         if section_seed is not None:
             extras["seed"] = section_seed
         if theme is not None:
@@ -228,9 +267,25 @@ class RiffusionService:
             renders.append(render)
 
         waveform, sample_rate = self._combine_renders(renders)
+        waveform = normalise_loudness(waveform)
+        waveform = tilt_highs(waveform, sample_rate)
+        waveform = soft_limiter(waveform, threshold=0.98)
+
+        export_rate = self._settings.export_sample_rate
+        if export_rate and sample_rate != export_rate:
+            waveform = resample_waveform(waveform, sample_rate, export_rate)
+            sample_rate = export_rate
+            waveform = soft_limiter(waveform, threshold=0.98)
+
         artifact_path = self._artifact_path(job_id, placeholder=False)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        write_waveform(artifact_path, waveform, sample_rate)
+        write_waveform(
+            artifact_path,
+            waveform,
+            sample_rate,
+            bit_depth=self._settings.export_bit_depth,
+            audio_format=self._settings.export_format,
+        )
 
         placeholder_flags = [
             render.extras.get("placeholder", False) for render in renders
@@ -250,6 +305,11 @@ class RiffusionService:
             for render in renders
             if render.extras.get("prompt_hash") is not None
         ]
+        step_counts = [
+            render.extras.get("num_inference_steps")
+            for render in renders
+            if render.extras.get("num_inference_steps") is not None
+        ]
 
         extras: Dict[str, Any] = {
             "backend": "riffusion",
@@ -258,6 +318,8 @@ class RiffusionService:
             "placeholder": any(placeholder_flags),
             "sections": [render.extras for render in renders],
         }
+        extras["bit_depth"] = self._settings.export_bit_depth
+        extras["format"] = self._settings.export_format
         seed_values = [
             render.extras.get("seed")
             for render in renders
@@ -284,6 +346,11 @@ class RiffusionService:
         if prompt_hashes:
             extras["prompt_hash"] = prompt_hashes[0]
             extras["prompt_hashes"] = prompt_hashes
+        if step_counts:
+            unique_steps = {value for value in step_counts}
+            extras["num_inference_steps"] = (
+                step_counts[0] if len(unique_steps) == 1 else step_counts
+            )
         if placeholder_reasons:
             extras["placeholder_reason"] = (
                 placeholder_reasons[0]
@@ -389,6 +456,73 @@ class RiffusionService:
 
         return PipelineHandle(pipeline=pipeline, sample_rate=sample_rate)
 
+    def _configure_scheduler(
+        self,
+        pipeline: Any,
+        scheduler_name: Optional[str],
+    ) -> Optional[str]:
+        if scheduler_name is None or not scheduler_name.strip():
+            return None
+        if not hasattr(pipeline, "scheduler"):
+            return None
+        normalized = scheduler_name.strip().lower().replace("-", "_")
+        current = pipeline.scheduler.__class__.__name__.lower()
+        if normalized == current:
+            return pipeline.scheduler.__class__.__name__
+
+        try:
+            from diffusers import (  # type: ignore
+                DDIMScheduler,
+                DPMSolverMultistepScheduler,
+                EulerAncestralDiscreteScheduler,
+                EulerDiscreteScheduler,
+                KDPM2AncestralDiscreteScheduler,
+                PNDMScheduler,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Scheduler import failed for %s: %s", scheduler_name, exc)
+            return None
+
+        config = getattr(pipeline.scheduler, "config", None)
+        if config is None:
+            return None
+
+        scheduler = None
+        try:
+            if normalized in {"dpmpp_2m", "dpmpp_2m_sde", "dpm++_2m", "dpmsolver++"}:
+                scheduler = DPMSolverMultistepScheduler.from_config(config)
+                setattr(scheduler, "algorithm_type", "dpmsolver++")
+                if hasattr(scheduler, "use_karras_sigmas"):
+                    setattr(scheduler, "use_karras_sigmas", False)
+            elif normalized in {
+                "dpmpp_2m_karras",
+                "dpm++_2m_karras",
+                "dpmsolver++_karras",
+            }:
+                scheduler = DPMSolverMultistepScheduler.from_config(config)
+                setattr(scheduler, "algorithm_type", "dpmsolver++")
+                if hasattr(scheduler, "use_karras_sigmas"):
+                    setattr(scheduler, "use_karras_sigmas", True)
+            elif normalized in {"euler_a", "k_euler_a", "euler_ancestral"}:
+                scheduler = EulerAncestralDiscreteScheduler.from_config(config)
+            elif normalized in {"euler", "k_euler"}:
+                scheduler = EulerDiscreteScheduler.from_config(config)
+            elif normalized in {"ddim"}:
+                scheduler = DDIMScheduler.from_config(config)
+            elif normalized in {"pndm"}:
+                scheduler = PNDMScheduler.from_config(config)
+            elif normalized in {"kdpm_2_a", "kdpm2_a", "k_dpm_2_a"}:
+                scheduler = KDPM2AncestralDiscreteScheduler.from_config(config)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to apply scheduler %s: %s", scheduler_name, exc)
+            scheduler = None
+
+        if scheduler is None:
+            return None
+
+        pipeline.scheduler = scheduler
+        return scheduler.__class__.__name__
+
     def _run_inference(
         self,
         handle: PipelineHandle,
@@ -398,6 +532,8 @@ class RiffusionService:
         seed: Optional[int],
         init_image: Optional[Image.Image],
         init_strength: Optional[float],
+        num_inference_steps: int,
+        scheduler_name: Optional[str],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         assert torch is not None
 
@@ -408,10 +544,11 @@ class RiffusionService:
         audio_length = max(1.0, float(duration_seconds))
 
         pipeline = handle.pipeline
+        scheduler_actual = self._configure_scheduler(pipeline, scheduler_name)
         try:
             kwargs = {
                 "prompt": prompt,
-                "num_inference_steps": 50,
+                "num_inference_steps": num_inference_steps,
                 "guidance_scale": guidance_scale,
                 "audio_length_in_s": audio_length,
                 "generator": generator,
@@ -424,7 +561,7 @@ class RiffusionService:
         except TypeError:
             kwargs = {
                 "prompt": prompt,
-                "num_inference_steps": 50,
+                "num_inference_steps": num_inference_steps,
                 "guidance_scale": guidance_scale,
                 "audio_length_in_s": int(round(audio_length)),
                 "generator": generator,
@@ -448,9 +585,14 @@ class RiffusionService:
             "guidance_scale": guidance_scale,
             "placeholder": False,
             "prompt_hash": self._prompt_hash(prompt),
+            "num_inference_steps": num_inference_steps,
         }
         if seed is not None:
             extras["seed"] = seed
+        if scheduler_actual is not None:
+            extras["scheduler"] = scheduler_actual
+        elif scheduler_name is not None:
+            extras["scheduler"] = scheduler_name
 
         return self._prepare_waveform(waveform), sample_rate, extras
 
@@ -460,6 +602,9 @@ class RiffusionService:
         duration_seconds: float,
         reason: str,
         seed: Optional[int],
+        guidance_scale: float,
+        num_inference_steps: int,
+        scheduler_name: Optional[str],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         sample_rate = 44100
         duration_seconds = max(1.0, min(duration_seconds, 30.0))
@@ -476,13 +621,16 @@ class RiffusionService:
         waveform = np.clip(waveform, -1.0, 1.0).astype(np.float32)
         extras = {
             "sample_rate": sample_rate,
-            "guidance_scale": DEFAULT_GUIDANCE_SCALE,
+            "guidance_scale": guidance_scale,
             "placeholder_reason": reason,
             "prompt_hash": self._prompt_hash(prompt),
             "render_seconds": duration_seconds,
+            "num_inference_steps": num_inference_steps,
         }
         if seed is not None:
             extras["seed"] = seed
+        if scheduler_name is not None:
+            extras["scheduler"] = scheduler_name
 
         return waveform, sample_rate, extras
 
@@ -695,7 +843,10 @@ class RiffusionService:
             reason = self._spectrogram_error or "spectrogram_decoder_unavailable"
             raise GenerationFailure(reason)
 
-        waveform, sample_rate = decoder.decode(pil_image)
+        waveform, sample_rate = decoder.decode(
+            pil_image,
+            refine_phase=self._enable_phase_refinement,
+        )
         return waveform, sample_rate
 
     def _prompt_hash(self, prompt: str) -> str:

@@ -19,7 +19,7 @@ make setup
 `make setup` installs Rust dependencies and synchronises the Python worker’s environment using `uv`. If `uv` reports Python 3.14, pin to a supported runtime first:
 
 ```bash
-uv python pin 3.12
+uv python pin 3.11
 ```
 
 ## Running the Services
@@ -44,13 +44,27 @@ TIMBRE_WORKER_URL="http://localhost:9000" make cli-run
 
 ## Installing Development & Inference Dependencies
 
-Tests and linting rely on the `dev` extra, while real audio generation requires the heavier `inference` extra. Install both once you are ready to work on the backend end-to-end:
+The base `make setup` target installs only the lightweight runtime so the API surface stays reachable (it will emit placeholder audio when models are missing). Layer on additional extras as you go:
+
+```bash
+# Enable linting + tests
+uv sync --project worker --extra dev
+
+# Install full inference stack (text + music generation). Equivalent to `make setup-musicgen`.
+uv sync --project worker --extra inference
+```
+
+The `inference` extra provides PyTorch, Diffusers, Torchaudio, and Hugging Face tooling required for both Riffusion and MusicGen checkpoints. You can install everything (dev + inference) in one go:
 
 ```bash
 uv sync --project worker --extra dev --extra inference
 ```
 
-This provides `pytest`, `ruff`, `mypy`, PyTorch, Diffusers, Librosa, Torchaudio, and Hugging Face tooling. MusicGen support (Audiocraft) is not bundled yet because upstream still depends on Pydantic 1; the worker will fall back to placeholder sections for the MusicGen backend until we ship a compatible integration.
+Alternatively, run the convenience target from the repo root to fetch the inference stack alongside the Rust crates:
+
+```bash
+make setup-musicgen
+```
 
 Verify the environment by running the bundled smoke test (exits non-zero when the real pipeline cannot load and we fall back to placeholder audio):
 
@@ -86,6 +100,7 @@ cd worker
 uv run ruff check src tests
 uv run mypy
 uv run python -m pytest
+```
 
 Run a one-off generation without the HTTP API:
 
