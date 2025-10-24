@@ -24,12 +24,12 @@ dev = [
   "httpx>=0.26"
 ]
 inference = [
-  "torch>=2.1,<2.3",
+  "torch>=2.3,<2.6",
   "diffusers>=0.26",
   "accelerate>=0.27",
   "safetensors>=0.4",
   "soundfile>=0.12",
-  "torchaudio>=2.1,<2.3",
+  "torchaudio>=2.3,<2.6",
   "huggingface-hub>=0.20",
   "numpy>=1.26,<2",
   "transformers>=4.39",
