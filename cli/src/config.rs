@@ -121,7 +121,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             worker_url: None,
-            default_model_id: "riffusion-v1".into(),
+            default_model_id: "musicgen-stereo-medium".into(),
             default_duration_seconds: 24,
             artifact_dir: default_artifact_dir(),
         }

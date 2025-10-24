@@ -170,6 +170,10 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
 
     extras = artifact.metadata.extras
     mix_info = extras.get("mix", {})
+    assert extras.get("sample_rate") == settings.export_sample_rate
+    assert extras.get("bit_depth") == settings.export_bit_depth
+    assert extras.get("format") == settings.export_format
+    assert mix_info.get("sample_rate") == settings.export_sample_rate
     assert mix_calls[0] == pytest.approx(mix_info.get("duration_seconds", 0.0), rel=1e-3)
     crossfade_total = sum(
         entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", [])

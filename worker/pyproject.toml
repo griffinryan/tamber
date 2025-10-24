@@ -3,7 +3,7 @@ name = "timbre-worker"
 version = "0.1.0"
 description = "Audio generation service for the Timbre CLI."
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.12"
 license = { text = "Proprietary" }
 authors = [{ name = "Timbre Team" }]
 dependencies = [
@@ -12,7 +12,7 @@ dependencies = [
   "pydantic>=2.6",
   "pydantic-settings>=2.2",
   "loguru>=0.7",
-  "numpy>=1.26"
+  "numpy>=1.26,<2"
 ]
 
 [project.optional-dependencies]
@@ -24,14 +24,14 @@ dev = [
   "httpx>=0.26"
 ]
 inference = [
-  "torch>=2.2",
+  "torch>=2.1,<2.3",
   "diffusers>=0.26",
   "accelerate>=0.27",
   "safetensors>=0.4",
   "soundfile>=0.12",
-  "torchaudio>=2.2",
+  "torchaudio>=2.1,<2.3",
   "huggingface-hub>=0.20",
-  "numpy>=1.26",
+  "numpy>=1.26,<2",
   "transformers>=4.39",
   "scipy>=1.11"
 ]
@@ -39,6 +39,9 @@ inference = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = false
 
 [tool.ruff]
 line-length = 100

@@ -127,8 +127,18 @@ async fn seed_health_status(client: &api::Client, app: &mut AppState) {
     match client.health().await {
         Ok(body) => {
             let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let default_model =
-                body.get("default_model_id").and_then(|v| v.as_str()).unwrap_or("riffusion-v1");
+            let default_model = body
+                .get("default_model_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("musicgen-stereo-medium");
+            let riffusion_default = body
+                .get("riffusion_default_model_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("riffusion-v1");
+            let musicgen_default = body
+                .get("musicgen_default_model_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(default_model);
             let artifact_root =
                 body.get("artifact_root").and_then(|v| v.as_str()).unwrap_or("~/Music/Timbre");
             let planner_version =
@@ -141,7 +151,7 @@ async fn seed_health_status(client: &api::Client, app: &mut AppState) {
                 .unwrap_or_else(|| "unknown".to_string());
             let base_url = client.base_url().to_string();
             app.handle_event(AppEvent::Info(format!(
-                "Worker health: {status} (model: {default_model}, planner {planner_version}, backends: {backends}, artifacts: {artifact_root}) @ {base_url}"
+                "Worker health: {status} (defaults → riffusion: {riffusion_default}, musicgen: {musicgen_default}; planner {planner_version}; backends: {backends}; artifacts: {artifact_root}) @ {base_url}"
             )));
         }
         Err(err) => {

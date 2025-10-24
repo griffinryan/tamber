@@ -41,7 +41,7 @@ class SpectrogramParams:
     mel_scale_norm: Optional[str] = None
     mel_scale_type: str = "htk"
     max_mel_iters: int = 200
-    num_griffin_lim_iters: int = 48
+    num_griffin_lim_iters: int = 80
     power_for_image: float = 0.3
     max_image_value: float = 30e6
 
@@ -79,17 +79,23 @@ class SpectrogramImageDecoder:
             win_length=params.win_length,
             hop_length=params.hop_length,
             power=1.0,
+            momentum=0.99,
         ).to(self._device)
 
     @property
     def sample_rate(self) -> int:
         return self._params.sample_rate
 
-    def decode(self, image: ImageLike) -> Tuple[np.ndarray, int]:
+    def decode(
+        self,
+        image: ImageLike,
+        *,
+        refine_phase: bool = False,
+    ) -> Tuple[np.ndarray, int]:
         """Convert a spectrogram image into a waveform and sample rate."""
 
         mel = self._spectrogram_from_image(image)
-        waveform = self._waveform_from_mel(mel)
+        waveform = self._waveform_from_mel(mel, refine_phase=refine_phase)
         return waveform, self._params.sample_rate
 
     def encode(self, waveform: np.ndarray, sample_rate: int) -> Image.Image:
@@ -223,13 +229,39 @@ class SpectrogramImageDecoder:
         data = data * max_value
         return data.astype(np.float32)
 
-    def _waveform_from_mel(self, mel: np.ndarray) -> np.ndarray:
+    def _waveform_from_mel(
+        self,
+        mel: np.ndarray,
+        *,
+        refine_phase: bool = False,
+    ) -> np.ndarray:
         amplitudes = torch.as_tensor(mel, dtype=self._dtype, device=self._device)
         linear = self._inverse_mel(amplitudes)
         # Griffin-Lim expects (batch, freq, time); ensure batch dimension is present.
         if linear.ndim == 2:
             linear = linear.unsqueeze(0)
         waveform = self._griffin_lim(linear)
+        if refine_phase:
+            try:
+                window = torch.hann_window(self._params.win_length, device=self._device)
+                refined_channels = []
+                for channel_spectrogram in linear:
+                    refined = torchaudio.functional.griffinlim(  # type: ignore[attr-defined]
+                        channel_spectrogram,
+                        window=window,
+                        n_fft=self._params.n_fft,
+                        hop_length=self._params.hop_length,
+                        win_length=self._params.win_length,
+                        power=1.0,
+                        n_iter=16,
+                        momentum=0.99,
+                    )
+                    refined_channels.append(refined)
+                if refined_channels:
+                    waveform = torch.stack(refined_channels, dim=0)
+            except Exception:  # noqa: BLE001
+                # Fallback to the first Griffin-Lim pass if refinement fails.
+                pass
         waveform = waveform.cpu().numpy()  # (batch, samples)
         waveform = np.transpose(waveform, (1, 0))  # (samples, channels)
 

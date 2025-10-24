@@ -1,4 +1,4 @@
-"""MusicGen backend service providing melodiic phrase generation."""
+"""MusicGen backend service built on Hugging Face transformers."""
 
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ from ..app.models import (
     GenerationRequest,
     ThemeDescriptor,
 )
-from .audio_utils import ensure_waveform_channels
+from ..app.settings import Settings
+from .audio_utils import ensure_waveform_channels, resample_waveform
 from .types import SectionRender
 
-try:  # pragma: no cover - optional dependency imports are validated at runtime
+try:  # pragma: no cover - deferred dependency import
     import torch
 except Exception as exc:  # noqa: BLE001
     torch = None  # type: ignore[assignment]
@@ -28,34 +29,59 @@ else:  # pragma: no cover
     TORCH_IMPORT_ERROR = None
 
 try:  # pragma: no cover
-    from audiocraft.models import MusicGen
+    from transformers import AutoProcessor, MusicgenForConditionalGeneration
 except Exception as exc:  # noqa: BLE001
-    MusicGen = None  # type: ignore[assignment]
-    MUSICGEN_IMPORT_ERROR = exc
+    AutoProcessor = None  # type: ignore[assignment]
+    MusicgenForConditionalGeneration = None  # type: ignore[assignment]
+    TRANSFORMERS_IMPORT_ERROR = exc
 else:  # pragma: no cover
-    MUSICGEN_IMPORT_ERROR = None
+    TRANSFORMERS_IMPORT_ERROR = None
 
 
 MODEL_REGISTRY = {
     "musicgen-small": "facebook/musicgen-small",
     "musicgen-medium": "facebook/musicgen-medium",
+    "musicgen-large": "facebook/musicgen-large",
+    "musicgen-stereo-small": "facebook/musicgen-stereo-small",
+    "musicgen-stereo-medium": "facebook/musicgen-stereo-medium",
+    "musicgen-stereo-large": "facebook/musicgen-stereo-large",
 }
 
 
 @dataclass
 class ModelHandle:
-    model: Any
+    model: MusicgenForConditionalGeneration
+    processor: AutoProcessor
     sample_rate: int
+    frame_rate: int
 
 
 class MusicGenService:
-    """Adapter around Audiocraft MusicGen with graceful fallbacks."""
+    """Text-to-music generation via transformers MusicGen checkpoints."""
 
-    def __init__(self, *, default_model_id: str = "musicgen-small") -> None:
-        self._default_model_id = default_model_id
-        self._models: Dict[str, Optional[ModelHandle]] = {}
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        *,
+        default_model_id: Optional[str] = None,
+    ) -> None:
+        self._settings = settings
+        if default_model_id is not None:
+            self._default_model_id = default_model_id
+        elif settings is not None:
+            self._default_model_id = settings.musicgen_default_model_id
+        else:
+            self._default_model_id = "musicgen-small"
+
+        self._handles: Dict[str, Optional[ModelHandle]] = {}
         self._lock = asyncio.Lock()
         self._device = self._select_device()
+
+        self._top_k = settings.musicgen_top_k if settings is not None else None
+        self._top_p = settings.musicgen_top_p if settings is not None else None
+        self._temperature = settings.musicgen_temperature if settings is not None else None
+        self._cfg_coef = settings.musicgen_cfg_coef if settings is not None else None
+        self._two_step_cfg = settings.musicgen_two_step_cfg if settings is not None else None
 
     @property
     def default_model_id(self) -> str:
@@ -75,24 +101,31 @@ class MusicGenService:
         theme: ThemeDescriptor | None = None,
         previous_render: SectionRender | None = None,
     ) -> SectionRender:
-        model_key = model_id or section.model_id or self._default_model_id
-        handle, placeholder_reason = await self._ensure_model(model_key)
+        handle, placeholder_reason = await self._ensure_model(
+            model_id or section.model_id or self._default_model_id
+        )
 
         duration_hint = (
             render_seconds if render_seconds is not None else float(section.target_seconds)
         )
-        duration = max(1.0, float(duration_hint))
+        duration = float(max(1.0, duration_hint))
         section_seed: Optional[int] = None
         if request.seed is not None:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
         prompt_text = self._compose_prompt(section.prompt, theme=theme, previous=previous_render)
-
-        warmup = None
-        if previous_render is not None:
-            target_rate = handle.sample_rate if handle is not None else 32_000
-            warmup = self._prepare_warmup(previous_render, target_rate)
+        top_k = request.musicgen_top_k if request.musicgen_top_k is not None else self._top_k
+        top_p = request.musicgen_top_p if request.musicgen_top_p is not None else self._top_p
+        temperature = (
+            request.musicgen_temperature
+            if request.musicgen_temperature is not None
+            else self._temperature
+        )
+        cfg_coef = request.musicgen_cfg_coef or self._cfg_coef
+        two_step_cfg = request.musicgen_two_step_cfg
+        if two_step_cfg is None:
+            two_step_cfg = self._two_step_cfg
 
         if handle is None:
             waveform, sample_rate, extras = await asyncio.to_thread(
@@ -101,18 +134,27 @@ class MusicGenService:
                 duration,
                 placeholder_reason or "musicgen_unavailable",
                 section_seed,
+                top_k,
+                top_p,
+                temperature,
+                cfg_coef,
+                two_step_cfg,
             )
             extras["placeholder"] = True
             extras["backend"] = "musicgen"
             extras["device"] = "placeholder"
         else:
             waveform, sample_rate, extras = await asyncio.to_thread(
-                self._render_waveform,
+                self._generate_waveform,
                 handle,
                 prompt_text,
                 duration,
                 section_seed,
-                warmup,
+                top_k,
+                top_p,
+                temperature,
+                cfg_coef,
+                two_step_cfg,
             )
             extras["placeholder"] = False
             extras["backend"] = "musicgen"
@@ -135,16 +177,15 @@ class MusicGenService:
             extras["seed"] = section_seed
         if theme is not None:
             extras["theme"] = theme.model_dump()
-        if warmup is not None:
-            extras.setdefault("continuation", {})
-            extras["continuation"].update(
-                {
-                    "from_section": previous_render.extras.get("section_id")
-                    if previous_render is not None
-                    else None,
-                    "samples": warmup.shape[-1] if warmup is not None else 0,
-                }
-            )
+        for key, value in (
+            ("top_k", top_k),
+            ("top_p", top_p),
+            ("temperature", temperature),
+            ("cfg_coef", cfg_coef),
+            ("two_step_cfg", two_step_cfg),
+        ):
+            if value is not None:
+                extras[key] = value
 
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
@@ -153,105 +194,122 @@ class MusicGenService:
         model_id: str,
     ) -> Tuple[Optional[ModelHandle], Optional[str]]:
         async with self._lock:
-            if model_id in self._models:
-                return self._models[model_id], None
+            if model_id in self._handles:
+                return self._handles[model_id], None
 
         resolved = MODEL_REGISTRY.get(model_id, model_id)
 
-        if torch is None or MusicGen is None:
+        if torch is None:
             reason = self._missing_dependency_reason()
             async with self._lock:
-                self._models[model_id] = None
+                self._handles[model_id] = None
+            logger.warning("MusicGen unavailable: {}", reason)
+            return None, reason
+
+        if AutoProcessor is None or MusicgenForConditionalGeneration is None:
+            reason = self._missing_dependency_reason()
+            async with self._lock:
+                self._handles[model_id] = None
             logger.warning("MusicGen unavailable: {}", reason)
             return None, reason
 
         try:
-            model = await asyncio.to_thread(MusicGen.get_pretrained, resolved, device=self._device)
+            processor = AutoProcessor.from_pretrained(resolved)
+            model = MusicgenForConditionalGeneration.from_pretrained(resolved)
+            model = model.to(self._device)
+            model.eval()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load MusicGen model %s", resolved)
             async with self._lock:
-                self._models[model_id] = None
+                self._handles[model_id] = None
             return None, f"load_error:{exc.__class__.__name__}"
 
-        sample_rate = getattr(model, "sample_rate", 32000)
-        handle = ModelHandle(model=model, sample_rate=sample_rate)
+        sample_rate = getattr(model.config, "sampling_rate", 32000)
+        frame_rate = getattr(model.config, "frame_rate", 50)
+        handle = ModelHandle(
+            model=model,
+            processor=processor,
+            sample_rate=int(sample_rate),
+            frame_rate=int(frame_rate),
+        )
         async with self._lock:
-            self._models[model_id] = handle
+            self._handles[model_id] = handle
         return handle, None
 
-    def _render_waveform(
+    def _generate_waveform(
         self,
         handle: ModelHandle,
         prompt: str,
         duration_seconds: float,
         seed: Optional[int],
-        warmup: Optional[np.ndarray],
+        top_k: Optional[int],
+        top_p: Optional[float],
+        temperature: Optional[float],
+        cfg_coef: Optional[float],
+        two_step_cfg: Optional[bool],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
-        assert MusicGen is not None and torch is not None
-        model = handle.model
+        assert torch is not None
+        inputs = handle.processor(
+            text=[prompt],
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = {key: value.to(self._device) for key, value in inputs.items()}
 
         generator = None
         if seed is not None:
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
-        audio = None
-        if warmup is not None and hasattr(model, "generate_continuation"):
-            try:
-                tensor = torch.from_numpy(warmup).to(self._device)
-                if tensor.ndim == 1:
-                    tensor = tensor.unsqueeze(0)
-                if tensor.shape[0] > 2:
-                    tensor = tensor[:2]
-                audio = model.generate_continuation(
-                    warmup_audio=tensor,
-                    descriptions=[prompt],
-                    progress=False,
-                    return_tokens=False,
-                    generator=generator,
-                    duration=duration_seconds,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("MusicGen continuation failed, falling back: %s", exc)
-                audio = None
+        tokens = self._seconds_to_tokens(duration_seconds, handle)
+        generation_kwargs: Dict[str, Any] = {
+            "max_new_tokens": tokens,
+            "do_sample": True,
+        }
+        if top_k is not None and top_k > 0:
+            generation_kwargs["top_k"] = int(top_k)
+        if top_p is not None and 0.0 < top_p <= 1.0:
+            generation_kwargs["top_p"] = float(top_p)
+        if temperature is not None and temperature > 0.0:
+            generation_kwargs["temperature"] = float(temperature)
+        if cfg_coef is not None and cfg_coef > 0.0:
+            generation_kwargs["guidance_scale"] = float(cfg_coef)
+        if two_step_cfg is not None:
+            generation_kwargs["do_classifier_free_guidance"] = bool(two_step_cfg)
 
-        try:
-            if audio is None:
-                model.set_generation_params(duration=duration_seconds, use_sampling=True)
-                audio = model.generate(
-                    descriptions=[prompt],
-                    progress=False,
-                    return_tokens=False,
-                    generator=generator,
-                )
-        except TypeError:
-            audio = model.generate(
-                descriptions=[prompt],
-                progress=False,
+        with torch.no_grad():
+            audio_tokens = handle.model.generate(
+                **inputs,
                 generator=generator,
+                **generation_kwargs,
             )
 
-        if isinstance(audio, list):
-            tensor = audio[0]
-        else:
-            tensor = audio
+        decoded_batch = handle.processor.batch_decode(audio_tokens, return_tensors=True)
+        decoded = decoded_batch[0]
+        if hasattr(decoded, "cpu"):
+            decoded = decoded.cpu()
+        if hasattr(decoded, "numpy"):
+            decoded = decoded.numpy()
 
-        if hasattr(tensor, "detach"):
-            tensor = tensor.detach()
-        if hasattr(tensor, "cpu"):
-            tensor = tensor.cpu()
+        waveform = ensure_waveform_channels(np.asarray(decoded).T)
+        sample_rate = handle.sample_rate
+        if waveform.ndim == 1:
+            waveform = waveform.reshape(-1, 1)
+        if waveform.shape[1] == 1:
+            waveform = np.repeat(waveform, 2, axis=1)
+        waveform = waveform.astype(np.float32)
 
-        waveform = np.asarray(tensor, dtype=np.float32)
-        if waveform.ndim == 2:
-            waveform = waveform.T
+        if sample_rate != 44100:
+            waveform = resample_waveform(waveform, sample_rate, 44100)
+            sample_rate = 44100
 
         extras: Dict[str, Any] = {
-            "sample_rate": handle.sample_rate,
+            "sample_rate": sample_rate,
             "prompt_hash": self._prompt_hash(prompt),
         }
         if seed is not None:
             extras["seed"] = seed
 
-        return waveform, handle.sample_rate, extras
+        return waveform, sample_rate, extras
 
     def _placeholder_waveform(
         self,
@@ -259,6 +317,11 @@ class MusicGenService:
         duration_seconds: float,
         reason: str,
         seed: Optional[int],
+        top_k: Optional[int],
+        top_p: Optional[float],
+        temperature: Optional[float],
+        cfg_coef: Optional[float],
+        two_step_cfg: Optional[bool],
     ) -> Tuple[np.ndarray, int, Dict[str, Any]]:
         sample_rate = 32000
         duration_seconds = max(1.0, min(duration_seconds, 30.0))
@@ -285,17 +348,28 @@ class MusicGenService:
         }
         if seed is not None:
             extras["seed"] = seed
+        for key, value in (
+            ("top_k", top_k),
+            ("top_p", top_p),
+            ("temperature", temperature),
+            ("cfg_coef", cfg_coef),
+            ("two_step_cfg", two_step_cfg),
+        ):
+            if value is not None:
+                extras[key] = value
+
         return waveform, sample_rate, extras
+
+    def _seconds_to_tokens(self, duration: float, handle: ModelHandle) -> int:
+        frame_rate = max(handle.frame_rate, 1)
+        return max(int(round(duration * frame_rate)), frame_rate)
 
     def _select_device(self) -> str:
         if torch is None:
             return "cpu"
         if torch.cuda.is_available():  # pragma: no cover
             return "cuda"
-        if (
-            getattr(torch.backends, "mps", None)
-            and torch.backends.mps.is_available()  # pragma: no cover
-        ):
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             return "mps"
         return "cpu"
 
@@ -303,14 +377,10 @@ class MusicGenService:
         if torch is None:
             detail = TORCH_IMPORT_ERROR or "torch_not_installed"
             return f"torch_unavailable:{detail}"
-        if MusicGen is None:
-            detail = MUSICGEN_IMPORT_ERROR or "audiocraft_not_installed"
-            return f"musicgen_unavailable:{detail}"
+        if AutoProcessor is None or MusicgenForConditionalGeneration is None:
+            detail = TRANSFORMERS_IMPORT_ERROR or "transformers_not_installed"
+            return f"transformers_unavailable:{detail}"
         return "unknown"
-
-    def _prompt_hash(self, prompt: str) -> str:
-        digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
-        return digest.hexdigest()
 
     def _compose_prompt(
         self,
@@ -339,47 +409,10 @@ class MusicGenService:
             descriptor = prev_label or "section"
             segments.append(
                 "Continue seamlessly from the previous "
-                f"{descriptor}, preserving tone and instrumentation while "
-                "evolving the motif."
+                f"{descriptor}, preserving tone and instrumentation while evolving the motif."
             )
         return " ".join(fragment.strip() for fragment in segments if fragment.strip())
 
-    def _prepare_warmup(
-        self,
-        render: SectionRender,
-        target_rate: int,
-        max_seconds: float = 4.0,
-    ) -> Optional[np.ndarray]:
-        waveform = ensure_waveform_channels(render.waveform)
-        if waveform.size == 0:
-            return None
-        samples = min(waveform.shape[0], int(max_seconds * render.sample_rate))
-        if samples <= 0:
-            return None
-        tail = waveform[-samples:]
-        if render.sample_rate != target_rate:
-            tail = self._resample_linear(tail, render.sample_rate, target_rate)
-            if tail is None:
-                return None
-        tail = tail.T.astype(np.float32)
-        return tail
-
-    @staticmethod
-    def _resample_linear(
-        data: np.ndarray,
-        src_rate: int,
-        dst_rate: int,
-    ) -> Optional[np.ndarray]:
-        if src_rate <= 0 or dst_rate <= 0:
-            return None
-        if src_rate == dst_rate:
-            return data
-        scale = dst_rate / src_rate
-        target_length = int(round(data.shape[0] * scale))
-        target_indices = np.linspace(0, data.shape[0] - 1, target_length, dtype=np.float64)
-        lower = np.floor(target_indices).astype(int)
-        upper = np.ceil(target_indices).astype(int)
-        upper = np.clip(upper, 0, data.shape[0] - 1)
-        frac = target_indices - lower
-        resampled = (1.0 - frac)[:, None] * data[lower] + frac[:, None] * data[upper]
-        return resampled
+    def _prompt_hash(self, prompt: str) -> str:
+        digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)
+        return digest.hexdigest()

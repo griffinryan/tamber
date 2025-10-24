@@ -69,7 +69,7 @@ async def _run(
 
     planner = CompositionPlanner()
     riffusion = RiffusionService(settings)
-    musicgen = MusicGenService()
+    musicgen = MusicGenService(settings=settings)
     orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
     await orchestrator.warmup()
 

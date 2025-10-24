@@ -45,8 +45,10 @@
 - **Composition planner**: `CompositionPlanner` expands prompts into deterministic multi-section `CompositionPlan` structures (tempo, key, sections, transitions). Plans are generated server-side if the CLI does not provide one and are embedded in every artifact’s metadata for reproducibility.
 - **Inference backends**: a `ComposerOrchestrator` selects between lazy-loaded backends (Riffusion, MusicGen) per section, requests audio renders, and stitches them together with adaptive crossfades and loudness normalisation. Each backend reports section-level extras (seed, guidance, placeholder status) that flow back to the CLI.
 - **Riffusion backend**: Diffusers-based spectrogram diffusion with PyTorch (`torch>=2.x`) using the MPS backend on Apple Silicon (float32 CPU fallback). Missing dependencies return deterministic placeholder stems so the pipeline remains debuggable offline.
+- **Mastering/export**: after mixdown we run a high-frequency tilt, soft limiter, resample to 48 kHz, and export 24-bit WAV (dithered). Metadata records the final sample rate, bit depth, and scheduler/guidance knobs used per section.
 - Enforce a minimum five-second render window for each Riffusion section to avoid the white-noise artefacts observed with shorter inference requests; the orchestrator trims rendered stems back to the planned duration.
-- **MusicGen backend**: Audiocraft integration (small/medium checkpoints) with graceful placeholders when the model isn’t available. Backends can be extended via the orchestrator registry without touching the HTTP layer.
+- **Configuration**: `Settings` exposes per-backend defaults (`riffusion_default_model_id`, `musicgen_default_model_id`) and mastering targets (`export_sample_rate`, `export_bit_depth`). Environment overrides (`TIMBRE_RIFFUSION_DEFAULT_MODEL_ID`, `TIMBRE_MUSICGEN_DEFAULT_MODEL_ID`, etc.) let developers redirect backends without code changes.
+- **MusicGen backend**: Hugging Face transformers integration (small/medium checkpoints) with graceful placeholders when the model isn’t available. Install via `uv sync --project worker --extra inference` (or `make setup-musicgen`) to unlock real generations. Backends can be extended via the orchestrator registry without touching the HTTP layer.
 - **Job handling**: `JobManager` now delegates to the orchestrator, emitting multi-stage progress updates (`planning`, `rendering sections`, `assembling mixdown`).
 - **Artifacts**: Shared audio utilities write PCM WAVs under `~/Music/Timbre/<job_id>.wav`; metadata records the full plan, backend extras, and render mix profile.
 - **Config**: `pydantic` models define requests/responses, aligning with Rust `serde` structs.
@@ -54,7 +56,7 @@
 - **Tooling**: `python -m timbre_worker.generate` runs the full planner → orchestrator chain for smoke-testing.
 
 ### 3.3 Shared Schemas
-- **GenerationRequest**: `prompt: str`, `seed: Optional[int]`, `duration_seconds: int`, `model_id: str`, `cfg_scale: Optional[float]`, `scheduler: Optional[str]`.
+- **GenerationRequest**: `prompt: str`, `seed: Optional[int]`, `duration_seconds: int`, `model_id: str`, plus backend overrides (`cfg_scale`, `scheduler`, `riffusion_num_inference_steps`, `riffusion_guidance_scale`, `riffusion_scheduler`, `musicgen_top_k`, `musicgen_top_p`, `musicgen_temperature`, `musicgen_cfg_coef`, `musicgen_two_step_cfg`, `output_sample_rate`, `output_bit_depth`, `output_format`).
 - **GenerationStatus**: `job_id: str`, `state: Literal["queued","running","succeeded","failed"]`, `progress: float`, `message: Optional[str]`.
 - **GenerationArtifact**: `job_id: str`, `artifact_path: str`, `preview_url: Optional[str]`, `metadata: dict`.
 - Store schema definitions in `docs/schemas/` (JSON schema) and reflect in Rust/Python code to avoid drift.
