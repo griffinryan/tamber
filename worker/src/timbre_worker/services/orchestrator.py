@@ -56,6 +56,8 @@ class ComposerOrchestrator:
         model_hint: Optional[str] = None,
     ) -> None:
         tokens = self._collect_backend_tokens(plan=plan, model_hint=model_hint)
+        if plan is None and model_hint is None:
+            tokens.update({"musicgen", "riffusion"})
         await self._warmup_backends(tokens)
 
     async def generate(

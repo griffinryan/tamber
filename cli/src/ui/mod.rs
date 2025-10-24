@@ -15,6 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
+use serde::Deserialize;
 use std::time::Duration;
 use std::{collections::HashMap, time::Duration as StdDuration};
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender};
@@ -575,8 +576,34 @@ fn plan_status_lines(job: &JobEntry) -> Vec<Line<'static>> {
     lines
 }
 
-fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> {
-    let mut map = HashMap::new();
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SectionExtras {
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    placeholder: Option<bool>,
+    #[serde(default)]
+    render_seconds: Option<f32>,
+    #[serde(default)]
+    phrase: Option<PhraseExtras>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PhraseExtras {
+    #[serde(default)]
+    seconds: Option<f32>,
+    #[serde(default)]
+    beats: Option<f32>,
+    #[serde(default)]
+    bars: Option<i32>,
+    #[serde(default)]
+    padding_seconds: Option<f32>,
+    #[serde(default)]
+    conditioning_tail_seconds: Option<f32>,
+}
+
+fn extract_section_extras(job: &JobEntry) -> HashMap<String, SectionExtras> {
+    let mut map: HashMap<String, SectionExtras> = HashMap::new();
     if let Some(artifact) = &job.artifact {
         if let Some(extras) = artifact.descriptor.metadata.extras.as_object() {
             if let Some(sections) = extras.get("sections").and_then(|value| value.as_array()) {
@@ -584,7 +611,34 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> 
                     if let Some(section_id) =
                         entry.get("section_id").and_then(|value| value.as_str())
                     {
-                        map.insert(section_id.to_string(), entry.clone());
+                        match serde_json::from_value::<SectionExtras>(entry.clone()) {
+                            Ok(parsed) => {
+                                map.insert(section_id.to_string(), parsed);
+                            }
+                            Err(err) => {
+                                map.insert(
+                                    section_id.to_string(),
+                                    SectionExtras {
+                                        backend: entry
+                                            .get("backend")
+                                            .and_then(|value| value.as_str())
+                                            .map(|s| s.to_string()),
+                                        placeholder: entry
+                                            .get("placeholder")
+                                            .and_then(|value| value.as_bool()),
+                                        render_seconds: entry
+                                            .get("render_seconds")
+                                            .and_then(|value| value.as_f64())
+                                            .map(|v| v as f32),
+                                        phrase: None,
+                                    },
+                                );
+                                eprintln!(
+                                    "failed to parse section extras for {}: {}",
+                                    section_id, err
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -595,7 +649,7 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, serde_json::Value> 
 
 fn plan_section_line(
     section: &CompositionSection,
-    extras: &HashMap<String, serde_json::Value>,
+    extras: &HashMap<String, SectionExtras>,
     active_label: Option<&str>,
 ) -> Line<'static> {
     let is_active =
@@ -623,14 +677,38 @@ fn plan_section_line(
     ));
 
     if let Some(extra) = extras.get(&section.section_id) {
-        if let Some(backend) = extra.get("backend").and_then(|value| value.as_str()) {
+        if let Some(ref backend) = extra.backend {
             spans.push(Span::styled(format!(" · {}", backend), Style::default().fg(Color::Cyan)));
         }
-        if extra.get("continuation").is_some() {
-            spans.push(Span::styled(" · ↺", Style::default().fg(Color::LightMagenta)));
-        }
-        if extra.get("placeholder").and_then(|value| value.as_bool()).unwrap_or(false) {
+        if extra.placeholder.unwrap_or(false) {
             spans.push(Span::styled(" · placeholder", Style::default().fg(Color::Magenta)));
+        }
+        if let Some(render_seconds) = extra.render_seconds {
+            spans.push(Span::styled(
+                format!(" · render {:.2}s", render_seconds),
+                Style::default().fg(Color::LightGreen),
+            ));
+        }
+        if let Some(phrase) = &extra.phrase {
+            let seconds = phrase.seconds.unwrap_or(section.target_seconds);
+            let beats =
+                phrase.beats.map(|b| format!("{b:.1} beats")).unwrap_or_else(|| "- beats".into());
+            let bars = phrase.bars.map(|b| format!("{b} bars")).unwrap_or_else(|| "- bars".into());
+            let padding = phrase
+                .padding_seconds
+                .map(|p| format!("pad {:.2}s", p))
+                .unwrap_or_else(|| "pad 0.00s".into());
+            spans.push(Span::raw(" · "));
+            spans.push(Span::styled(
+                format!("phrase {:.2}s · {beats} · {bars} · {padding}", seconds),
+                Style::default().fg(Color::LightYellow),
+            ));
+            if let Some(tail) = phrase.conditioning_tail_seconds {
+                spans.push(Span::styled(
+                    format!(" (tail {:.2}s)", tail),
+                    Style::default().fg(Color::LightMagenta),
+                ));
+            }
         }
     }
 
@@ -681,7 +759,6 @@ fn insert_border_style() -> Style {
 mod tests {
     use super::*;
     use crate::types::SectionRole;
-    use serde_json::json;
 
     #[test]
     fn format_section_line_includes_backend_and_active_marker() {
@@ -700,19 +777,31 @@ mod tests {
             variation_axes: vec!["motif fidelity".to_string()],
             cadence_hint: Some("open cadence".to_string()),
         };
-        let mut extras = HashMap::new();
+        let mut extras: HashMap<String, SectionExtras> = HashMap::new();
         extras.insert(
             "s00".to_string(),
-            json!({
-                "backend": "musicgen",
-                "section_id": "s00",
-                "placeholder": false
-            }),
+            SectionExtras {
+                backend: Some("musicgen".to_string()),
+                placeholder: Some(false),
+                render_seconds: Some(8.4),
+                phrase: Some(PhraseExtras {
+                    seconds: Some(8.4),
+                    beats: Some(16.0),
+                    bars: Some(4),
+                    padding_seconds: Some(0.35),
+                    conditioning_tail_seconds: Some(3.2),
+                }),
+            },
         );
 
         let line = plan_section_line(&section, &extras, Some("Theme"));
         let rendered = line.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
         assert!(rendered.contains("musicgen"));
+        assert!(rendered.contains("render 8.40s"));
+        assert!(rendered.contains("16.0 beats"));
+        assert!(rendered.contains("4 bars"));
         assert!(rendered.trim_start().starts_with("▶"));
+        assert!(rendered.contains("phrase"));
+        assert!(rendered.contains("tail 3.20s"));
     }
 }

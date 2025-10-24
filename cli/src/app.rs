@@ -648,10 +648,7 @@ fn plan_summary(plan: &CompositionPlan) -> String {
             .sections
             .iter()
             .map(|section| {
-                section
-                    .motif_directive
-                    .clone()
-                    .unwrap_or_else(|| format!("{:?}", section.role))
+                section.motif_directive.clone().unwrap_or_else(|| format!("{:?}", section.role))
             })
             .collect::<Vec<String>>()
             .join(" → ");
