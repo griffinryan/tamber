@@ -7,6 +7,7 @@
 
 ## Build, Test, and Development Commands
 - `make setup` installs Python dependencies via `uv sync --project worker` and prefetches Rust crates.
+- `make setup-musicgen` installs the full inference stack (PyTorch/Diffusers + transformers) so the MusicGen backend returns real audio.
 - `make cli-run` launches the TUI (`cargo run -p timbre-cli`) for manual smoke testing.
 - `make worker-serve` starts the API locally at `http://localhost:8000` with autoreload.
 - `make test` executes the full Rust + Python test matrix; run before pushing.
@@ -18,7 +19,7 @@
 - Format with `cargo fmt` and `uv run --project worker ruff check --fix` when safe; commit lints separately from feature work.
 
 ## Configuration & Environment
-- User config defaults live at `~/.config/timbre/config.toml`; override with `TIMBRE_CONFIG_PATH` or specific keys (`TIMBRE_WORKER_URL`, `TIMBRE_DEFAULT_MODEL`, `TIMBRE_DEFAULT_DURATION`, `TIMBRE_ARTIFACT_DIR`).
+- User config defaults live at `~/.config/timbre/config.toml`; override with `TIMBRE_CONFIG_PATH` or specific keys (`TIMBRE_WORKER_URL`, `TIMBRE_DEFAULT_MODEL`, `TIMBRE_DEFAULT_DURATION`, `TIMBRE_ARTIFACT_DIR`). Backend defaults can be tuned through `TIMBRE_RIFFUSION_DEFAULT_MODEL_ID`, `TIMBRE_MUSICGEN_DEFAULT_MODEL_ID`, `TIMBRE_EXPORT_SAMPLE_RATE`, etc.
 - Worker settings mirror these via `pydantic-settings`, ensuring directories exist under `~/Music/Timbre` for artifacts.
 - Keep secrets (API keys, tokens) out of config files; export them as env vars within shell profiles instead.
 

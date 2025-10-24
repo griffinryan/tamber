@@ -25,7 +25,7 @@
     },
     "model_id": {
       "type": "string",
-      "description": "Identifier for the backend model to use (e.g. riffusion-v1)."
+      "description": "Identifier for the backend model to use (e.g. musicgen-stereo-medium, riffusion-v1)."
     },
     "cfg_scale": {
       "type": ["number", "null"],
@@ -37,6 +37,71 @@
       "type": ["string", "null"],
       "maxLength": 64,
       "description": "Optional scheduler identifier for diffusion backends."
+    },
+    "riffusion_num_inference_steps": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 200,
+      "description": "Override the default number of diffusion steps for Riffusion renders."
+    },
+    "riffusion_guidance_scale": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 20.0,
+      "description": "Explicit guidance scale override for Riffusion."
+    },
+    "riffusion_scheduler": {
+      "type": ["string", "null"],
+      "maxLength": 64,
+      "description": "Scheduler identifier applied to the Riffusion diffusion pipeline."
+    },
+    "musicgen_top_k": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 2048,
+      "description": "MusicGen sampling top-k (0 disables pruning)."
+    },
+    "musicgen_top_p": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "MusicGen nucleus sampling top-p."
+    },
+    "musicgen_temperature": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 4.0,
+      "description": "MusicGen sampling temperature."
+    },
+    "musicgen_cfg_coef": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 20.0,
+      "description": "MusicGen classifier-free guidance coefficient."
+    },
+    "musicgen_two_step_cfg": {
+      "type": ["boolean", "null"],
+      "description": "Enable MusicGen two-step classifier-free guidance."
+    },
+    "output_sample_rate": {
+      "type": ["integer", "null"],
+      "minimum": 8000,
+      "maximum": 192000,
+      "description": "Override the export sample rate for the rendered audio."
+    },
+    "output_bit_depth": {
+      "type": ["string", "null"],
+      "maxLength": 16,
+      "description": "Override the export bit depth (pcm16, pcm24, pcm32, float32)."
+    },
+    "output_format": {
+      "type": ["string", "null"],
+      "maxLength": 16,
+      "description": "Override the export container format (currently wav)."
+    },
+    "plan": {
+      "type": ["object", "null"],
+      "description": "Optional precomputed composition plan to render."
     }
   }
 }

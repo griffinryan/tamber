@@ -48,10 +48,15 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
     assert extras.get("placeholder") is True
     assert extras.get("placeholder_reason") is not None
     assert extras.get("backend") == "riffusion"
+    assert extras.get("sample_rate") == settings.export_sample_rate
+    assert extras.get("bit_depth") == settings.export_bit_depth
+    assert extras.get("format") == settings.export_format
     assert extras.get("prompt_hash") == hashlib.blake2s(
         b"soft synthwave",
         digest_size=8,
     ).hexdigest()
+    assert extras.get("num_inference_steps") == settings.riffusion_num_inference_steps
+    assert extras.get("scheduler") in (None, settings.riffusion_scheduler)
     assert extras.get("render_seconds") == pytest.approx(
         MIN_RENDER_SECONDS,
         rel=0.0,
@@ -213,8 +218,16 @@ async def test_riffusion_service_pipeline_receives_prompt(
         digest_size=8,
     ).hexdigest()
     assert extras.get("prompt_hash") == expected_hash
-    assert extras.get("sample_rate") == 44100
+    assert extras.get("sample_rate") == settings.export_sample_rate
+    assert extras.get("bit_depth") == settings.export_bit_depth
+    assert extras.get("format") == settings.export_format
     assert extras.get("guidance_scale") == DEFAULT_GUIDANCE_SCALE
+    assert extras.get("num_inference_steps") == settings.riffusion_num_inference_steps
+    assert extras.get("scheduler") in (
+        None,
+        settings.riffusion_scheduler,
+        "DPMSolverMultistepScheduler",
+    )
     assert extras.get("render_seconds") == pytest.approx(
         MIN_RENDER_SECONDS,
         rel=0.0,

@@ -65,9 +65,20 @@ class GenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=512)
     seed: Optional[int] = Field(default=None, ge=0)
     duration_seconds: int = Field(default=8, ge=1, le=30)
-    model_id: str = Field(default="riffusion-v1")
+    model_id: str = Field(default="musicgen-stereo-medium")
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)
+    riffusion_num_inference_steps: Optional[int] = Field(default=None, ge=1, le=200)
+    riffusion_guidance_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
+    riffusion_scheduler: Optional[str] = Field(default=None, max_length=64)
+    musicgen_top_k: Optional[int] = Field(default=None, ge=0, le=2048)
+    musicgen_top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    musicgen_temperature: Optional[float] = Field(default=None, ge=0.0, le=4.0)
+    musicgen_cfg_coef: Optional[float] = Field(default=None, ge=0.0, le=20.0)
+    musicgen_two_step_cfg: Optional[bool] = Field(default=None)
+    output_sample_rate: Optional[int] = Field(default=None, ge=8_000, le=192_000)
+    output_bit_depth: Optional[str] = Field(default=None, max_length=16)
+    output_format: Optional[str] = Field(default=None, max_length=16)
     plan: Optional[CompositionPlan] = None
 
 

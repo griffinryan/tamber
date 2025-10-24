@@ -1,7 +1,11 @@
-.PHONY: setup worker-serve cli-run lint test fmt smoke
+.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt smoke
 
 setup:
 	uv sync --project worker
+	cargo fetch
+
+setup-musicgen:
+	uv sync --project worker --extra inference
 	cargo fetch
 
 worker-serve:

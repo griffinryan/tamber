@@ -26,6 +26,8 @@ async def health(request: Request) -> dict[str, object]:
     return {
         "status": "ok",
         "default_model_id": settings.default_model_id,
+        "riffusion_default_model_id": settings.riffusion_default_model_id,
+        "musicgen_default_model_id": settings.musicgen_default_model_id,
         "artifact_root": str(settings.artifact_root),
         "planner_version": PLAN_VERSION,
         "available_backends": available_backends,

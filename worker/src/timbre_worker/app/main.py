@@ -18,7 +18,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     planner = CompositionPlanner()
     riffusion = RiffusionService(settings)
-    musicgen = MusicGenService()
+    musicgen = MusicGenService(settings=settings)
     orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
     manager = JobManager(orchestrator)
     app = FastAPI(title="Timbre Worker", version="0.1.0")

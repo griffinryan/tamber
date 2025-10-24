@@ -323,6 +323,17 @@ impl AppState {
             model_id: self.generation_config.model_id.clone(),
             cfg_scale: self.generation_config.cfg_scale,
             scheduler: None,
+            riffusion_num_inference_steps: None,
+            riffusion_guidance_scale: None,
+            riffusion_scheduler: None,
+            musicgen_top_k: None,
+            musicgen_top_p: None,
+            musicgen_temperature: None,
+            musicgen_cfg_coef: None,
+            musicgen_two_step_cfg: None,
+            output_sample_rate: None,
+            output_bit_depth: None,
+            output_format: None,
             plan: Some(plan.clone()),
         };
         (request, plan)
@@ -774,6 +785,17 @@ mod tests {
             model_id: "riffusion-v1".into(),
             cfg_scale: Some(5.5),
             scheduler: None,
+            riffusion_num_inference_steps: None,
+            riffusion_guidance_scale: None,
+            riffusion_scheduler: None,
+            musicgen_top_k: None,
+            musicgen_top_p: None,
+            musicgen_temperature: None,
+            musicgen_cfg_coef: None,
+            musicgen_two_step_cfg: None,
+            output_sample_rate: None,
+            output_bit_depth: None,
+            output_format: None,
             plan: None,
         };
         let summary = format_request_summary(&request);
@@ -808,7 +830,7 @@ mod tests {
         assert_eq!(request.duration_seconds, 10);
         assert_eq!(request.cfg_scale, Some(6.5));
         assert_eq!(request.seed, Some(77));
-        assert_eq!(request.model_id, "riffusion-v1");
+        assert_eq!(request.model_id, "musicgen-stereo-medium");
         assert!(request.plan.is_some());
         assert_eq!(plan.sections.len(), request.plan.as_ref().unwrap().sections.len());
     }

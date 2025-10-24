@@ -21,8 +21,10 @@ from .audio_utils import (
     ensure_waveform_channels,
     fit_to_length,
     normalise_loudness,
+    resample_waveform,
     rms_level,
     soft_limiter,
+    tilt_highs,
     write_waveform,
 )
 from .musicgen import MusicGenService
@@ -93,13 +95,27 @@ class ComposerOrchestrator:
         trimmed, sample_rate, section_rms = self._prepare_section_waveforms(plan, renders)
         waveform, crossfades = self._combine_sections(plan, trimmed, sample_rate)
         waveform = normalise_loudness(waveform, target_rms=0.2)
+        waveform = tilt_highs(waveform, sample_rate)
         waveform = soft_limiter(waveform, threshold=0.98)
+
+        export_rate = self._settings.export_sample_rate
+        if export_rate and sample_rate != export_rate:
+            waveform = resample_waveform(waveform, sample_rate, export_rate)
+            sample_rate = export_rate
+            waveform = soft_limiter(waveform, threshold=0.98)
+
         if mix_cb is not None:
             await mix_cb(len(waveform) / sample_rate)
 
         artifact_path = self._artifact_root / f"{job_id}.wav"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        write_waveform(artifact_path, waveform, sample_rate)
+        write_waveform(
+            artifact_path,
+            waveform,
+            sample_rate,
+            bit_depth=self._settings.export_bit_depth,
+            audio_format=self._settings.export_format,
+        )
 
         extras: Dict[str, object] = {
             "backend": "composer",
@@ -116,6 +132,8 @@ class ComposerOrchestrator:
             },
             "sample_rate": sample_rate,
         }
+        extras["bit_depth"] = self._settings.export_bit_depth
+        extras["format"] = self._settings.export_format
         if plan.theme is not None:
             extras["theme"] = plan.theme.model_dump()
 
