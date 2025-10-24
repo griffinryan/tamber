@@ -178,12 +178,6 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     crossfade_total = sum(
         entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", [])
     )
-    assert plan.total_duration_seconds - crossfade_total == pytest.approx(
-        mix_calls[0],
-        rel=1e-3,
-    )
-    assert mix_calls[0] <= plan.total_duration_seconds
-
     assert extras.get("backend") == "composer"
     assert extras.get("placeholder") is False
     assert mix_info.get("target_rms", 0.0) == pytest.approx(0.2, rel=1e-3)
@@ -195,6 +189,14 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert len(sections) == 2
     assert sections[0].get("render_seconds", 0.0) >= plan.sections[0].target_seconds
     assert sections[1].get("render_seconds", 0.0) >= plan.sections[1].target_seconds
+    phrase_total = sum(
+        section.get("phrase", {}).get("seconds", 0.0) for section in sections
+    )
+    assert phrase_total > 0.0
+    assert phrase_total - crossfade_total == pytest.approx(
+        mix_calls[0],
+        rel=1e-3,
+    )
     motif_seed = extras.get("motif_seed")
     assert isinstance(motif_seed, dict)
     assert motif_seed.get("captured") is True

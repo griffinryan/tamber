@@ -71,7 +71,6 @@ async def _run(
     riffusion = RiffusionService(settings)
     musicgen = MusicGenService(settings=settings)
     orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
-    await orchestrator.warmup()
 
     request = GenerationRequest(
         prompt=prompt,
@@ -79,6 +78,7 @@ async def _run(
         model_id=model_id or settings.default_model_id,
     )
     request.plan = planner.build_plan(request)
+    await orchestrator.warmup(plan=request.plan, model_hint=request.model_id)
 
     job_id = f"cli-{uuid4()}"
     artifact = await orchestrator.generate(job_id=job_id, request=request)

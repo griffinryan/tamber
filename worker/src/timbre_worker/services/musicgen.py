@@ -541,10 +541,14 @@ class MusicGenService:
         segments: list[np.ndarray] = []
         segment_meta: list[Dict[str, Any]] = []
         if motif_seed is not None:
+            motif_window = min(
+                16.0,
+                self._phrase_window_seconds(motif_seed, "seconds", default=6.0),
+            )
             motif_audio = self._prepare_audio_prompt_segment(
                 motif_seed,
                 handle.sample_rate,
-                max_seconds=6.0,
+                max_seconds=motif_window,
                 segment="head",
             )
             if motif_audio.size > 0:
@@ -553,13 +557,22 @@ class MusicGenService:
                     {
                         "source": "motif",
                         "seconds": float(motif_audio.size / handle.sample_rate),
+                        "window_seconds": float(motif_window),
                     }
                 )
         if previous_render is not None:
+            tail_window = min(
+                16.0,
+                self._phrase_window_seconds(
+                    previous_render,
+                    "conditioning_tail_seconds",
+                    default=4.0,
+                ),
+            )
             tail_audio = self._prepare_audio_prompt_segment(
                 previous_render,
                 handle.sample_rate,
-                max_seconds=4.0,
+                max_seconds=tail_window,
                 segment="tail",
             )
             if tail_audio.size > 0:
@@ -568,6 +581,7 @@ class MusicGenService:
                     {
                         "source": "previous_tail",
                         "seconds": float(tail_audio.size / handle.sample_rate),
+                        "window_seconds": float(tail_window),
                     }
                 )
 
@@ -628,3 +642,24 @@ class MusicGenService:
                 mono[-fade_samples:] *= fade[::-1]
         mono = np.clip(mono, -1.0, 1.0)
         return mono
+
+    def _phrase_window_seconds(
+        self,
+        render: SectionRender,
+        key: str,
+        *,
+        default: float,
+    ) -> float:
+        extras = getattr(render, "extras", None)
+        if not isinstance(extras, dict):
+            return default
+        phrase = extras.get("phrase")
+        if not isinstance(phrase, dict):
+            return default
+        value = phrase.get(key)
+        if value is None and key == "conditioning_tail_seconds":
+            value = phrase.get("seconds")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default

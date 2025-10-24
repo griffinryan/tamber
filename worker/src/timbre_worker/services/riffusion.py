@@ -92,6 +92,7 @@ class RiffusionService:
         self._spectrogram_params = SpectrogramParams()
         self._spectrogram_error: Optional[str] = None
         self._spectrogram_mode: Optional[str] = None
+        self._spectrogram_warned = False
         self._default_guidance = settings.riffusion_guidance_scale
         self._default_steps = settings.riffusion_num_inference_steps
         self._default_scheduler = settings.riffusion_scheduler
@@ -103,7 +104,6 @@ class RiffusionService:
 
     async def warmup(self) -> None:
         await self._ensure_pipeline(self._default_model_id)
-        self._resolve_spectrogram_decoder(44100)
 
     async def render_section(
         self,
@@ -787,6 +787,9 @@ class RiffusionService:
         self,
         expected_sample_rate: int,
     ) -> Optional[SpectrogramImageDecoder]:
+        if not self._allow_inference:
+            self._spectrogram_error = "inference_disabled"
+            return None
         params = self._spectrogram_params
         if params.sample_rate != expected_sample_rate:
             params = replace(params, sample_rate=expected_sample_rate)
@@ -800,12 +803,15 @@ class RiffusionService:
             decoder = SpectrogramImageDecoder(params, device="cpu")
         except RuntimeError as exc:
             self._spectrogram_error = str(exc)
-            logger.warning("Spectrogram decoder unavailable: %s", exc)
+            if not self._spectrogram_warned:
+                logger.warning("Spectrogram decoder unavailable: %s", exc)
+                self._spectrogram_warned = True
             return None
 
         self._spectrogram_decoder = decoder
         self._spectrogram_error = None
         self._spectrogram_mode = getattr(decoder._inverse_mel, "decoder_mode", "unknown")
+        self._spectrogram_warned = False
         logger.info(
             "Spectrogram decoder initialised (mode=%s, sample_rate=%s)",
             self._spectrogram_mode,
