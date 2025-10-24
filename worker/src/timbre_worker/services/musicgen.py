@@ -14,6 +14,8 @@ from ..app.models import (
     CompositionPlan,
     CompositionSection,
     GenerationRequest,
+    SectionOrchestration,
+    SectionRole,
     ThemeDescriptor,
 )
 from ..app.settings import Settings
@@ -133,13 +135,19 @@ class MusicGenService:
         duration_hint = (
             render_seconds if render_seconds is not None else float(section.target_seconds)
         )
-        duration = float(max(1.0, duration_hint))
+        duration = float(max(1.0, min(duration_hint, 29.5)))
         section_seed: Optional[int] = None
         if request.seed is not None:
             offset = section.seed_offset or 0
             section_seed = request.seed + offset
 
-        prompt_text = self._compose_prompt(section.prompt, theme=theme, previous=previous_render)
+        arrangement_text = self._arrangement_sentence(section.orchestration, section.role)
+        prompt_text = self._compose_prompt(
+            section,
+            arrangement=arrangement_text,
+            theme=theme,
+            previous=previous_render,
+        )
         conditioning_requested = motif_seed is not None or previous_render is not None
         top_k = request.musicgen_top_k if request.musicgen_top_k is not None else self._top_k
         top_p = request.musicgen_top_p if request.musicgen_top_p is not None else self._top_p
@@ -211,6 +219,8 @@ class MusicGenService:
                 "plan_version": plan.version,
                 "target_seconds": float(section.target_seconds),
                 "render_seconds": actual_seconds,
+                "orchestration": section.orchestration.model_dump(),
+                "arrangement_text": arrangement_text,
             }
         )
         if placeholder_reason:
@@ -468,34 +478,88 @@ class MusicGenService:
 
     def _compose_prompt(
         self,
-        base_prompt: str,
+        section: CompositionSection,
         *,
+        arrangement: str,
         theme: ThemeDescriptor | None,
         previous: SectionRender | None,
     ) -> str:
-        segments: list[str] = [base_prompt.strip()]
+        base_prompt = section.prompt.strip()
+        segments: list[str] = [base_prompt]
+        if arrangement:
+            segments.append(arrangement)
         if theme is not None:
-            instrumentation = (
-                ", ".join(theme.instrumentation)
-                if theme.instrumentation
-                else "blended instrumentation"
-            )
-            parts = [
-                f"Keep the {theme.motif} motif",
-                f"with {instrumentation}",
-                f"locked to a {theme.rhythm}",
-            ]
+            motif_clause = f"Keep the {theme.motif} motif"
+            rhythm_clause = f"aligned with the {theme.rhythm}"
+            extras: list[str] = [motif_clause, rhythm_clause]
             if theme.texture:
-                parts.append(f"inside a {theme.texture}")
-            segments.append(" ".join(parts) + ".")
+                extras.append(f"inside a {theme.texture}")
+            if not arrangement and theme.instrumentation:
+                instrumentation = ", ".join(theme.instrumentation)
+                extras.append(f"using {instrumentation}")
+            segments.append(" ".join(extras) + ".")
         if previous is not None:
             prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
             descriptor = prev_label or "section"
             segments.append(
-                "Continue seamlessly from the previous "
-                f"{descriptor}, preserving tone and instrumentation while evolving the motif."
+                "Continue smoothly from the previous "
+                f"{descriptor}, preserving timbre while evolving the motif."
             )
         return " ".join(fragment.strip() for fragment in segments if fragment.strip())
+
+    def _arrangement_sentence(
+        self,
+        orchestration: SectionOrchestration,
+        role: SectionRole,
+    ) -> str:
+        phrases: list[str] = []
+        if orchestration.rhythm:
+            instruments = self._join_with_and(self._unique(orchestration.rhythm))
+            phrases.append(f"{instruments} driving the rhythm")
+        if orchestration.bass:
+            instruments = self._join_with_and(self._unique(orchestration.bass))
+            phrases.append(f"{instruments} grounding the low end")
+        if orchestration.harmony:
+            instruments = self._join_with_and(self._unique(orchestration.harmony))
+            phrases.append(f"{instruments} shaping the harmony")
+        if orchestration.lead:
+            instruments = self._join_with_and(self._unique(orchestration.lead))
+            phrases.append(f"{instruments} carrying the lead lines")
+        if orchestration.textures:
+            instruments = self._join_with_and(self._unique(orchestration.textures))
+            phrases.append(f"{instruments} colouring the textures")
+        if orchestration.vocals:
+            instruments = self._join_with_and(self._unique(orchestration.vocals))
+            phrases.append(f"{instruments} adding vocal nuance")
+        if not phrases:
+            return ""
+        action = {
+            SectionRole.INTRO: "Introduce",
+            SectionRole.MOTIF: "Feature",
+            SectionRole.CHORUS: "Elevate",
+            SectionRole.BRIDGE: "Transform",
+            SectionRole.DEVELOPMENT: "Develop",
+            SectionRole.RESOLUTION: "Resolve",
+            SectionRole.OUTRO: "Reimagine",
+        }.get(role, "Highlight")
+        return f"{action} the arrangement with {self._join_with_and(phrases)}."
+
+    def _join_with_and(self, items: list[str]) -> str:
+        filtered = [item for item in items if item]
+        if not filtered:
+            return ""
+        if len(filtered) == 1:
+            return filtered[0]
+        return ", ".join(filtered[:-1]) + f" and {filtered[-1]}"
+
+    def _unique(self, items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique_items: list[str] = []
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                unique_items.append(item)
+        return unique_items
 
     def _prompt_hash(self, prompt: str) -> str:
         digest = hashlib.blake2s(prompt.encode("utf-8"), digest_size=8)

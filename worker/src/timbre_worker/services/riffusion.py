@@ -29,6 +29,7 @@ from ..app.models import (
     GenerationMetadata,
     GenerationRequest,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
     ThemeDescriptor,
 )
@@ -937,6 +938,7 @@ class RiffusionService:
             model_id=request.model_id,
             seed_offset=0,
             transition=None,
+            orchestration=SectionOrchestration(),
         )
         return CompositionPlan(
             version="fallback-v1",

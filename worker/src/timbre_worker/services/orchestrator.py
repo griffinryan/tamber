@@ -20,7 +20,6 @@ from ..app.settings import Settings
 from .audio_utils import (
     crossfade_append,
     ensure_waveform_channels,
-    fit_to_length,
     normalise_loudness,
     resample_waveform,
     rms_level,
@@ -492,7 +491,6 @@ class ComposerOrchestrator:
         prepared: List[np.ndarray] = []
         loudness: List[float] = []
         sample_rate = tracks[0].render.sample_rate
-        tempo = max(plan.tempo_bpm, 1)
         for section, track in zip(plan.sections, tracks, strict=True):
             render = track.render
             if render.sample_rate != sample_rate:
@@ -500,9 +498,9 @@ class ComposerOrchestrator:
             waveform = ensure_waveform_channels(render.waveform)
             target_seconds = max(track.phrase.seconds, float(section.target_seconds))
             target_samples = max(1, int(round(target_seconds * sample_rate)))
-            fitted = fit_to_length(waveform, target_samples, sample_rate, tempo_bpm=tempo)
-            loudness.append(rms_level(fitted))
-            prepared.append(fitted)
+            shaped = self._shape_to_target_length(waveform, target_samples, sample_rate)
+            loudness.append(rms_level(shaped))
+            prepared.append(shaped)
         if len(prepared) != len(plan.sections):
             raise RuntimeError("prepared waveforms do not match plan sections")
         return prepared, sample_rate, loudness
@@ -533,25 +531,47 @@ class ComposerOrchestrator:
                 left_extras,
                 right_extras,
             )
-            fade_samples = int(max(1, round(sample_rate * fade_seconds)))
-            combined = crossfade_append(left, right, fade_samples)
-            crossfade_records.append(
-                {
-                    "from": plan.sections[index - 1].section_id,
-                    "to": plan.sections[index].section_id,
-                    "seconds": fade_seconds,
-                    "conditioning": {
-                        "left_audio_conditioned": bool(
-                            left_extras.get("audio_conditioning_applied")
-                        ),
-                        "right_audio_conditioned": bool(
-                            right_extras.get("audio_conditioning_applied")
-                        ),
-                        "left_placeholder": bool(left_extras.get("placeholder")),
-                        "right_placeholder": bool(right_extras.get("placeholder")),
-                    },
-                }
-            )
+            if fade_seconds <= 0.0:
+                combined = self._butt_join(left, right, sample_rate)
+                crossfade_records.append(
+                    {
+                        "from": plan.sections[index - 1].section_id,
+                        "to": plan.sections[index].section_id,
+                        "seconds": 0.0,
+                        "mode": "butt",
+                        "conditioning": {
+                            "left_audio_conditioned": bool(
+                                left_extras.get("audio_conditioning_applied")
+                            ),
+                            "right_audio_conditioned": bool(
+                                right_extras.get("audio_conditioning_applied")
+                            ),
+                            "left_placeholder": bool(left_extras.get("placeholder")),
+                            "right_placeholder": bool(right_extras.get("placeholder")),
+                        },
+                    }
+                )
+            else:
+                fade_samples = int(max(1, round(sample_rate * fade_seconds)))
+                combined = crossfade_append(left, right, fade_samples)
+                crossfade_records.append(
+                    {
+                        "from": plan.sections[index - 1].section_id,
+                        "to": plan.sections[index].section_id,
+                        "seconds": fade_seconds,
+                        "mode": "crossfade",
+                        "conditioning": {
+                            "left_audio_conditioned": bool(
+                                left_extras.get("audio_conditioning_applied")
+                            ),
+                            "right_audio_conditioned": bool(
+                                right_extras.get("audio_conditioning_applied")
+                            ),
+                            "left_placeholder": bool(left_extras.get("placeholder")),
+                            "right_placeholder": bool(right_extras.get("placeholder")),
+                        },
+                    }
+                )
 
         return combined.astype(np.float32), crossfade_records
 
@@ -564,28 +584,64 @@ class ComposerOrchestrator:
         left_extras: Dict[str, object],
         right_extras: Dict[str, object],
     ) -> float:
-        left_duration = left.shape[0] / sample_rate
-        right_duration = right.shape[0] / sample_rate
         seconds_per_beat = 60.0 / max(plan.tempo_bpm, 1)
-        base = min(left_duration, right_duration) * 0.35
-        base = max(base, seconds_per_beat * 0.5)
-        base = min(base, seconds_per_beat * 1.5)
-
         left_conditioned = bool(left_extras.get("audio_conditioning_applied"))
         right_conditioned = bool(right_extras.get("audio_conditioning_applied"))
         placeholder = bool(left_extras.get("placeholder")) or bool(
             right_extras.get("placeholder")
         )
-
-        conditioning_factor = 1.0
-        if left_conditioned and right_conditioned:
-            conditioning_factor *= 0.7
-        elif left_conditioned or right_conditioned:
-            conditioning_factor *= 0.85
-        else:
-            conditioning_factor *= 1.1
         if placeholder:
-            conditioning_factor *= 1.3
+            return float(min(seconds_per_beat * 0.5, 0.35))
+        if not (left_conditioned and right_conditioned):
+            return float(min(seconds_per_beat * 0.3, 0.15))
+        return 0.0
 
-        fade = base * conditioning_factor
-        return float(max(0.08, min(fade, 1.8)))
+    def _butt_join(
+        self,
+        left: np.ndarray,
+        right: np.ndarray,
+        sample_rate: int,
+    ) -> np.ndarray:
+        left_data = ensure_waveform_channels(left)
+        right_data = ensure_waveform_channels(right)
+        if left_data.size == 0:
+            return right_data.astype(np.float32)
+        if right_data.size == 0:
+            return left_data.astype(np.float32)
+        fade_samples = min(int(round(sample_rate * 0.01)), left_data.shape[0], right_data.shape[0])
+        if fade_samples <= 0:
+            return np.concatenate([left_data, right_data], axis=0).astype(np.float32)
+        envelope_out = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
+        envelope_in = 1.0 - envelope_out
+        overlap = left_data[-fade_samples:] * envelope_out + right_data[:fade_samples] * envelope_in
+        joined = np.concatenate(
+            [left_data[:-fade_samples], overlap, right_data[fade_samples:]],
+            axis=0,
+        )
+        return joined.astype(np.float32)
+
+    def _shape_to_target_length(
+        self,
+        waveform: np.ndarray,
+        target_samples: int,
+        sample_rate: int,
+    ) -> np.ndarray:
+        data = ensure_waveform_channels(waveform).astype(np.float32)
+        if target_samples <= 0:
+            return np.zeros((0, data.shape[1]), dtype=np.float32)
+        if data.shape[0] > target_samples:
+            trimmed = data[:target_samples].copy()
+            fade_samples = min(int(round(sample_rate * 0.02)), trimmed.shape[0])
+            if fade_samples > 0:
+                fade = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
+                trimmed[-fade_samples:] *= fade
+            return trimmed
+        if data.shape[0] < target_samples:
+            fade_samples = min(int(round(sample_rate * 0.02)), data.shape[0])
+            shaped = data.copy()
+            if fade_samples > 0:
+                fade = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
+                shaped[-fade_samples:] *= fade
+            pad = np.zeros((target_samples - shaped.shape[0], shaped.shape[1]), dtype=np.float32)
+            return np.vstack((shaped, pad))
+        return data

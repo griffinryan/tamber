@@ -16,6 +16,7 @@ from timbre_worker.app.models import (
     GenerationStatus,
     JobState,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
 )
 from timbre_worker.services.riffusion import GenerationFailure
@@ -82,6 +83,7 @@ class StubOrchestrator:
             model_id=request.model_id,
             seed_offset=0,
             transition=None,
+            orchestration=SectionOrchestration(),
         )
         return CompositionPlan(
             version="test",

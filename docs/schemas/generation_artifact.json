@@ -39,8 +39,8 @@
         },
         "duration_seconds": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 30,
+          "minimum": 90,
+          "maximum": 180,
           "description": "Duration of the generated clip."
         },
         "extras": {

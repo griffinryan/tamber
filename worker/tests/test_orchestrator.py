@@ -11,6 +11,7 @@ from timbre_worker.app.models import (
     CompositionSection,
     GenerationRequest,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
 )
 from timbre_worker.app.settings import Settings
@@ -103,6 +104,7 @@ def build_plan(duration: float = 6.0) -> CompositionPlan:
             model_id="riffusion-v1",
             seed_offset=0,
             transition=None,
+            orchestration=SectionOrchestration(),
         ),
         CompositionSection(
             section_id="s01",
@@ -115,6 +117,7 @@ def build_plan(duration: float = 6.0) -> CompositionPlan:
             model_id="musicgen-small",
             seed_offset=1,
             transition=None,
+            orchestration=SectionOrchestration(),
         ),
     ]
     return CompositionPlan(
@@ -200,6 +203,7 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert len(sections) == 2
     assert sections[0].get("render_seconds", 0.0) >= plan.sections[0].target_seconds
     assert sections[1].get("render_seconds", 0.0) >= plan.sections[1].target_seconds
+    assert isinstance(sections[0].get("arrangement_text"), str)
     phrase_total = sum(
         section.get("phrase", {}).get("seconds", 0.0) for section in sections
     )
@@ -215,6 +219,7 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert Path(motif_seed.get("path", "")).exists()
     crossfades = mix_info.get("crossfades", [])
     assert crossfades
+    assert crossfades[0].get("mode") in {"butt", "crossfade"}
     conditioning_meta = crossfades[0].get("conditioning", {})
     assert conditioning_meta.get("left_audio_conditioned") is False
     assert conditioning_meta.get("right_audio_conditioned") is False

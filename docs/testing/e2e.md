@@ -13,7 +13,7 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
 2. Observe the status panel: it should show health info and default model.
 3. Enter a prompt (e.g., `dreamy piano over rain`). The conversation pane logs your entry and the job appears in the Jobs panel.
 4. Adjust generation settings on the fly with slash commands if desired:
-   - `/duration 12` sets clip length (1–30 seconds).
+  - `/duration 120` sets clip length (90–180 seconds).
    - `/model riffusion-v1` swaps the backend model id.
    - `/cfg 6.5` or `/cfg off` tunes classifier-free guidance strength.
    - `/seed 42` (or `/seed off`) locks deterministic runs; `/reset` restores defaults.
