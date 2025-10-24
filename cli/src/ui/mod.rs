@@ -696,6 +696,9 @@ mod tests {
             model_id: None,
             seed_offset: Some(0),
             transition: None,
+            motif_directive: Some("state motif".to_string()),
+            variation_axes: vec!["motif fidelity".to_string()],
+            cadence_hint: Some("open cadence".to_string()),
         };
         let mut extras = HashMap::new();
         extras.insert(

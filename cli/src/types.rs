@@ -134,6 +134,12 @@ pub struct CompositionSection {
     pub seed_offset: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motif_directive: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variation_axes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cadence_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from ..app.models import (
     CompositionPlan,
@@ -120,6 +120,28 @@ class SectionTemplate:
     transition: str | None = None
 
 
+def _directives_for_role(
+    role: SectionRole,
+) -> tuple[Optional[str], list[str], Optional[str]]:
+    if role == SectionRole.INTRO:
+        return (
+            "foreshadow motif",
+            ["texture", "register preview"],
+            "establish tonic pedal",
+        )
+    if role == SectionRole.MOTIF:
+        return ("state motif", ["motif fidelity"], "open cadence")
+    if role == SectionRole.DEVELOPMENT:
+        return ("develop motif", ["rhythm", "harmony", "counterpoint"], None)
+    if role == SectionRole.BRIDGE:
+        return ("modulate motif", ["harmony", "timbre"], "pivot modulation")
+    if role == SectionRole.RESOLUTION:
+        return ("resolve motif", ["harmony", "dynamics"], "authentic cadence")
+    if role == SectionRole.OUTRO:
+        return ("dissolve motif", ["texture", "space"], "fade tonic drone")
+    return (None, [], None)
+
+
 class CompositionPlanner:
     """Generates deterministic composition plans from prompts."""
 
@@ -154,6 +176,9 @@ class CompositionPlanner:
             ).strip()
 
             section_seconds = max(MIN_SECTION_SECONDS, seconds_per_section[index])
+            motif_directive, variation_axes, cadence_hint = _directives_for_role(
+                template.role
+            )
             sections.append(
                 CompositionSection(
                     section_id=f"s{index:02d}",
@@ -166,6 +191,9 @@ class CompositionPlanner:
                     model_id=None,
                     seed_offset=index,
                     transition=template.transition,
+                    motif_directive=motif_directive,
+                    variation_axes=variation_axes,
+                    cadence_hint=cadence_hint,
                 )
             )
 

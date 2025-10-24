@@ -48,6 +48,9 @@ class CompositionSection(BaseModel):
     model_id: Optional[str] = Field(default=None, max_length=128)
     seed_offset: Optional[int] = Field(default=None)
     transition: Optional[str] = Field(default=None, max_length=128)
+    motif_directive: Optional[str] = Field(default=None, max_length=128)
+    variation_axes: list[str] = Field(default_factory=list)
+    cadence_hint: Optional[str] = Field(default=None, max_length=128)
 
 
 class CompositionPlan(BaseModel):

@@ -643,6 +643,20 @@ fn plan_summary(plan: &CompositionPlan) -> String {
         .collect::<Vec<String>>()
         .join(" → ");
     parts.push(format!("flow: {flow}"));
+    if plan.sections.iter().any(|section| section.motif_directive.is_some()) {
+        let motif_arc = plan
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .motif_directive
+                    .clone()
+                    .unwrap_or_else(|| format!("{:?}", section.role))
+            })
+            .collect::<Vec<String>>()
+            .join(" → ");
+        parts.push(format!("motif arc: {motif_arc}"));
+    }
     parts.join(" | ")
 }
 

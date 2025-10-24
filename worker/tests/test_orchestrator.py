@@ -195,6 +195,16 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert len(sections) == 2
     assert sections[0].get("render_seconds", 0.0) >= plan.sections[0].target_seconds
     assert sections[1].get("render_seconds", 0.0) >= plan.sections[1].target_seconds
+    motif_seed = extras.get("motif_seed")
+    assert isinstance(motif_seed, dict)
+    assert motif_seed.get("captured") is True
+    assert motif_seed.get("section_id") == "s01"
+    assert Path(motif_seed.get("path", "")).exists()
+    crossfades = mix_info.get("crossfades", [])
+    assert crossfades
+    conditioning_meta = crossfades[0].get("conditioning", {})
+    assert conditioning_meta.get("left_audio_conditioned") is False
+    assert conditioning_meta.get("right_audio_conditioned") is False
 
 
 @pytest.mark.asyncio
@@ -220,3 +230,13 @@ async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
     sections = extras.get("sections")
     assert isinstance(sections, list)
     assert any(entry.get("placeholder") for entry in sections)
+    motif_seed = extras.get("motif_seed")
+    assert isinstance(motif_seed, dict)
+    assert motif_seed.get("captured") is True
+    mix_info = extras.get("mix", {})
+    crossfades = mix_info.get("crossfades", [])
+    assert crossfades
+    assert any(
+        meta.get("left_placeholder") or meta.get("right_placeholder")
+        for meta in (entry.get("conditioning", {}) for entry in crossfades)
+    )

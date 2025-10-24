@@ -103,6 +103,7 @@ class RiffusionService:
         render_seconds: Optional[float] = None,
         theme: ThemeDescriptor | None = None,
         previous_render: SectionRender | None = None,
+        motif_seed: SectionRender | None = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or request.model_id or self._default_model_id
         pipeline_handle, placeholder_reason = await self._ensure_pipeline(model_key)

@@ -91,6 +91,41 @@ const TEXTURE_KEYWORDS: &[(&str, &str)] = &[
 const DEFAULT_INSTRUMENTATION: &[&str] = &["blended instrumentation"];
 const DEFAULT_TEXTURE: &str = "immersive atmosphere";
 
+fn directives_for_role(role: &SectionRole) -> (Option<String>, Vec<String>, Option<String>) {
+    match role {
+        SectionRole::Intro => (
+            Some("foreshadow motif".to_string()),
+            vec!["texture".to_string(), "register preview".to_string()],
+            Some("establish tonic pedal".to_string()),
+        ),
+        SectionRole::Motif => (
+            Some("state motif".to_string()),
+            vec!["motif fidelity".to_string()],
+            Some("open cadence".to_string()),
+        ),
+        SectionRole::Development => (
+            Some("develop motif".to_string()),
+            vec!["rhythm".to_string(), "harmony".to_string(), "counterpoint".to_string()],
+            None,
+        ),
+        SectionRole::Bridge => (
+            Some("modulate motif".to_string()),
+            vec!["harmony".to_string(), "timbre".to_string()],
+            Some("pivot modulation".to_string()),
+        ),
+        SectionRole::Resolution => (
+            Some("resolve motif".to_string()),
+            vec!["harmony".to_string(), "dynamics".to_string()],
+            Some("authentic cadence".to_string()),
+        ),
+        SectionRole::Outro => (
+            Some("dissolve motif".to_string()),
+            vec!["texture".to_string(), "space".to_string()],
+            Some("fade tonic drone".to_string()),
+        ),
+    }
+}
+
 struct SectionTemplate {
     role: SectionRole,
     label: &'static str,
@@ -143,6 +178,8 @@ impl CompositionPlanner {
             let section_prompt =
                 render_prompt(template.prompt_template, prompt, &descriptor, index);
             let target_seconds = section_seconds.max(MIN_SECTION_SECONDS);
+            let (motif_directive, variation_axes, cadence_hint) =
+                directives_for_role(&template.role);
 
             sections.push(CompositionSection {
                 section_id: format!("s{:02}", index),
@@ -155,6 +192,9 @@ impl CompositionPlanner {
                 model_id: None,
                 seed_offset: Some(index as i32),
                 transition: template.transition.map(|text| text.to_string()),
+                motif_directive,
+                variation_axes,
+                cadence_hint,
             });
         }
 
@@ -627,6 +667,11 @@ mod tests {
         assert!(plan.total_duration_seconds > 0.0);
         assert!(plan.total_duration_seconds >= MIN_TOTAL_SECONDS);
         assert!(plan.theme.is_some());
+        assert!(plan.sections.iter().all(|section| section.motif_directive.is_some()));
+        assert!(plan
+            .sections
+            .iter()
+            .any(|section| section.motif_directive.as_deref() == Some("state motif")));
     }
 
     #[test]
@@ -637,5 +682,6 @@ mod tests {
         assert!(plan.sections.iter().any(|section| matches!(section.role, SectionRole::Motif)));
         assert!(plan.sections.iter().all(|section| section.target_seconds >= 2.0));
         assert!(plan.theme.is_some());
+        assert!(plan.sections.iter().all(|section| section.motif_directive.is_some()));
     }
 }
