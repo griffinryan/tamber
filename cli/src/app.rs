@@ -11,6 +11,8 @@ use std::time::Duration as StdDuration;
 
 const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
+const MIN_DURATION_SECONDS: u8 = 90;
+const MAX_DURATION_SECONDS: u8 = 180;
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -438,9 +440,11 @@ impl AppState {
                     .first()
                     .ok_or_else(|| "Usage: /duration <seconds>".to_string())?
                     .parse::<u8>()
-                    .map_err(|_| "Duration must be an integer (1-30)".to_string())?;
-                if !(1..=30).contains(&value) {
-                    return Err("Duration must be between 1 and 30 seconds".to_string());
+                    .map_err(|_| "Duration must be an integer (90-180)".to_string())?;
+                if value < MIN_DURATION_SECONDS || value > MAX_DURATION_SECONDS {
+                    return Err(format!(
+                        "Duration must be between {MIN_DURATION_SECONDS} and {MAX_DURATION_SECONDS} seconds"
+                    ));
                 }
                 self.generation_config.duration_seconds = value;
                 Ok(format!("Duration set to {value}s"))
@@ -492,8 +496,9 @@ impl AppState {
             }
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
-                "Commands: /duration <1-30>, /model <id>, /cfg <scale|off>, /seed <value|off>, /show, /reset"
-                    .to_string(),
+                format!(
+                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /cfg <scale|off>, /seed <value|off>, /show, /reset"
+                ),
             ),
             other => Err(format!("Unknown command `{other}`")),
         }

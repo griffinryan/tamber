@@ -3,7 +3,7 @@ use crate::{
         format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, InputMode,
         JobEntry,
     },
-    types::{CompositionSection, JobState, SectionEnergy},
+    types::{CompositionSection, JobState, SectionEnergy, SectionOrchestration},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -684,6 +684,10 @@ struct SectionExtras {
     render_seconds: Option<f32>,
     #[serde(default)]
     phrase: Option<PhraseExtras>,
+    #[serde(default)]
+    arrangement_text: Option<String>,
+    #[serde(default)]
+    orchestration: Option<SectionOrchestration>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -729,6 +733,8 @@ fn extract_section_extras(job: &JobEntry) -> HashMap<String, SectionExtras> {
                                             .and_then(|value| value.as_f64())
                                             .map(|v| v as f32),
                                         phrase: None,
+                                        arrangement_text: None,
+                                        orchestration: None,
                                     },
                                 );
                                 eprintln!(
@@ -829,6 +835,15 @@ fn plan_section_line(
             spans.push(Span::styled(
                 format!(" · render {:.2}s", render_seconds),
                 Style::default().fg(Color::LightGreen),
+            ));
+        }
+        if let Some(arrangement) =
+            extra.arrangement_text.as_ref().filter(|text| !text.trim().is_empty())
+        {
+            spans.push(Span::raw(" · "));
+            spans.push(Span::styled(
+                truncate_text(arrangement, 80),
+                Style::default().fg(Color::LightBlue),
             ));
         }
         if let Some(phrase) = &extra.phrase {
