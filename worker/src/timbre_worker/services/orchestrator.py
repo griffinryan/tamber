@@ -19,6 +19,7 @@ from ..app.models import (
 from ..app.settings import Settings
 from .audio_utils import (
     crossfade_append,
+    _as_two_dimensional,
     ensure_waveform_channels,
     normalise_loudness,
     resample_waveform,
@@ -626,7 +627,8 @@ class ComposerOrchestrator:
         target_samples: int,
         sample_rate: int,
     ) -> np.ndarray:
-        data = ensure_waveform_channels(waveform).astype(np.float32)
+        data, was_mono = _as_two_dimensional(waveform)
+        data = data.astype(np.float32, copy=True)
         if target_samples <= 0:
             return np.zeros((0, data.shape[1]), dtype=np.float32)
         if data.shape[0] > target_samples:
@@ -635,7 +637,7 @@ class ComposerOrchestrator:
             if fade_samples > 0:
                 fade = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
                 trimmed[-fade_samples:] *= fade
-            return trimmed
+            return trimmed.reshape(-1) if was_mono else trimmed
         if data.shape[0] < target_samples:
             fade_samples = min(int(round(sample_rate * 0.02)), data.shape[0])
             shaped = data.copy()
@@ -643,5 +645,6 @@ class ComposerOrchestrator:
                 fade = np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)[:, None]
                 shaped[-fade_samples:] *= fade
             pad = np.zeros((target_samples - shaped.shape[0], shaped.shape[1]), dtype=np.float32)
-            return np.vstack((shaped, pad))
-        return data
+            combined = np.vstack((shaped, pad))
+            return combined.reshape(-1) if was_mono else combined
+        return data.reshape(-1) if was_mono else data

@@ -365,11 +365,11 @@ class CompositionPlanner:
             sections=sections,
         )
 
-    def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
+def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, SHORT_MIN_TOTAL_SECONDS))
         templates = list(_select_short_templates(seconds_total))
         beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
-        total_weight = sum(template.base_bars for template in templates) or 1
+        total_weight = float(sum(template.base_bars for template in templates) or 1)
         raw_tempo = int(round(240.0 * total_weight / seconds_total)) if seconds_total > 0 else 90
         tempo_bpm = _select_tempo(raw_tempo)
         effective_tempo = max(tempo_bpm, MIN_TEMPO)
@@ -402,7 +402,7 @@ class CompositionPlanner:
                 template.role
             )
 
-            ratio = template.base_bars / max(total_weight, 1)
+            ratio = float(template.base_bars) / total_weight
             section_seconds = max(
                 SHORT_MIN_SECTION_SECONDS,
                 seconds_total * ratio,
@@ -443,6 +443,14 @@ class CompositionPlanner:
             theme=descriptor,
             sections=sections,
         )
+
+
+def _beats_per_bar(time_signature: str) -> int:
+    try:
+        numerator = int(time_signature.split("/")[0])
+        return max(1, numerator)
+    except Exception:  # noqa: BLE001
+        return 4
 
 def _deterministic_seed(prompt: str) -> int:
     digest = hashlib.sha256(prompt.encode("utf-8")).digest()
