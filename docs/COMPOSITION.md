@@ -1,57 +1,91 @@
-# Composition Pipeline Notes
+# Composition Pipeline Reference
 
-These notes track the current composition + mixing pipeline as of planner **v2**. Use them when designing the forthcoming CLI/TUI feedback loop, audio UX, or when refactoring the worker.
+This note captures the current state of Timbre’s composition, rendering, and mastering pipeline. It supplements `docs/architecture.md` with more detail for anyone tweaking the planner, orchestrator, or backend services.
 
-## 1. Planning Surface (Planner v2)
-- **Tempo quantisation**: we derive seconds-per-beat from the target tempo after clamping to 60–140 BPM. Every section is allocated an integer number of beats, so section joins fall on the grid.
-- **Theme descriptor**: planner v2.1 now emits a `ThemeDescriptor` (motif phrase, instrumentation palette, rhythm tag, dynamic curve, texture). This descriptor is baked into every section prompt so the whole plan shares a coherent musical vocabulary.
-- **Seeded structure**: planner chooses a tonal centre by hashing the prompt/seed so intro/motif/outro sections remain deterministic for the same prompt.
-- **Adaptive beats**: per-role minimum beats guardrails (intro ≥1 bar, motif ≥2 bars, etc.) ensure the short clips still contain musical arcs. Redistribution honours a priority list (motif → development → bridge …) when extending or shrinking plans.
-- **Minimum clip length**: global floor of 12 s keeps at least intro/motif/outro alive by default. The CLI now defaults to 24 s so most generations surface three or more sections without manual tweaking.
-- **Plan versioning**: planner reports `version="v2"`. Any downstream metadata consumers should check this before assuming bar counts or density.
+---
 
-### Implications for Feedback Loop
-1. When the CLI previews a plan, we can cheaply show beat counts and track tempo since everything is grid-aligned.
-2. Section edits (re-ordering, duration change) should work in beats – expose that in the future chat commands (`/section s01 length 8b`).
-3. Metadata now carries `plan.sections[*].target_seconds` that reflect beat-aligned values; the loop should treat them as canonical when re-rendering partial mixes.
+## Planner v3 Snapshot
 
-## 2. Rendering Requests
-- **Render hints**: the orchestrator asks each backend for `target_seconds + tempo-aware padding` (¾ beat for edges, 1¼ beat for interior sections). Fractional seconds are now passed straight through to Riffusion’s `audio_length_in_s` to avoid early truncation.
-- **Seed offsets** keep per-section variation while honouring a user-provided seed (motif seed = base, development = base+1, …). UI should display these offsets for reproducibility.
+| Concept | Notes |
+| --- | --- |
+| **Plan Versions** | All plans emitted by the worker carry `version="v3"`. Update this doc and planner tests when bumping the version. |
+| **Long-form threshold** | Requests ≥ 90 s use the long-form templates (Intro → Motif → Chorus → Outro, optional Bridge above 150 s). Each section receives ≥ 16 s of runtime after tempo quantisation. |
+| **Short-form fallback** | Requests < 90 s reuse compact templates (Intro → Motif → Resolve). Useful for fast experiments and the existing unit test suite. |
+| **Tempo clamp** | 68 ≤ BPM ≤ 128. The planner scales bars to hit the requested duration, then rebalances to keep per-role minimums. |
+| **Theme descriptor** | `ThemeDescriptor` captures motif, instrumentation tags, rhythm label, dynamic curve, and texture. Both MusicGen and the CLI rely on it for consistent language. |
+| **Orchestration layers** | Every section includes `orchestration = {rhythm, bass, harmony, lead, textures, vocals}`. Empty lists are allowed; short-form clips frequently omit vocals. |
+| **Motif directives** | Each role maps to a directive, variation axes, and cadence hint (`state motif`, `amplify motif`, `resolve motif`, …) to guide backend prompt builders. |
 
-## 3. Section Conditioning & Mixdown
-- **Silence trimming**: we gate each rendered waveform using a 25 ms RMS window and keep ±35/60 ms ramps. Removes leading “model silence” while preserving drum attacks.
-- **Loudness alignment**: section stems are normalised to target RMS (0.18) with a reasonable gain cap. Store the pre-normalised RMS in `mix.section_rms` for telemetry or adaptive UX (e.g., flag “quiet” renders).
-- **Length fitting**:
-  - If the stem is long, we centre-trim to the target length.
-  - If short, we loop the tail in tempo-sized slices with a quick crossfade. This fills missing beats instead of padding zeros.
-- **Crossfades**: beat-aware fades (0.5–1.5 beats) using the shared `crossfade_append` helper keep transitions musical. `mix.crossfades[*].seconds` documents the actual overlap to help future timeline visualisation.
-- **Master polish**: after concatenation we apply another loudness normalisation pass, add a gentle high-frequency tilt, and run a soft tanh limiter (0.98 threshold). We then resample mixes to 48 kHz, bounce to 24-bit PCM (dithered), and leave a little headroom so downstream mastering chains have room to breathe.
-- **Theme-aware prompting + continuation**: both Riffusion and MusicGen receive the plan’s `ThemeDescriptor` plus the previous section’s render metadata and audio tail. Riffusion now re-encodes the prior section’s spectrogram and uses it as the init image, while MusicGen feeds the tail into `generate_continuation`. We still append motif/instrument/rhythm text, but the audio itself now evolves instead of rebooting each section.
+Planner invariants are enforced in Rust (`cli/src/planner.rs`) and Python (`worker/services/planner.py`). Keep both mirrors aligned.
 
-### UX Hooks
-- `mix` extras now include `target_rms`, `section_rms`, and exact crossfade durations. The CLI feedback loop can visualise these to highlight overly quiet sections or abrupt transitions.
-- Because the mix respects beat alignment, future live preview features can jump to section boundaries by sample index = cumulative beats × `seconds_per_beat`.
+---
 
-## 4. Spectrogram Decoding (Riffusion)
-- Decoder now assumes stereo spectrograms when channels are available, producing a wider image.
-- Griffin-Lim iteration count bumped to 48 with a gentler 0.3 power curve; trade-off is slower CPU decode, but clarity improves noticeably.
-- If torchaudio is unavailable we still fall back to placeholders; error surfaces in section extras (`spectrogram_decoder` field).
+## Section Rendering
 
-## 5. Default Duration & CLI Expectations
-- CLI default duration = 24 s, aligning with the planner’s multi-section templates. Users can still `/duration` shorter clips, but the planner enforces the 12 s floor automatically.
-- Worker default mirrors the CLI so standalone `uv run --project worker python -m timbre_worker.generate` emits structured clips by default.
-- Feedback loop idea: when the user shortens a clip below 12 s, surface a warning that the plan will collapse to fewer sections (pull from `plan.sections.len()`).
+1. **Prompt assembly**
+   - Template text (from planner) supplies the musical context.
+   - Arrangement sentence summarises orchestration focus (`Elevate the arrangement with layered guitars and wordless vocals`).
+   - Theme descriptor anchors motif, rhythm, and texture cues.
+   - Previous section tails and captured motif stems feed the audio-conditioning path.
+2. **Duration hints**
+   - Long-form renders target `target_seconds + beat_padding` (¾ beat for edges, 1¼ beat for interior sections).
+   - Short-form renders still receive the scaled seconds but never fall below 2 s.
+3. **Seed offsets**
+   - If users pass `seed`, MusicGen adds per-section offsets so repeated runs remain deterministic while sections still vary.
+4. **Placeholder mode**
+   - When dependencies are missing, services return deterministic placeholders. Extras expose `placeholder=true` and `placeholder_reason` so the CLI can warn users.
 
-## 6. Testing / Regression Safety
-- Rust and Python planner tests now tolerate beat rounding by asserting duration ≥ requested − 2 s (the additional padding from tempo quantisation).
-- Orchestrator tests assert the new mix metadata (`target_rms`, `section_rms`) to lock behaviour.
-- Any future UX change that relies on section lengths should reuse these tests or add integration ones before shipping.
+---
 
-## 7. Roadmap Hooks for Final Feedback Loop
-- **Plan editing API**: expose a worker endpoint that accepts beat-level mutations and leverages the `fit_to_length` utility. The CLI can emit quick “trim chorus” actions without re-planning from scratch.
-- **Per-section audition**: now that stems are pre-normalised, we can write each `render.waveform` to disk for isolated playback in the CLI (press `p` on motif to audition shell loops).
-- **Lyric/arrangement layer**: store an `extras.arrangement` blob parallel to the plan referencing beat offsets. As long as we keep beats integer, we can align lyric syllables or automation curves later.
-- **Live meters & motif awareness**: `section_rms` + `crossfades` + the shared theme descriptor let us trend mix energy and stay motif-aware – perfect for streaming UI overlays or quick “this motif is quiet; regenerate?” prompts in the feedback loop.
+## Mixdown Sequence
 
-Keep this document current whenever planner versions, normalization strategy, or default durations change. Future “Ableton-like” loop controls should build directly on these beat-aligned primitives.***
+1. **Shape to target length**
+   - Ensure each render meets its planned length. Long stems are trimmed with a short fade; shorter stems are padded with silence after tapering the tail.
+2. **Conditioning tails**
+   - The orchestrator preserves the last few seconds of each section (up to four beats) so the next section can condition on it.
+3. **Section joins**
+   - Default is a “butt join” with a micro fade (~10 ms) to avoid clicks. When either section lacks audio conditioning or is a placeholder, we fall back to longer crossfades scaled by tempo.
+4. **Loudness**
+   - Section RMS values are stored before and after mixing; metadata surfaces both for future analytics.
+5. **Master polish**
+   - After concatenation, the pipeline runs: RMS normalisation → high-shelf tilt → soft tanh limiter → resample to `Settings.export_sample_rate` → write PCM (default 24-bit WAV).
+6. **Motif stem export**
+   - The first section flagged as motif seed is written to `<job_id>_motif.wav` with spectral centroid and chroma data. This is useful for reuse in downstream tools.
+
+All steps are declared in code (`worker/services/orchestrator.py`) and recorded in metadata (`GenerationArtifact.metadata.extras`).
+
+---
+
+## Metadata Cheat Sheet
+
+| Field | Meaning |
+| --- | --- |
+| `plan.sections[*].bars` | Planned bar count after tempo scaling. Useful for beat-accurate UI timelines. |
+| `plan.sections[*].orchestration` | Layer assignments that drove the backend prompts. |
+| `extras.sections[*].arrangement_text` | Human-readable sentence describing arrangement focus. |
+| `extras.sections[*].phrase.seconds` | Effective render length before mixing (includes padding). |
+| `extras.mix.crossfades[*].mode` | Either `butt` or `crossfade`. Handy for debugging mismatched transitions. |
+| `extras.motif_seed` | Contains `captured`, `path`, `spectral_centroid_hz`, `chroma_vector`, and plan references. |
+
+When adding new metadata, update `docs/schemas/`, the Rust `SectionExtras` struct, and this table.
+
+---
+
+## Common Development Tasks
+
+| Task | Pointers |
+| --- | --- |
+| Adjust planner bar allocation | Edit `_allocate_bars` / `_build_long_form_plan` in Python and mirror changes in `cli/src/planner.rs`. Update tests under `worker/tests/test_planner.py` and `cli/src/planner.rs` (module tests at bottom). |
+| Change mix behaviour | Touch `_shape_to_target_length` / `_butt_join` / `_crossfade_seconds`. Update orchestrator tests in `worker/tests/test_orchestrator.py`. |
+| Add backend parameters | Extend `SectionRender.extras` in the backend service and reflect in `cli/src/ui/mod.rs` + docs/schemas. |
+| Surface new CLI data | Update `extract_section_extras` in `cli/src/ui/mod.rs` and adjust status rendering tests. |
+
+---
+
+## Troubleshooting
+
+- **Clips sound chopped**: Check `extras.mix.crossfades`—if modes show `butt` but conditioning was expected, inspect `audio_conditioning_applied` flags in section extras.
+- **Planner tests failing**: Often due to mismatched template definitions between Python and Rust. Regenerate both sides when editing templates.
+- **Placeholder audio surfacing unexpectedly**: Confirm `TIMBRE_RIFFUSION_ALLOW_INFERENCE`/`TIMBRE_INFERENCE_DEVICE` values and inspect section extras for `placeholder_reason`.
+
+Keep this file updated whenever planner templates, orchestration metadata, or mix behaviour changes.

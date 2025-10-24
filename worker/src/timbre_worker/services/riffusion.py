@@ -4,11 +4,23 @@ import asyncio
 import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 from loguru import logger
-from PIL import Image
+
+try:  # pragma: no cover - optional dependency import
+    from PIL import Image
+except Exception as exc:  # noqa: BLE001
+    Image = None  # type: ignore[assignment]
+    PIL_IMPORT_ERROR = exc
+else:  # pragma: no cover
+    PIL_IMPORT_ERROR = None
+
+if TYPE_CHECKING:  # pragma: no cover - typing aid only
+    from PIL import Image as PILImage  # noqa: F401
+else:
+    PILImage = Any
 
 from ..app.models import (
     CompositionPlan,
@@ -17,6 +29,7 @@ from ..app.models import (
     GenerationMetadata,
     GenerationRequest,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
     ThemeDescriptor,
 )
@@ -30,7 +43,7 @@ from .audio_utils import (
     write_waveform,
 )
 from .riffusion_spectrogram import SpectrogramImageDecoder, SpectrogramParams
-from .types import SectionRender
+from .types import BackendStatus, SectionRender
 
 try:  # pragma: no cover - optional dependency imports are validated at runtime
     import torch
@@ -80,18 +93,56 @@ class RiffusionService:
         self._spectrogram_params = SpectrogramParams()
         self._spectrogram_error: Optional[str] = None
         self._spectrogram_mode: Optional[str] = None
+        self._spectrogram_warned = False
         self._default_guidance = settings.riffusion_guidance_scale
         self._default_steps = settings.riffusion_num_inference_steps
         self._default_scheduler = settings.riffusion_scheduler
         self._enable_phase_refinement = settings.riffusion_enable_phase_refinement
+        self._last_status: Optional[BackendStatus] = None
 
     @property
     def default_model_id(self) -> str:
         return self._default_model_id
 
-    async def warmup(self) -> None:
-        await self._ensure_pipeline(self._default_model_id)
-        self._resolve_spectrogram_decoder(44100)
+    async def warmup(self) -> BackendStatus:
+        handle, reason = await self._ensure_pipeline(self._default_model_id)
+        pipeline_ready = handle is not None
+        decoder_ready = False
+        decoder_error = None
+        decoder_mode = None
+        if pipeline_ready:
+            decoder = self._resolve_spectrogram_decoder(handle.sample_rate)
+            decoder_ready = decoder is not None
+            decoder_mode = self._spectrogram_mode
+            if not decoder_ready:
+                decoder_error = self._spectrogram_error
+        else:
+            decoder_error = reason
+
+        ready = pipeline_ready and decoder_ready
+        details: Dict[str, Any] = {
+            "pipeline_loaded": pipeline_ready,
+            "decoder_ready": decoder_ready,
+        }
+        if decoder_mode:
+            details["decoder_mode"] = decoder_mode
+        if handle is not None:
+            details["sample_rate"] = handle.sample_rate
+        if reason and not pipeline_ready:
+            details["pipeline_error"] = reason
+        status = BackendStatus(
+            name="riffusion",
+            ready=ready,
+            device=self._device if pipeline_ready else None,
+            dtype=str(self._dtype) if self._dtype is not None and pipeline_ready else None,
+            error=decoder_error,
+            details=details,
+        )
+        self._last_status = status
+        return status
+
+    def backend_status(self) -> Optional[BackendStatus]:
+        return self._last_status
 
     async def render_section(
         self,
@@ -103,6 +154,7 @@ class RiffusionService:
         render_seconds: Optional[float] = None,
         theme: ThemeDescriptor | None = None,
         previous_render: SectionRender | None = None,
+        motif_seed: SectionRender | None = None,
     ) -> SectionRender:
         model_key = model_id or section.model_id or request.model_id or self._default_model_id
         pipeline_handle, placeholder_reason = await self._ensure_pipeline(model_key)
@@ -530,7 +582,7 @@ class RiffusionService:
         duration_seconds: float,
         guidance_scale: float,
         seed: Optional[int],
-        init_image: Optional[Image.Image],
+        init_image: Optional[PILImage],
         init_strength: Optional[float],
         num_inference_steps: int,
         scheduler_name: Optional[str],
@@ -734,6 +786,11 @@ class RiffusionService:
             return f"torch_unavailable:{detail};{guidance}"
         return "unknown"
 
+    def _pillow_reason(self) -> str:
+        guidance = "run `uv sync --project worker --extra inference` to install pillow"
+        detail = PIL_IMPORT_ERROR or "not installed"
+        return f"pillow_unavailable:{detail};{guidance}"
+
     def _compose_prompt(
         self,
         base_prompt: str,
@@ -769,6 +826,9 @@ class RiffusionService:
         self,
         expected_sample_rate: int,
     ) -> Optional[SpectrogramImageDecoder]:
+        if not self._allow_inference:
+            self._spectrogram_error = "inference_disabled"
+            return None
         params = self._spectrogram_params
         if params.sample_rate != expected_sample_rate:
             params = replace(params, sample_rate=expected_sample_rate)
@@ -782,12 +842,15 @@ class RiffusionService:
             decoder = SpectrogramImageDecoder(params, device="cpu")
         except RuntimeError as exc:
             self._spectrogram_error = str(exc)
-            logger.warning("Spectrogram decoder unavailable: %s", exc)
+            if not self._spectrogram_warned:
+                logger.warning("Spectrogram decoder unavailable: %s", exc)
+                self._spectrogram_warned = True
             return None
 
         self._spectrogram_decoder = decoder
         self._spectrogram_error = None
         self._spectrogram_mode = getattr(decoder._inverse_mel, "decoder_mode", "unknown")
+        self._spectrogram_warned = False
         logger.info(
             "Spectrogram decoder initialised (mode=%s, sample_rate=%s)",
             self._spectrogram_mode,
@@ -795,7 +858,9 @@ class RiffusionService:
         )
         return decoder
 
-    def _prepare_init_image(self, render: SectionRender) -> Optional[Image.Image]:
+    def _prepare_init_image(self, render: SectionRender) -> Optional[PILImage]:
+        if Image is None:
+            return None
         if render.waveform.size == 0:
             return None
         decoder = self._resolve_spectrogram_decoder(render.sample_rate)
@@ -819,12 +884,15 @@ class RiffusionService:
         result: Any,
         default_sample_rate: int,
     ) -> Tuple[np.ndarray, int]:
+        if Image is None:
+            raise GenerationFailure(self._pillow_reason())
+
         images = getattr(result, "images", None)
         if not images:
             raise GenerationFailure("pipeline returned empty audio result")
 
         raw_image = images[0]
-        if isinstance(raw_image, Image.Image):
+        if Image is not None and isinstance(raw_image, Image.Image):
             pil_image = raw_image
         else:
             array = np.asarray(raw_image)
@@ -833,6 +901,8 @@ class RiffusionService:
                 if upper_bound <= 1.0:
                     array = np.clip(array, 0.0, 1.0) * 255.0
                 array = np.clip(array, 0.0, 255.0).astype(np.uint8)
+            if Image is None:
+                raise GenerationFailure(self._pillow_reason())
             if array.ndim == 2:
                 pil_image = Image.fromarray(array, mode="L").convert("RGB")
             else:
@@ -868,6 +938,7 @@ class RiffusionService:
             model_id=request.model_id,
             seed_offset=0,
             transition=None,
+            orchestration=SectionOrchestration(),
         )
         return CompositionPlan(
             version="fallback-v1",

@@ -14,6 +14,7 @@ from timbre_worker.app.models import (
     CompositionSection,
     GenerationRequest,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
 )
 from timbre_worker.app.settings import Settings
@@ -64,6 +65,22 @@ async def test_riffusion_service_placeholder_generation(tmp_path: Path) -> None:
     )
     assert artifact.metadata.plan is not None
     assert artifact.metadata.prompt == "soft synthwave"
+
+
+@pytest.mark.asyncio
+async def test_riffusion_warmup_reports_status(tmp_path: Path) -> None:
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+        riffusion_allow_inference=False,
+    )
+    settings.ensure_directories()
+    service = RiffusionService(settings)
+
+    status = await service.warmup()
+    assert status.name == "riffusion"
+    assert status.ready is False
+    assert status.details.get("pipeline_loaded") is False
 
 
 @pytest.mark.asyncio
@@ -303,6 +320,7 @@ async def test_riffusion_inference_falls_back_to_placeholder(
         bars=4,
         target_seconds=4.0,
         energy=SectionEnergy.MEDIUM,
+        orchestration=SectionOrchestration(),
     )
 
     plan = CompositionPlan(

@@ -3,42 +3,36 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from ..app.models import (
     CompositionPlan,
     CompositionSection,
     GenerationRequest,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
     ThemeDescriptor,
 )
 
-PLAN_VERSION = "v2"
+PLAN_VERSION = "v3"
 DEFAULT_TIME_SIGNATURE = "4/4"
-MIN_TEMPO = 60
-MAX_TEMPO = 140
-MIN_SECTION_SECONDS = 5.0
-MIN_TOTAL_SECONDS = 12.0
-
-ROLE_MIN_BEATS = {
-    SectionRole.INTRO: 4,
-    SectionRole.MOTIF: 8,
-    SectionRole.DEVELOPMENT: 8,
-    SectionRole.BRIDGE: 4,
-    SectionRole.RESOLUTION: 4,
-    SectionRole.OUTRO: 4,
-}
+MIN_TEMPO = 68
+MAX_TEMPO = 128
+SHORT_MIN_TOTAL_SECONDS = 2.0
+SHORT_MIN_SECTION_SECONDS = 2.0
+LONG_FORM_THRESHOLD = 90.0
+LONG_MIN_SECTION_SECONDS = 16.0
 
 ADD_PRIORITY = [
+    SectionRole.CHORUS,
     SectionRole.MOTIF,
-    SectionRole.DEVELOPMENT,
     SectionRole.BRIDGE,
-    SectionRole.RESOLUTION,
+    SectionRole.DEVELOPMENT,
     SectionRole.INTRO,
     SectionRole.OUTRO,
+    SectionRole.RESOLUTION,
 ]
 
 REMOVE_PRIORITY = [
@@ -48,6 +42,7 @@ REMOVE_PRIORITY = [
     SectionRole.RESOLUTION,
     SectionRole.DEVELOPMENT,
     SectionRole.MOTIF,
+    SectionRole.CHORUS,
 ]
 
 INSTRUMENT_KEYWORDS = [
@@ -57,6 +52,7 @@ INSTRUMENT_KEYWORDS = [
     ("synthwave", "retro synth layers"),
     ("modular", "modular synth textures"),
     ("guitar", "ambient guitar"),
+    ("guitars", "layered guitars"),
     ("bass", "deep bass"),
     ("drum", "tight drums"),
     ("percussion", "organic percussion"),
@@ -65,9 +61,17 @@ INSTRUMENT_KEYWORDS = [
     ("cello", "warm cello"),
     ("choir", "airy choir voices"),
     ("vocal", "ethereal vocals"),
+    ("singer", "soulful vocalist"),
+    ("vocalist", "soaring vocals"),
     ("brass", "smooth brass"),
+    ("horn", "bold brass horns"),
     ("sax", "saxophone lead"),
+    ("trumpet", "radiant trumpet lead"),
+    ("trombone", "velvet trombone swells"),
     ("flute", "breathy flute"),
+    ("clarinet", "warm clarinet"),
+    ("oboe", "lyrical oboe"),
+    ("harp", "glittering harp arpeggios"),
     ("ambient", "atmospheric textures"),
     ("lofi", "dusty keys"),
 ]
@@ -109,63 +113,242 @@ ENERGY_DYNAMIC_MAP = {
     SectionEnergy.HIGH: ("climactic surge", "energetic peak"),
 }
 
+CATEGORY_KEYWORDS = {
+    "rhythm": (
+        "drum",
+        "percussion",
+        "beat",
+        "groove",
+        "rhythm",
+        "kick",
+        "hip hop",
+        "boom bap",
+        "house",
+        "techno",
+        "trance",
+        "breakbeat",
+        "trap",
+    ),
+    "bass": ("bass", "sub", "808", "low end", "low-end"),
+    "harmony": (
+        "piano",
+        "keys",
+        "synth",
+        "pad",
+        "string",
+        "chord",
+        "organ",
+        "rhodes",
+        "guitar",
+        "harp",
+    ),
+    "lead": (
+        "lead",
+        "guitar",
+        "solo",
+        "brass",
+        "sax",
+        "horn",
+        "trumpet",
+        "violin",
+        "flute",
+        "clarinet",
+        "oboe",
+    ),
+    "textures": (
+        "ambient",
+        "texture",
+        "pad",
+        "choir",
+        "atmosphere",
+        "reverb",
+        "noise",
+        "wash",
+        "drone",
+    ),
+    "vocals": ("vocal", "voice", "singer", "choir", "chant", "lyric"),
+}
+
+DEFAULT_LAYER_FALLBACKS = {
+    "rhythm": ["tight drums", "organic percussion"],
+    "bass": ["pulsing bass", "sub bass swell"],
+    "harmony": ["lush keys", "stacked synth pads"],
+    "lead": ["expressive guitar lead", "soulful brass line"],
+    "textures": ["airy ambient swells", "granular noise beds"],
+    "vocals": ["wordless vocal pads"],
+}
+
+SECTION_LAYER_PROFILE = {
+    SectionRole.INTRO: {
+        "rhythm": 1,
+        "bass": 1,
+        "harmony": 3,
+        "lead": 1,
+        "textures": 2,
+        "vocals": 0,
+    },
+    SectionRole.MOTIF: {
+        "rhythm": 2,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 1,
+        "textures": 1,
+        "vocals": 0,
+    },
+    SectionRole.CHORUS: {
+        "rhythm": 2,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 2,
+        "textures": 1,
+        "vocals": 1,
+    },
+    SectionRole.BRIDGE: {
+        "rhythm": 1,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 1,
+        "textures": 2,
+        "vocals": 1,
+    },
+    SectionRole.DEVELOPMENT: {
+        "rhythm": 2,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 2,
+        "textures": 2,
+        "vocals": 1,
+    },
+    SectionRole.RESOLUTION: {
+        "rhythm": 1,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 1,
+        "textures": 2,
+        "vocals": 1,
+    },
+    SectionRole.OUTRO: {
+        "rhythm": 1,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 1,
+        "textures": 2,
+        "vocals": 0,
+    },
+    "default": {
+        "rhythm": 2,
+        "bass": 1,
+        "harmony": 2,
+        "lead": 1,
+        "textures": 1,
+        "vocals": 0,
+    },
+}
+
 
 @dataclass(frozen=True)
 class SectionTemplate:
     role: SectionRole
     label: str
     energy: SectionEnergy
-    bars: int
+    base_bars: int
+    min_bars: int
+    max_bars: int
     prompt_template: str
     transition: str | None = None
+
+
+def _directives_for_role(
+    role: SectionRole,
+) -> tuple[Optional[str], list[str], Optional[str]]:
+    if role == SectionRole.INTRO:
+        return (
+            "foreshadow motif",
+            ["texture", "register preview"],
+            "establish tonic pedal",
+        )
+    if role == SectionRole.MOTIF:
+        return ("state motif", ["motif fidelity"], "open cadence")
+    if role == SectionRole.CHORUS:
+        return (
+            "amplify motif",
+            ["dynamics", "call-and-response", "countermelody"],
+            "anthemic cadence",
+        )
+    if role == SectionRole.DEVELOPMENT:
+        return ("develop motif", ["rhythm", "harmony", "counterpoint"], None)
+    if role == SectionRole.BRIDGE:
+        return ("modulate motif", ["harmony", "timbre"], "pivot modulation")
+    if role == SectionRole.RESOLUTION:
+        return ("resolve motif", ["harmony", "dynamics"], "authentic cadence")
+    if role == SectionRole.OUTRO:
+        return ("dissolve motif", ["texture", "space"], "fade tonic drone")
+    return (None, [], None)
 
 
 class CompositionPlanner:
     """Generates deterministic composition plans from prompts."""
 
     def build_plan(self, request: GenerationRequest) -> CompositionPlan:
-        templates = list(_select_templates(request.duration_seconds))
-        seconds_total = float(max(request.duration_seconds, MIN_TOTAL_SECONDS))
-        templates = _prune_templates_by_capacity(seconds_total, templates)
-        raw_bars = sum(template.bars for template in templates)
-        raw_tempo = int(round(240.0 * raw_bars / seconds_total)) if seconds_total > 0 else 90
-        tempo_bpm = _select_tempo(raw_tempo)
-        seconds_per_beat = 60.0 / tempo_bpm if tempo_bpm > 0 else 0.5
+        if float(request.duration_seconds) >= LONG_FORM_THRESHOLD:
+            return self._build_long_form_plan(request)
+        return self._build_short_form_plan(request)
+
+    def _build_long_form_plan(self, request: GenerationRequest) -> CompositionPlan:
+        seconds_total = float(max(request.duration_seconds, LONG_FORM_THRESHOLD))
+        templates = list(_select_long_templates(seconds_total))
+        beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
+        tempo_hint = _tempo_hint(seconds_total, templates, beats_per_bar)
+        tempo_bpm = _select_tempo(tempo_hint)
+        effective_tempo = max(tempo_bpm, MIN_TEMPO)
+        seconds_per_bar = (60.0 / float(effective_tempo)) * float(beats_per_bar)
+
+        bars = _allocate_bars(templates, seconds_total, seconds_per_bar)
+
+        descriptor = _build_theme_descriptor(request.prompt, templates)
+        palette = _categorise_instrumentation(descriptor, request.prompt)
+        orchestrations = _plan_orchestrations(templates, palette)
 
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
         musical_key = _select_key(base_seed)
 
-        beats = _allocate_beats(templates, seconds_total, seconds_per_beat)
-        total_bars = max(1, int(round(sum(beats) / 4)))
-        seconds_per_section = [beat_count * seconds_per_beat for beat_count in beats]
-
-        descriptor = _build_theme_descriptor(request.prompt, templates)
-
         sections: List[CompositionSection] = []
+        total_bars = 0
 
         for index, template in enumerate(templates):
+            arrangement_text = _describe_orchestration(orchestrations[index])
             prompt_text = _render_prompt(
                 template.prompt_template,
                 prompt=request.prompt,
                 descriptor=descriptor,
                 section_index=index,
+                arrangement=arrangement_text,
             ).strip()
 
-            section_seconds = max(MIN_SECTION_SECONDS, seconds_per_section[index])
+            motif_directive, variation_axes, cadence_hint = _directives_for_role(
+                template.role
+            )
+            bar_count = max(1, bars[index])
+            total_bars += bar_count
+            section_seconds = max(LONG_MIN_SECTION_SECONDS, bar_count * seconds_per_bar)
             sections.append(
                 CompositionSection(
                     section_id=f"s{index:02d}",
                     role=template.role,
                     label=template.label,
                     prompt=prompt_text,
-                    bars=template.bars,
-                    target_seconds=max(2.0, section_seconds),
+                    bars=bar_count,
+                    target_seconds=section_seconds,
                     energy=template.energy,
                     model_id=None,
                     seed_offset=index,
                     transition=template.transition,
+                    motif_directive=motif_directive,
+                    variation_axes=variation_axes,
+                    cadence_hint=cadence_hint,
+                    orchestration=orchestrations[index],
                 )
             )
 
@@ -181,6 +364,93 @@ class CompositionPlanner:
             theme=descriptor,
             sections=sections,
         )
+
+def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
+        seconds_total = float(max(request.duration_seconds, SHORT_MIN_TOTAL_SECONDS))
+        templates = list(_select_short_templates(seconds_total))
+        beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
+        total_weight = float(sum(template.base_bars for template in templates) or 1)
+        raw_tempo = int(round(240.0 * total_weight / seconds_total)) if seconds_total > 0 else 90
+        tempo_bpm = _select_tempo(raw_tempo)
+        effective_tempo = max(tempo_bpm, MIN_TEMPO)
+        seconds_per_bar = (60.0 / float(effective_tempo)) * float(beats_per_bar)
+
+        descriptor = _build_theme_descriptor(request.prompt, templates)
+        palette = _categorise_instrumentation(descriptor, request.prompt)
+        orchestrations = _plan_orchestrations(templates, palette)
+
+        base_seed = (
+            request.seed if request.seed is not None else _deterministic_seed(request.prompt)
+        )
+        musical_key = _select_key(base_seed)
+
+        sections: List[CompositionSection] = []
+        total_bars = 0
+        total_duration = 0.0
+
+        for index, template in enumerate(templates):
+            arrangement_text = _describe_orchestration(orchestrations[index])
+            prompt_text = _render_prompt(
+                template.prompt_template,
+                prompt=request.prompt,
+                descriptor=descriptor,
+                section_index=index,
+                arrangement=arrangement_text,
+            ).strip()
+
+            motif_directive, variation_axes, cadence_hint = _directives_for_role(
+                template.role
+            )
+
+            ratio = float(template.base_bars) / total_weight
+            section_seconds = max(
+                SHORT_MIN_SECTION_SECONDS,
+                seconds_total * ratio,
+            )
+            bar_count = int(round(section_seconds / seconds_per_bar)) if seconds_per_bar > 0 else template.base_bars
+            bar_count = max(template.min_bars, min(template.max_bars, max(1, bar_count)))
+            section_seconds = max(SHORT_MIN_SECTION_SECONDS, bar_count * seconds_per_bar)
+
+            total_bars += bar_count
+            total_duration += section_seconds
+
+            sections.append(
+                CompositionSection(
+                    section_id=f"s{index:02d}",
+                    role=template.role,
+                    label=template.label,
+                    prompt=prompt_text,
+                    bars=bar_count,
+                    target_seconds=section_seconds,
+                    energy=template.energy,
+                    model_id=None,
+                    seed_offset=index,
+                    transition=template.transition,
+                    motif_directive=motif_directive,
+                    variation_axes=variation_axes,
+                    cadence_hint=cadence_hint,
+                    orchestration=orchestrations[index],
+                )
+            )
+
+        return CompositionPlan(
+            version=PLAN_VERSION,
+            tempo_bpm=tempo_bpm,
+            time_signature=DEFAULT_TIME_SIGNATURE,
+            key=musical_key,
+            total_bars=total_bars,
+            total_duration_seconds=total_duration,
+            theme=descriptor,
+            sections=sections,
+        )
+
+
+def _beats_per_bar(time_signature: str) -> int:
+    try:
+        numerator = int(time_signature.split("/")[0])
+        return max(1, numerator)
+    except Exception:  # noqa: BLE001
+        return 4
 
 def _deterministic_seed(prompt: str) -> int:
     digest = hashlib.sha256(prompt.encode("utf-8")).digest()
@@ -220,83 +490,99 @@ def _select_tempo(raw_tempo: int) -> int:
     return best
 
 
-def _prune_templates_by_capacity(
-    seconds_total: float,
+def _tempo_hint(
+    total_seconds: float,
     templates: List[SectionTemplate],
-) -> List[SectionTemplate]:
-    if not templates:
-        return templates
-
-    pruned = list(templates)
-    while len(pruned) > 1 and seconds_total < MIN_SECTION_SECONDS * len(pruned):
-        drop_index = _template_to_drop(pruned)
-        pruned.pop(drop_index)
-    return pruned
-
-
-def _template_to_drop(templates: List[SectionTemplate]) -> int:
-    role_priority = {
-        SectionRole.OUTRO: 0,
-        SectionRole.INTRO: 1,
-        SectionRole.BRIDGE: 2,
-        SectionRole.RESOLUTION: 3,
-        SectionRole.DEVELOPMENT: 4,
-        SectionRole.MOTIF: 5,
-    }
-    best_idx = 0
-    best_key = (
-        role_priority.get(templates[0].role, 10),
-        templates[0].bars,
-        0,
-    )
-    for index, template in enumerate(templates[1:], start=1):
-        key = (
-            role_priority.get(template.role, 10),
-            template.bars,
-            index,
-        )
-        if key < best_key:
-            best_idx = index
-            best_key = key
-    return best_idx
+    beats_per_bar: int,
+) -> int:
+    if total_seconds <= 0:
+        return 96
+    base_bars = sum(template.base_bars for template in templates)
+    if base_bars <= 0:
+        base_bars = max(1, len(templates)) * 8
+    beats = base_bars * max(beats_per_bar, 1)
+    raw = int(round((60.0 * beats) / total_seconds))
+    return max(MIN_TEMPO, raw)
 
 
-def _role_min_beats(role: SectionRole, seconds_per_beat: float) -> int:
-    role_min = ROLE_MIN_BEATS.get(role, 4)
-    min_seconds_beats = (
-        math.ceil(MIN_SECTION_SECONDS / seconds_per_beat)
-        if seconds_per_beat > 0
-        else 4
-    )
-    return int(max(role_min, min_seconds_beats))
-
-
-def _allocate_beats(
+def _allocate_bars(
     templates: List[SectionTemplate],
     seconds_total: float,
-    seconds_per_beat: float,
+    seconds_per_bar: float,
 ) -> List[int]:
     if not templates:
         return []
+    seconds_per_bar = max(seconds_per_bar, 1.0)
+    target_bars_float = seconds_total / seconds_per_bar
+    min_total_bars = sum(template.min_bars for template in templates)
+    target_bars = max(min_total_bars, int(round(target_bars_float)))
+    base_total = sum(template.base_bars for template in templates)
+    scale = target_bars / max(base_total, 1)
+    bars = []
+    for template in templates:
+        scaled = int(round(template.base_bars * scale))
+        bounded = max(template.min_bars, min(template.max_bars, max(1, scaled)))
+        bars.append(bounded)
+    return _rebalance_bars(templates, bars, target_bars)
 
-    seconds_per_beat = max(seconds_per_beat, 1e-3)
-    total_beats_raw = sum(template.bars * 4 for template in templates)
-    min_beats = [_role_min_beats(template.role, seconds_per_beat) for template in templates]
-    target_beats = max(
-        sum(min_beats),
-        max(1, int(round(seconds_total / seconds_per_beat))),
-    )
 
-    total_beats_raw = max(total_beats_raw, 1)
-    scale = target_beats / total_beats_raw
+def _rebalance_bars(
+    templates: List[SectionTemplate],
+    bars: List[int],
+    target_bars: int,
+) -> List[int]:
+    if not bars:
+        return []
+    min_bars = [template.min_bars for template in templates]
+    max_bars = [template.max_bars for template in templates]
+    total = sum(bars)
+    add_order = _expand_priority(templates, ADD_PRIORITY)
+    remove_order = _expand_priority(templates, REMOVE_PRIORITY)
 
-    provisional = []
-    for template, min_count in zip(templates, min_beats, strict=True):
-        scaled = int(round(template.bars * 4 * scale))
-        provisional.append(max(min_count, max(1, scaled)))
+    safety = 0
+    while total < target_bars and safety < 4096:
+        adjusted = False
+        for idx in add_order:
+            if bars[idx] < max_bars[idx]:
+                bars[idx] += 1
+                total += 1
+                adjusted = True
+                if total >= target_bars:
+                    break
+        if not adjusted:
+            break
+        safety += 1
 
-    beats = _rebalance_beats(templates, provisional, min_beats, target_beats)
-    return beats
+    safety = 0
+    while total > target_bars and safety < 4096:
+        adjusted = False
+        for idx in remove_order:
+            if bars[idx] > min_bars[idx]:
+                bars[idx] -= 1
+                total -= 1
+                adjusted = True
+                if total <= target_bars:
+                    break
+        if not adjusted:
+            break
+        safety += 1
+
+    return bars
+
+
+def _expand_priority(
+    templates: List[SectionTemplate],
+    priority: List[SectionRole],
+) -> List[int]:
+    order: List[int] = []
+    for role in priority:
+        for index, template in enumerate(templates):
+            if template.role == role and index not in order:
+                order.append(index)
+    for index in range(len(templates)):
+        if index not in order:
+            order.append(index)
+    return order
 
 
 def _build_theme_descriptor(
@@ -382,6 +668,10 @@ def _dynamic_label(
         if role == SectionRole.OUTRO:
             return release
         return "resolved cadence"
+    if role == SectionRole.CHORUS:
+        return "anthemic peak"
+    if role == SectionRole.BRIDGE:
+        return "suspended tension"
     if energy == SectionEnergy.HIGH:
         return "heightened intensity"
     if energy == SectionEnergy.MEDIUM:
@@ -395,6 +685,7 @@ def _render_prompt(
     prompt: str,
     descriptor: ThemeDescriptor,
     section_index: int,
+    arrangement: str,
 ) -> str:
     instrumentation_text = (
         ", ".join(descriptor.instrumentation)
@@ -408,6 +699,7 @@ def _render_prompt(
     else:
         dynamic = "flowing dynamic"
     texture = descriptor.texture or DEFAULT_TEXTURE
+    arrangement_text = arrangement or instrumentation_text
     return template.format(
         prompt=prompt,
         motif=descriptor.motif,
@@ -415,190 +707,164 @@ def _render_prompt(
         rhythm=descriptor.rhythm,
         texture=texture,
         dynamic=dynamic,
+        arrangement=arrangement_text,
     )
 
 
-def _rebalance_beats(
+def _categorise_instrumentation(
+    descriptor: ThemeDescriptor,
+    prompt: str,
+) -> dict[str, list[str]]:
+    palette = {category: [] for category in CATEGORY_KEYWORDS}
+    for label in descriptor.instrumentation:
+        lowered = label.lower()
+        matched = False
+        for category, keywords in CATEGORY_KEYWORDS.items():
+            if any(keyword in lowered for keyword in keywords):
+                palette[category].append(label)
+                matched = True
+        if not matched:
+            palette.setdefault("textures", []).append(label)
+
+    prompt_lower = prompt.lower()
+    if any(keyword in prompt_lower for keyword in CATEGORY_KEYWORDS["vocals"]):
+        palette.setdefault("vocals", []).append("expressive vocals")
+
+    for category, defaults in DEFAULT_LAYER_FALLBACKS.items():
+        existing = palette.get(category, [])
+        if category == "vocals" and not existing:
+            palette[category] = []
+        else:
+            palette[category] = _dedupe(existing) if existing else list(defaults)
+    return palette
+
+
+def _plan_orchestrations(
     templates: List[SectionTemplate],
-    beats: List[int],
-    min_beats: List[int],
-    target_beats: int,
-) -> List[int]:
-    total = sum(beats)
-    if total == target_beats:
-        return beats
-
-    role_to_indices = {}
+    palette: dict[str, list[str]],
+) -> List[SectionOrchestration]:
+    orchestrations: List[SectionOrchestration] = []
     for index, template in enumerate(templates):
-        role_to_indices.setdefault(template.role, []).append(index)
-
-    def _expand_priority(priority: List[SectionRole]) -> List[int]:
-        order: List[int] = []
-        for role in priority:
-            order.extend(role_to_indices.get(role, []))
-        if len(order) < len(beats):
-            remaining = [idx for idx in range(len(beats)) if idx not in order]
-            order.extend(remaining)
-        return order
-
-    add_order = _expand_priority(ADD_PRIORITY)
-    remove_order = _expand_priority(REMOVE_PRIORITY)
-
-    safety = 0
-    while total < target_beats and safety < 4096:
-        modified = False
-        for idx in add_order:
-            beats[idx] += 1
-            total += 1
-            modified = True
-            if total >= target_beats:
-                break
-        if not modified:
-            break
-        safety += 1
-
-    safety = 0
-    while total > target_beats and safety < 4096:
-        modified = False
-        for idx in remove_order:
-            if beats[idx] > min_beats[idx]:
-                beats[idx] -= 1
-                total -= 1
-                modified = True
-                if total <= target_beats:
-                    break
-        if not modified:
-            break
-        safety += 1
-
-    return beats
+        counts = SECTION_LAYER_PROFILE.get(template.role, SECTION_LAYER_PROFILE.get("default", {}))
+        orchestrations.append(_build_orchestration(counts, palette, offset=index))
+    return orchestrations
 
 
-def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
-    if duration_seconds >= 24:
+def _build_orchestration(
+    counts: dict[str, int],
+    palette: dict[str, list[str]],
+    *,
+    offset: int,
+) -> SectionOrchestration:
+    orchestration = SectionOrchestration()
+    for category in ("rhythm", "bass", "harmony", "lead", "textures", "vocals"):
+        count = counts.get(category, 0)
+        if count <= 0:
+            items: list[str] = []
+        else:
+            source = list(palette.get(category, []))
+            if not source:
+                if category == "vocals":
+                    items = []
+                else:
+                    source = list(DEFAULT_LAYER_FALLBACKS.get(category, []))
+                    items = _cycled_slice(source, count, offset)
+            else:
+                items = _cycled_slice(source, count, offset)
+        setattr(orchestration, category, items)
+    return orchestration
+
+
+def _cycled_slice(source: list[str], count: int, offset: int) -> list[str]:
+    if not source or count <= 0:
+        return []
+    length = len(source)
+    result: list[str] = []
+    for index in range(count):
+        result.append(source[(offset + index) % length])
+    return result
+
+
+def _describe_orchestration(orchestration: SectionOrchestration) -> str:
+    parts: list[str] = []
+    for category in ("rhythm", "bass", "harmony", "lead", "textures", "vocals"):
+        instruments = getattr(orchestration, category)
+        if instruments:
+            parts.append(", ".join(instruments))
+    return ", ".join(parts)
+
+
+def _dedupe(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _select_long_templates(duration_seconds: float) -> Iterable[SectionTemplate]:
+    if duration_seconds >= 150.0:
         yield SectionTemplate(
             role=SectionRole.INTRO,
-            label="Arrival",
+            label="Intro",
             energy=SectionEnergy.LOW,
-            bars=4,
+            base_bars=16,
+            min_bars=10,
+            max_bars=18,
             prompt_template=(
-                "Set a {texture} scene for {prompt} by introducing the {motif} motif with "
-                "{instrumentation} over a {rhythm} pulse."
-            ),
-            transition="Fade in layers",
-        )
-        yield SectionTemplate(
-            role=SectionRole.MOTIF,
-            label="Statement",
-            energy=SectionEnergy.MEDIUM,
-            bars=8,
-            prompt_template=(
-                "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} "
-                "driving as {dynamic} begins."
-            ),
-            transition="Build momentum",
-        )
-        yield SectionTemplate(
-            role=SectionRole.DEVELOPMENT,
-            label="Development",
-            energy=SectionEnergy.HIGH,
-            bars=8,
-            prompt_template=(
-                "Evolve the {motif} motif with adventurous variations, letting {instrumentation} "
-                "weave syncopations over the {rhythm} while {dynamic} unfolds."
-            ),
-            transition="Evolve harmonies",
-        )
-        yield SectionTemplate(
-            role=SectionRole.BRIDGE,
-            label="Bridge",
-            energy=SectionEnergy.MEDIUM,
-            bars=4,
-            prompt_template=(
-                "Shift the palette gently, morphing {instrumentation} into new colours yet "
-                "echoing the {motif} motif within the {rhythm} feel."
-            ),
-            transition="Prepare resolution",
-        )
-        yield SectionTemplate(
-            role=SectionRole.RESOLUTION,
-            label="Resolution",
-            energy=SectionEnergy.MEDIUM,
-            bars=4,
-            prompt_template=(
-                "Guide the {motif} motif toward resolution, using {instrumentation} to ease the "
-                "{rhythm} while highlighting {dynamic}."
-            ),
-            transition="Return home",
-        )
-        yield SectionTemplate(
-            role=SectionRole.OUTRO,
-            label="Release",
-            energy=SectionEnergy.LOW,
-            bars=4,
-            prompt_template=(
-                "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop "
-                "the {rhythm}, allowing {dynamic} to close the journey."
-            ),
-            transition="Fade to silence",
-        )
-        return
-
-    if duration_seconds >= 16:
-        yield SectionTemplate(
-            role=SectionRole.INTRO,
-            label="Lead-in",
-            energy=SectionEnergy.LOW,
-            bars=4,
-            prompt_template=(
-                "Open gently with {instrumentation}, introducing the {motif} motif against a "
-                "{rhythm} pulse that hints at {prompt}."
+                "Set the stage with {arrangement}, foreshadowing the {motif} motif over a {rhythm} pulse and {texture} atmosphere."
             ),
             transition="Invite motif",
         )
         yield SectionTemplate(
             role=SectionRole.MOTIF,
-            label="Motif A",
+            label="Motif",
             energy=SectionEnergy.MEDIUM,
-            bars=8,
+            base_bars=20,
+            min_bars=16,
+            max_bars=24,
             prompt_template=(
-                "Present the {motif} motif clearly, keeping {instrumentation} tight around the "
-                "{rhythm} while {dynamic} grows."
+                "State the {motif} motif in full, letting {arrangement} lock into the {rhythm} while {dynamic} blooms."
             ),
-            transition="Increase energy",
+            transition="Build anticipation",
         )
         yield SectionTemplate(
-            role=SectionRole.DEVELOPMENT,
-            label="Variation",
+            role=SectionRole.BRIDGE,
+            label="Bridge",
+            energy=SectionEnergy.MEDIUM,
+            base_bars=12,
+            min_bars=8,
+            max_bars=16,
+            prompt_template=(
+                "Recast the {motif} motif by thinning the layers so {arrangement} can explore contrasting colours before the chorus returns."
+            ),
+            transition="Spark chorus",
+        )
+        yield SectionTemplate(
+            role=SectionRole.CHORUS,
+            label="Chorus",
             energy=SectionEnergy.HIGH,
-            bars=6,
+            base_bars=24,
+            min_bars=20,
+            max_bars=28,
             prompt_template=(
-                "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride "
-                "the {rhythm} as {dynamic} intensifies."
+                "Lift the {motif} motif into an anthemic chorus where {arrangement} drives the groove and {dynamic} peaks."
             ),
-            transition="Soften textures",
-        )
-        yield SectionTemplate(
-            role=SectionRole.RESOLUTION,
-            label="Cadence",
-            energy=SectionEnergy.MEDIUM,
-            bars=4,
-            prompt_template=(
-                "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and "
-                "settle the {rhythm} with {dynamic}."
-            ),
-            transition="Release",
+            transition="Glide to outro",
         )
         yield SectionTemplate(
             role=SectionRole.OUTRO,
-            label="Tail",
-            energy=SectionEnergy.LOW,
-            bars=2,
+            label="Outro",
+            energy=SectionEnergy.MEDIUM,
+            base_bars=14,
+            min_bars=8,
+            max_bars=18,
             prompt_template=(
-                "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and "
-                "the {rhythm} fade as {dynamic} sighs out."
+                "Close by reshaping the {motif} motif, letting {arrangement} ease the {rhythm} into a reflective {texture} fade."
             ),
-            transition="Fade",
+            transition="Fade to silence",
         )
         return
 
@@ -606,32 +872,202 @@ def _select_templates(duration_seconds: int) -> Iterable[SectionTemplate]:
         role=SectionRole.INTRO,
         label="Intro",
         energy=SectionEnergy.LOW,
-        bars=2,
+        base_bars=12,
+        min_bars=8,
+        max_bars=16,
         prompt_template=(
-            "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over "
-            "a {rhythm} that nods to {prompt}."
+            "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop."
         ),
-        transition="Introduce motif",
+        transition="Reveal motif",
     )
     yield SectionTemplate(
         role=SectionRole.MOTIF,
         label="Motif",
         energy=SectionEnergy.MEDIUM,
-        bars=6,
+        base_bars=18,
+        min_bars=14,
+        max_bars=22,
         prompt_template=(
-            "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the "
-            "{rhythm} while {dynamic} expands."
+            "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies."
         ),
-        transition="Lift energy",
+        transition="Ignite chorus",
     )
     yield SectionTemplate(
-        role=SectionRole.RESOLUTION,
-        label="Resolve",
-        energy=SectionEnergy.MEDIUM,
-        bars=4,
+        role=SectionRole.CHORUS,
+        label="Chorus",
+        energy=SectionEnergy.HIGH,
+        base_bars=24,
+        min_bars=18,
+        max_bars=26,
         prompt_template=(
-            "Resolve the story with {instrumentation}, letting the {motif} motif relax across the "
-            "{rhythm} as {dynamic} softens."
+            "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest."
         ),
-        transition="Fade out",
+        transition="Settle to outro",
     )
+    yield SectionTemplate(
+        role=SectionRole.OUTRO,
+        label="Outro",
+        energy=SectionEnergy.MEDIUM,
+        base_bars=12,
+        min_bars=8,
+        max_bars=16,
+        prompt_template=(
+            "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}."
+        ),
+        transition="Fade to silence",
+    )
+
+
+def _select_short_templates(duration_seconds: float) -> List[SectionTemplate]:
+    if duration_seconds >= 24.0:
+        return [
+            SectionTemplate(
+                role=SectionRole.INTRO,
+                label="Arrival",
+                energy=SectionEnergy.LOW,
+                base_bars=4,
+                min_bars=3,
+                max_bars=6,
+                prompt_template=(
+                    "Set a {texture} scene for {prompt} by introducing the {motif} motif with {instrumentation} over a {rhythm} pulse."
+                ),
+                transition="Fade in layers",
+            ),
+            SectionTemplate(
+                role=SectionRole.MOTIF,
+                label="Statement",
+                energy=SectionEnergy.MEDIUM,
+                base_bars=8,
+                min_bars=6,
+                max_bars=10,
+                prompt_template=(
+                    "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins."
+                ),
+                transition="Build momentum",
+            ),
+            SectionTemplate(
+                role=SectionRole.DEVELOPMENT,
+                label="Development",
+                energy=SectionEnergy.HIGH,
+                base_bars=8,
+                min_bars=6,
+                max_bars=10,
+                prompt_template=(
+                    "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds."
+                ),
+                transition="Evolve harmonies",
+            ),
+            SectionTemplate(
+                role=SectionRole.RESOLUTION,
+                label="Resolution",
+                energy=SectionEnergy.MEDIUM,
+                base_bars=4,
+                min_bars=3,
+                max_bars=6,
+                prompt_template=(
+                    "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}."
+                ),
+                transition="Return home",
+            ),
+            SectionTemplate(
+                role=SectionRole.OUTRO,
+                label="Release",
+                energy=SectionEnergy.LOW,
+                base_bars=4,
+                min_bars=2,
+                max_bars=6,
+                prompt_template=(
+                    "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey."
+                ),
+                transition="Fade to silence",
+            ),
+        ]
+    if duration_seconds >= 16.0:
+        return [
+            SectionTemplate(
+                role=SectionRole.INTRO,
+                label="Lead-in",
+                energy=SectionEnergy.LOW,
+                base_bars=4,
+                min_bars=2,
+                max_bars=6,
+                prompt_template=(
+                    "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}."
+                ),
+                transition="Invite motif",
+            ),
+            SectionTemplate(
+                role=SectionRole.MOTIF,
+                label="Motif A",
+                energy=SectionEnergy.MEDIUM,
+                base_bars=8,
+                min_bars=6,
+                max_bars=10,
+                prompt_template=(
+                    "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows."
+                ),
+                transition="Increase energy",
+            ),
+            SectionTemplate(
+                role=SectionRole.DEVELOPMENT,
+                label="Variation",
+                energy=SectionEnergy.HIGH,
+                base_bars=6,
+                min_bars=4,
+                max_bars=8,
+                prompt_template=(
+                    "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies."
+                ),
+                transition="Soften textures",
+            ),
+            SectionTemplate(
+                role=SectionRole.RESOLUTION,
+                label="Cadence",
+                energy=SectionEnergy.MEDIUM,
+                base_bars=4,
+                min_bars=2,
+                max_bars=6,
+                prompt_template=(
+                    "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}."
+                ),
+                transition="Release",
+            ),
+            SectionTemplate(
+                role=SectionRole.OUTRO,
+                label="Tail",
+                energy=SectionEnergy.LOW,
+                base_bars=2,
+                min_bars=1,
+                max_bars=4,
+                prompt_template=(
+                    "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out."
+                ),
+                transition="Fade",
+            ),
+        ]
+    return [
+        SectionTemplate(
+            role=SectionRole.INTRO,
+            label="Intro",
+            energy=SectionEnergy.LOW,
+            base_bars=2,
+            min_bars=1,
+            max_bars=4,
+            prompt_template=(
+                "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}."
+            ),
+            transition="Introduce motif",
+        ),
+        SectionTemplate(
+            role=SectionRole.MOTIF,
+            label="Motif",
+            energy=SectionEnergy.MEDIUM,
+            base_bars=6,
+            min_bars=4,
+            max_bars=8,
+            prompt_template=(
+                "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands."
+            ),
+            transition="Lift energy",
+        ),
+    ]

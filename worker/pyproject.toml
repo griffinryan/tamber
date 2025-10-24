@@ -29,6 +29,7 @@ inference = [
   "accelerate>=0.27",
   "safetensors>=0.4",
   "soundfile>=0.12",
+  "Pillow>=10",
   "torchaudio>=2.6,<2.8",
   "huggingface-hub>=0.20",
   "numpy>=1.26,<2",

@@ -93,6 +93,7 @@ pub struct GenerationArtifact {
 pub enum SectionRole {
     Intro,
     Motif,
+    Chorus,
     Development,
     Bridge,
     Resolution,
@@ -134,6 +135,30 @@ pub struct CompositionSection {
     pub seed_offset: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motif_directive: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variation_axes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cadence_hint: Option<String>,
+    #[serde(default)]
+    pub orchestration: SectionOrchestration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SectionOrchestration {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rhythm: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bass: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harmony: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lead: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub textures: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocals: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

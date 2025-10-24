@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import FastAPI
+from loguru import logger
 
 from ..services.musicgen import MusicGenService
 from ..services.orchestrator import ComposerOrchestrator
@@ -28,9 +27,18 @@ def create_app() -> FastAPI:
     app.state.composer = orchestrator
     app.state.planner = planner
     app.state.job_manager = manager
+    app.state.backend_status = {}
 
     async def _warmup_background() -> None:
-        asyncio.create_task(orchestrator.warmup())
+        try:
+            statuses = await orchestrator.warmup()
+            app.state.backend_status = statuses
+            logger.info(
+                "Worker warmup complete: {}",
+                {name: status.ready for name, status in statuses.items()},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Worker warmup failed")
 
     app.add_event_handler("startup", _warmup_background)
     app.include_router(router)

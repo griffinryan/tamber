@@ -12,6 +12,8 @@ const ENV_WORKER_URL: &str = "TIMBRE_WORKER_URL";
 const ENV_DEFAULT_MODEL: &str = "TIMBRE_DEFAULT_MODEL";
 const ENV_DEFAULT_DURATION: &str = "TIMBRE_DEFAULT_DURATION";
 const ENV_ARTIFACT_DIR: &str = "TIMBRE_ARTIFACT_DIR";
+const MIN_DURATION_SECONDS: u8 = 90;
+const MAX_DURATION_SECONDS: u8 = 180;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -36,13 +38,13 @@ impl AppConfig {
         if let Some(path) = config_file_override()? {
             if path.exists() {
                 let partial = read_partial(&path)?;
-                config.apply_partial(partial);
+                config.apply_partial(partial)?;
             }
         } else {
             let path = Self::default_config_path()?;
             if path.exists() {
                 let partial = read_partial(&path)?;
-                config.apply_partial(partial);
+                config.apply_partial(partial)?;
             }
         }
 
@@ -72,7 +74,7 @@ impl AppConfig {
         Ok(dirs.config_dir().join(CONFIG_FILE_NAME))
     }
 
-    fn apply_partial(&mut self, partial: PartialConfig) {
+    fn apply_partial(&mut self, partial: PartialConfig) -> Result<()> {
         if let Some(url) = partial.worker_url {
             self.worker_url = Some(url);
         }
@@ -80,11 +82,12 @@ impl AppConfig {
             self.default_model_id = model_id;
         }
         if let Some(duration) = partial.default_duration_seconds {
-            self.default_duration_seconds = duration;
+            self.default_duration_seconds = clamp_duration(duration)?;
         }
         if let Some(dir) = partial.artifact_dir {
             self.artifact_dir = dir;
         }
+        Ok(())
     }
 
     fn apply_env(&mut self) -> Result<()> {
@@ -102,10 +105,9 @@ impl AppConfig {
         }
         if let Ok(value) = env::var(ENV_DEFAULT_DURATION) {
             if !value.trim().is_empty() {
-                let parsed = value
-                    .parse::<u8>()
-                    .context("TIMBRE_DEFAULT_DURATION must be an integer between 1-30")?;
-                self.default_duration_seconds = parsed;
+                let parsed =
+                    value.parse::<u8>().context("TIMBRE_DEFAULT_DURATION must be an integer")?;
+                self.default_duration_seconds = clamp_duration(parsed)?;
             }
         }
         if let Ok(value) = env::var(ENV_ARTIFACT_DIR) {
@@ -122,10 +124,25 @@ impl Default for AppConfig {
         Self {
             worker_url: None,
             default_model_id: "musicgen-stereo-medium".into(),
-            default_duration_seconds: 24,
+            default_duration_seconds: 120,
             artifact_dir: default_artifact_dir(),
         }
     }
+}
+
+fn clamp_duration(duration: u8) -> Result<u8> {
+    if (MIN_DURATION_SECONDS..=MAX_DURATION_SECONDS).contains(&duration) {
+        return Ok(duration);
+    }
+    if duration < MIN_DURATION_SECONDS {
+        return Ok(MIN_DURATION_SECONDS);
+    }
+    if duration > MAX_DURATION_SECONDS {
+        return Ok(MAX_DURATION_SECONDS);
+    }
+    Err(anyhow!(
+        "duration must be between {MIN_DURATION_SECONDS} and {MAX_DURATION_SECONDS} seconds"
+    ))
 }
 
 fn config_file_override() -> Result<Option<PathBuf>> {

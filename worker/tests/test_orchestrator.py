@@ -11,11 +11,12 @@ from timbre_worker.app.models import (
     CompositionSection,
     GenerationRequest,
     SectionEnergy,
+    SectionOrchestration,
     SectionRole,
 )
 from timbre_worker.app.settings import Settings
 from timbre_worker.services.orchestrator import ComposerOrchestrator
-from timbre_worker.services.types import SectionRender
+from timbre_worker.services.types import BackendStatus, SectionRender
 
 
 class PassthroughPlanner:
@@ -29,8 +30,15 @@ class DummyBackend:
         self.name = name
         self.calls: List[str] = []
 
-    async def warmup(self) -> None:  # pragma: no cover - no-op for tests
-        return None
+    async def warmup(self) -> BackendStatus:  # pragma: no cover - lightweight status
+        return BackendStatus(
+            name=self.name,
+            ready=True,
+            device="cpu",
+            dtype=None,
+            error=None,
+            details={},
+        )
 
     async def render_section(
         self,
@@ -96,6 +104,7 @@ def build_plan(duration: float = 6.0) -> CompositionPlan:
             model_id="riffusion-v1",
             seed_offset=0,
             transition=None,
+            orchestration=SectionOrchestration(),
         ),
         CompositionSection(
             section_id="s01",
@@ -108,6 +117,7 @@ def build_plan(duration: float = 6.0) -> CompositionPlan:
             model_id="musicgen-small",
             seed_offset=1,
             transition=None,
+            orchestration=SectionOrchestration(),
         ),
     ]
     return CompositionPlan(
@@ -162,6 +172,10 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
         mix_cb=mix_cb,
     )
 
+    backend_status = orchestrator.backend_status()
+    assert backend_status.get("musicgen") is not None
+    assert backend_status.get("riffusion") is not None
+
     assert Path(artifact.artifact_path).exists()
     assert len(progress_calls) == len(plan.sections)
     assert progress_calls[0][2] == "s00"
@@ -178,12 +192,6 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     crossfade_total = sum(
         entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", [])
     )
-    assert plan.total_duration_seconds - crossfade_total == pytest.approx(
-        mix_calls[0],
-        rel=1e-3,
-    )
-    assert mix_calls[0] <= plan.total_duration_seconds
-
     assert extras.get("backend") == "composer"
     assert extras.get("placeholder") is False
     assert mix_info.get("target_rms", 0.0) == pytest.approx(0.2, rel=1e-3)
@@ -195,6 +203,44 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert len(sections) == 2
     assert sections[0].get("render_seconds", 0.0) >= plan.sections[0].target_seconds
     assert sections[1].get("render_seconds", 0.0) >= plan.sections[1].target_seconds
+    assert isinstance(sections[0].get("arrangement_text"), str)
+    phrase_total = sum(
+        section.get("phrase", {}).get("seconds", 0.0) for section in sections
+    )
+    assert phrase_total > 0.0
+    assert phrase_total - crossfade_total == pytest.approx(
+        mix_calls[0],
+        rel=1e-3,
+    )
+    motif_seed = extras.get("motif_seed")
+    assert isinstance(motif_seed, dict)
+    assert motif_seed.get("captured") is True
+    assert motif_seed.get("section_id") == "s01"
+    assert Path(motif_seed.get("path", "")).exists()
+    crossfades = mix_info.get("crossfades", [])
+    assert crossfades
+    assert crossfades[0].get("mode") in {"butt", "crossfade"}
+    conditioning_meta = crossfades[0].get("conditioning", {})
+    assert conditioning_meta.get("left_audio_conditioned") is False
+    assert conditioning_meta.get("right_audio_conditioned") is False
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_warmup_reports_backend_status(tmp_path: Path) -> None:
+    planner = PassthroughPlanner()
+    riffusion = DummyBackend("riffusion")
+    musicgen = DummyBackend("musicgen")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
+    settings.ensure_directories()
+
+    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    statuses = await orchestrator.warmup()
+    assert statuses.get("musicgen") is not None
+    assert statuses.get("riffusion") is not None
+    assert orchestrator.backend_status().keys() >= {"musicgen", "riffusion"}
 
 
 @pytest.mark.asyncio
@@ -220,3 +266,13 @@ async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
     sections = extras.get("sections")
     assert isinstance(sections, list)
     assert any(entry.get("placeholder") for entry in sections)
+    motif_seed = extras.get("motif_seed")
+    assert isinstance(motif_seed, dict)
+    assert motif_seed.get("captured") is True
+    mix_info = extras.get("mix", {})
+    crossfades = mix_info.get("crossfades", [])
+    assert crossfades
+    assert any(
+        meta.get("left_placeholder") or meta.get("right_placeholder")
+        for meta in (entry.get("conditioning", {}) for entry in crossfades)
+    )
