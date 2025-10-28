@@ -800,6 +800,18 @@ class RiffusionService:
     ) -> str:
         segments: list[str] = [base_prompt.strip()]
         if theme is not None:
+            # Add genre and era context for better Riffusion guidance
+            if theme.genre and theme.genre_confidence and theme.genre_confidence >= 0.6:
+                genre_name = theme.genre.replace("_", " ")
+                genre_text = f"{theme.subgenre} {genre_name}" if theme.subgenre else genre_name
+                segments.append(f"in {genre_text} style.")
+
+            if theme.era:
+                segments.append(f"with {theme.era} production aesthetics.")
+
+            if theme.harmonic_complexity:
+                segments.append(f"Use {theme.harmonic_complexity}.")
+
             instrumentation = (
                 ", ".join(theme.instrumentation)
                 if theme.instrumentation

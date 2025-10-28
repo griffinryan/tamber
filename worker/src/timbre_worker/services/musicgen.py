@@ -489,6 +489,29 @@ class MusicGenService:
         if arrangement:
             segments.append(arrangement)
         if theme is not None:
+            # Add genre and era context for better MusicGen guidance
+            genre_clause = ""
+            if theme.genre and theme.genre_confidence and theme.genre_confidence >= 0.6:
+                genre_name = theme.genre.replace("_", " ")
+                if theme.subgenre:
+                    genre_clause = f"in {theme.subgenre} {genre_name} style"
+                else:
+                    genre_clause = f"in {genre_name} style"
+
+            era_clause = ""
+            if theme.era:
+                era_clause = f"with {theme.era} production"
+
+            # Combine genre and era context
+            style_context = " ".join([c for c in [genre_clause, era_clause] if c]).strip()
+            if style_context:
+                segments.append(style_context + ".")
+
+            # Add harmonic complexity if specified
+            if theme.harmonic_complexity:
+                segments.append(f"Use {theme.harmonic_complexity}.")
+
+            # Theme anchoring
             motif_clause = f"Keep the {theme.motif} motif"
             rhythm_clause = f"aligned with the {theme.rhythm}"
             extras: list[str] = [motif_clause, rhythm_clause]

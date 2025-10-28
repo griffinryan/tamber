@@ -15,6 +15,7 @@ from ..app.models import (
     SectionRole,
     ThemeDescriptor,
 )
+from .genre_classifier import GenreClassifier, GenreProfile, VocalCharacteristics
 
 PLAN_VERSION = "v3"
 DEFAULT_TIME_SIGNATURE = "4/4"
@@ -46,66 +47,460 @@ REMOVE_PRIORITY = [
 ]
 
 INSTRUMENT_KEYWORDS = [
+    # Keyboards & Synths
     ("piano", "warm piano"),
     ("keys", "soft keys"),
+    ("grand piano", "concert grand piano"),
+    ("upright piano", "intimate upright piano"),
+    ("electric piano", "electric piano"),
+    ("rhodes", "vintage rhodes"),
+    ("wurlitzer", "warm wurlitzer"),
     ("synth", "lush synth pads"),
+    ("synthesizer", "layered synthesizers"),
     ("synthwave", "retro synth layers"),
+    ("analog synth", "analog synth warmth"),
     ("modular", "modular synth textures"),
+    ("moog", "fat moog bass"),
+    ("arp", "vintage arp"),
+    ("dx7", "digital dx7 tines"),
+    ("organ", "swelling organ"),
+    ("hammond", "hammond organ"),
+    ("pipe organ", "cathedral pipe organ"),
+    ("harpsichord", "baroque harpsichord"),
+    ("clavinet", "funky clavinet"),
+    ("mellotron", "haunting mellotron"),
+    ("accordion", "expressive accordion"),
+
+    # Guitars
     ("guitar", "ambient guitar"),
     ("guitars", "layered guitars"),
+    ("electric guitar", "electric guitar"),
+    ("acoustic guitar", "acoustic guitar"),
+    ("distorted guitar", "distorted guitar"),
+    ("clean guitar", "clean guitar tones"),
+    ("fingerstyle", "fingerstyle guitar"),
+    ("12-string", "shimmering 12-string"),
+    ("slide guitar", "slide guitar"),
+    ("banjo", "bright banjo"),
+    ("ukulele", "cheerful ukulele"),
+    ("mandolin", "bright mandolin"),
+    ("sitar", "resonant sitar"),
+    ("koto", "delicate koto"),
+    ("oud", "middle eastern oud"),
+
+    # Bass
     ("bass", "deep bass"),
+    ("808", "808 sub bass"),
+    ("sub bass", "rumbling sub bass"),
+    ("bass guitar", "electric bass guitar"),
+    ("upright bass", "walking upright bass"),
+    ("double bass", "orchestral double bass"),
+    ("synth bass", "pulsing synth bass"),
+    ("wobble bass", "wobble bass"),
+    ("slap bass", "funky slap bass"),
+
+    # Drums & Percussion
     ("drum", "tight drums"),
+    ("drums", "driving drums"),
     ("percussion", "organic percussion"),
+    ("808 drums", "808 drum machine"),
+    ("tr-808", "roland tr-808"),
+    ("tr-909", "roland tr-909"),
+    ("drum machine", "vintage drum machine"),
+    ("kick", "powerful kick drum"),
+    ("snare", "crisp snare"),
+    ("hi-hat", "shimmering hi-hats"),
+    ("cymbals", "crashing cymbals"),
+    ("toms", "thundering toms"),
+    ("congas", "latin congas"),
+    ("bongos", "rhythmic bongos"),
+    ("djembe", "african djembe"),
+    ("tabla", "indian tabla"),
+    ("taiko", "japanese taiko drums"),
+    ("timpani", "orchestral timpani"),
+    ("marimba", "wooden marimba"),
+    ("vibraphone", "shimmering vibraphone"),
+    ("xylophone", "bright xylophone"),
+    ("glockenspiel", "delicate glockenspiel"),
+    ("tambourine", "shaking tambourine"),
+    ("shaker", "rhythmic shaker"),
+    ("cowbell", "bright cowbell"),
+    ("claps", "hand claps"),
+
+    # Strings
     ("string", "layered strings"),
-    ("violin", "expressive strings"),
+    ("strings", "orchestral strings"),
+    ("violin", "expressive violin"),
+    ("viola", "warm viola"),
     ("cello", "warm cello"),
-    ("choir", "airy choir voices"),
-    ("vocal", "ethereal vocals"),
-    ("singer", "soulful vocalist"),
-    ("vocalist", "soaring vocals"),
+    ("contrabass", "deep contrabass"),
+    ("string quartet", "string quartet"),
+    ("pizzicato", "pizzicato strings"),
+    ("arco", "arco strings"),
+    ("tremolo strings", "tremolo strings"),
+    ("erhu", "chinese erhu"),
+    ("fiddle", "folk fiddle"),
+
+    # Brass
     ("brass", "smooth brass"),
     ("horn", "bold brass horns"),
+    ("french horn", "french horn"),
+    ("trumpet", "radiant trumpet"),
+    ("trombone", "velvet trombone"),
+    ("tuba", "deep tuba"),
+    ("flugelhorn", "mellow flugelhorn"),
+    ("cornet", "bright cornet"),
+    ("euphonium", "rich euphonium"),
+    ("brass section", "brass section"),
+
+    # Woodwinds
     ("sax", "saxophone lead"),
-    ("trumpet", "radiant trumpet lead"),
-    ("trombone", "velvet trombone swells"),
+    ("saxophone", "smooth saxophone"),
+    ("alto sax", "alto saxophone"),
+    ("tenor sax", "tenor saxophone"),
+    ("soprano sax", "soprano saxophone"),
+    ("baritone sax", "baritone saxophone"),
     ("flute", "breathy flute"),
+    ("piccolo", "piercing piccolo"),
     ("clarinet", "warm clarinet"),
+    ("bass clarinet", "bass clarinet"),
     ("oboe", "lyrical oboe"),
-    ("harp", "glittering harp arpeggios"),
+    ("bassoon", "deep bassoon"),
+    ("english horn", "melancholic english horn"),
+    ("recorder", "baroque recorder"),
+    ("pan flute", "ethereal pan flute"),
+    ("shakuhachi", "japanese shakuhachi"),
+    ("didgeridoo", "australian didgeridoo"),
+    ("harmonica", "bluesy harmonica"),
+
+    # Vocals
+    ("vocal", "ethereal vocals"),
+    ("vocals", "expressive vocals"),
+    ("singer", "soulful vocalist"),
+    ("vocalist", "soaring vocals"),
+    ("choir", "airy choir voices"),
+    ("chorus", "vocal chorus"),
+    ("falsetto", "falsetto vocals"),
+    ("harmonies", "vocal harmonies"),
+    ("chant", "meditative chant"),
+    ("rap", "rap vocals"),
+    ("spoken word", "spoken word"),
+    ("whisper", "whispered vocals"),
+    ("scream", "screaming vocals"),
+    ("growl", "growling vocals"),
+
+    # Electronic & Effects
     ("ambient", "atmospheric textures"),
-    ("lofi", "dusty keys"),
+    ("pad", "lush pad"),
+    ("lofi", "dusty lo-fi keys"),
+    ("vaporwave", "vaporwave aesthetics"),
+    ("glitch", "glitchy textures"),
+    ("noise", "textured noise"),
+    ("field recording", "field recordings"),
+    ("vinyl crackle", "vinyl crackle"),
+    ("tape hiss", "analog tape hiss"),
+    ("vocoder", "vocoded vocals"),
+    ("autotune", "autotuned vocals"),
+    ("talkbox", "talkbox effect"),
+    ("reverb", "cavernous reverb"),
+    ("delay", "spacious delay"),
+    ("distortion", "heavy distortion"),
+    ("phaser", "swooshing phaser"),
+    ("chorus effect", "lush chorus"),
+
+    # Orchestral & World
+    ("orchestra", "full orchestra"),
+    ("chamber", "chamber ensemble"),
+    ("woodwind ensemble", "woodwind ensemble"),
+    ("brass ensemble", "brass ensemble"),
+    ("harp", "glittering harp"),
+    ("celesta", "magical celesta"),
+    ("dulcimer", "hammered dulcimer"),
+    ("balalaika", "russian balalaika"),
+    ("zither", "alpine zither"),
+    ("gamelan", "indonesian gamelan"),
 ]
 
 RHYTHM_KEYWORDS = [
+    # Classical & Traditional
     ("waltz", "gentle 3/4 sway"),
+    ("march", "steady march rhythm"),
+    ("polka", "lively polka bounce"),
+
+    # Jazz & Swing
     ("swing", "swinging groove"),
+    ("bebop", "fast bebop rhythm"),
+    ("shuffle", "shuffle groove"),
+    ("syncopated", "syncopated rhythm"),
+
+    # Hip-Hop & R&B
     ("hip hop", "laid-back hip hop beat"),
     ("boom bap", "boom-bap pulse"),
+    ("trap", "stuttered trap beat"),
+    ("half-time", "half-time hip hop"),
+    ("double-time", "double-time rap flow"),
+
+    # Electronic & Dance
     ("house", "four-on-the-floor pulse"),
     ("techno", "driving techno rhythm"),
     ("trance", "rolling trance rhythm"),
-    ("trap", "stuttered trap beat"),
-    ("downtempo", "downtempo pulse"),
+    ("dubstep", "dubstep half-time"),
+    ("drum and bass", "breakneck drum and bass"),
+    ("dnb", "rapid dnb rhythm"),
     ("breakbeat", "syncopated breakbeat"),
+    ("downtempo", "downtempo pulse"),
+    ("jungle", "jungle breakbeat"),
+    ("garage", "UK garage swing"),
+    ("footwork", "frenetic footwork"),
+    ("breakcore", "chaotic breakcore"),
+    ("grime", "grime rhythm"),
+
+    # Latin & World
     ("bossa", "bossa nova sway"),
+    ("samba", "driving samba rhythm"),
+    ("rumba", "rumba groove"),
+    ("salsa", "salsa rhythm"),
+    ("merengue", "merengue beat"),
+    ("cumbia", "cumbia rhythm"),
+    ("afrobeat", "afrobeat polyrhythm"),
+    ("flamenco", "flamenco compás"),
     ("reggae", "off-beat reggae groove"),
+    ("dancehall", "dancehall riddim"),
+    ("dub", "dub reggae beat"),
+
+    # Rock & Funk
+    ("funk", "funky groove"),
+    ("disco", "disco four-on-the-floor"),
+    ("rock", "driving rock beat"),
+    ("backbeat", "strong backbeat"),
+
+    # Experimental
+    ("polyrhythmic", "polyrhythmic layers"),
+    ("odd meter", "odd meter groove"),
+    ("free time", "free-flowing rhythm"),
 ]
 
 TEXTURE_KEYWORDS = [
+    # Mood & Atmosphere
     ("dream", "dreamy haze"),
+    ("dreamy", "ethereal dreamscape"),
     ("noir", "late-night noir mood"),
     ("dark", "shadowy atmosphere"),
     ("bright", "glowing shimmer"),
-    ("glitch", "glitchy texture"),
-    ("cinematic", "cinematic expanse"),
+    ("warm", "warm analog feel"),
+    ("cold", "cold digital air"),
+    ("intimate", "intimate closeness"),
+    ("spacious", "vast spacious atmosphere"),
     ("epic", "soaring atmosphere"),
     ("mystic", "mystical aura"),
+    ("ethereal", "ethereal floating quality"),
+    ("haunting", "haunting atmosphere"),
+    ("melancholic", "melancholic mood"),
+    ("euphoric", "euphoric atmosphere"),
+    ("aggressive", "aggressive energy"),
+    ("mellow", "mellow softness"),
+    ("gentle", "gentle caress"),
+
+    # Production Quality
     ("lofi", "dusty vignette"),
+    ("hi-fi", "pristine clarity"),
+    ("gritty", "gritty texture"),
+    ("smooth", "silky smooth texture"),
+    ("crisp", "crisp and clean"),
+    ("vintage", "vintage warmth"),
+    ("retro", "retro aesthetic"),
+    ("analog", "analog warmth"),
+    ("digital", "digital precision"),
+    ("pristine", "pristine production"),
+    ("degraded", "degraded lo-fi"),
+
+    # Spatial & Textural
+    ("cinematic", "cinematic expanse"),
+    ("glitch", "glitchy texture"),
+    ("metallic", "metallic sheen"),
+    ("organic", "organic textures"),
+    ("synthetic", "synthetic textures"),
+    ("crystalline", "crystalline clarity"),
+    ("muddy", "thick muddy texture"),
+    ("sparse", "sparse minimal texture"),
+    ("dense", "dense layered texture"),
+    ("lush", "lush rich texture"),
+    ("airy", "light airy quality"),
+
+    # Environmental
     ("rain", "rain-soaked ambience"),
+    ("underwater", "submerged underwater feel"),
+    ("cathedral", "cathedral reverb"),
+    ("chamber", "intimate chamber space"),
+    ("futuristic", "futuristic sci-fi"),
+]
+
+ARTIST_KEYWORDS = [
+    # Classical & Film Score Composers
+    ("john williams", ["cinematic", "orchestral"]),
+    ("hans zimmer", ["cinematic", "epic"]),
+    ("ennio morricone", ["cinematic", "western"]),
+    ("mozart", ["classical", "elegant"]),
+    ("beethoven", ["classical", "dramatic"]),
+    ("bach", ["baroque", "intricate"]),
+    ("debussy", ["impressionist", "delicate"]),
+    ("tchaikovsky", ["romantic", "ballet"]),
+    ("danny elfman", ["quirky", "cinematic"]),
+    ("howard shore", ["epic", "fantasy"]),
+
+    # Jazz
+    ("miles davis", ["jazz", "modal"]),
+    ("john coltrane", ["jazz", "spiritual"]),
+    ("charlie parker", ["bebop", "fast"]),
+    ("duke ellington", ["big band", "swing"]),
+    ("thelonious monk", ["jazz", "angular"]),
+    ("bill evans", ["piano jazz", "intimate"]),
+    ("herbie hancock", ["fusion", "funk"]),
+    ("weather report", ["fusion", "groovy"]),
+
+    # Rock & Alternative
+    ("led zeppelin", ["hard rock", "powerful"]),
+    ("pink floyd", ["psychedelic", "atmospheric"]),
+    ("radiohead", ["alternative", "experimental"]),
+    ("nirvana", ["grunge", "raw"]),
+    ("the beatles", ["pop rock", "melodic"]),
+    ("david bowie", ["art rock", "theatrical"]),
+    ("queen", ["rock", "operatic"]),
+
+    # Electronic & Dance
+    ("daft punk", ["electronic", "funk"]),
+    ("aphex twin", ["idm", "experimental"]),
+    ("deadmau5", ["progressive house"]),
+    ("skrillex", ["dubstep", "aggressive"]),
+    ("four tet", ["idm", "textural"]),
+    ("boards of canada", ["idm", "nostalgic"]),
+    ("kraftwerk", ["electronic", "robotic"]),
+    ("jean-michel jarre", ["electronic", "spacious"]),
+
+    # Hip-Hop & R&B
+    ("kendrick lamar", ["hip hop", "lyrical"]),
+    ("drake", ["hip hop", "melodic"]),
+    ("travis scott", ["trap", "psychedelic"]),
+    ("kanye west", ["hip hop", "experimental"]),
+    ("the weeknd", ["r&b", "moody"]),
+    ("sza", ["r&b", "soulful"]),
+    ("anderson .paak", ["r&b", "funk"]),
+    ("j dilla", ["boom bap", "soulful"]),
+
+    # Pop
+    ("michael jackson", ["pop", "funk"]),
+    ("madonna", ["pop", "dance"]),
+    ("prince", ["funk", "pop"]),
+    ("ariana grande", ["pop", "vocal"]),
+    ("taylor swift", ["pop", "storytelling"]),
+    ("wham", ["80s pop", "upbeat"]),
+
+    # Ambient & Experimental
+    ("brian eno", ["ambient", "atmospheric"]),
+    ("stars of the lid", ["ambient", "drone"]),
+    ("william basinski", ["ambient", "decay"]),
+    ("fennesz", ["experimental", "textural"]),
+]
+
+TIME_SIGNATURE_KEYWORDS = [
+    ("waltz", "3/4"),
+    ("3/4", "3/4"),
+    ("6/8", "6/8"),
+    ("5/4", "5/4"),
+    ("7/8", "7/8"),
+    ("9/8", "9/8"),
+    ("11/8", "11/8"),
+    ("odd meter", "7/8"),
+    ("odd time", "7/8"),
+]
+
+MODE_KEYWORDS = [
+    ("dorian", "Dorian"),
+    ("phrygian", "Phrygian"),
+    ("lydian", "Lydian"),
+    ("mixolydian", "Mixolydian"),
+    ("aeolian", "Aeolian"),
+    ("locrian", "Locrian"),
+    ("minor", "minor"),
+    ("major", "major"),
 ]
 
 DEFAULT_INSTRUMENTATION = ["blended instrumentation"]
 DEFAULT_TEXTURE = "immersive atmosphere"
+
+# Era-specific production descriptors for instrumentation flavoring
+ERA_PRODUCTION_DESCRIPTORS = {
+    "60s": {
+        "flavor": ["analog warmth", "tape saturation", "vintage compression", "mono feel"],
+        "instruments": {
+            "guitar": "60s clean guitar",
+            "synth": "early analog synth",
+            "drum": "vintage jazz drums",
+            "bass": "motown bass",
+            "organ": "60s hammond organ",
+        }
+    },
+    "70s": {
+        "flavor": ["warm analog", "lush production", "funk grooves", "disco shimmer"],
+        "instruments": {
+            "guitar": "70s funk guitar",
+            "synth": "70s analog synth",
+            "drum": "70s disco drums",
+            "bass": "funk bass",
+            "string": "70s string section",
+        }
+    },
+    "80s": {
+        "flavor": ["gated reverb", "digital synths", "big drums", "chorus effects"],
+        "instruments": {
+            "guitar": "80s power guitar",
+            "synth": "80s digital synth",
+            "drum": "gated 80s drums",
+            "bass": "80s synth bass",
+            "vocal": "80s vocals",
+        }
+    },
+    "90s": {
+        "flavor": ["grunge aesthetics", "lo-fi production", "sampled breaks", "digital clarity"],
+        "instruments": {
+            "guitar": "90s alternative guitar",
+            "synth": "90s synth pads",
+            "drum": "90s breakbeat drums",
+            "bass": "grunge bass",
+            "vocal": "90s vocal production",
+        }
+    },
+    "2000s": {
+        "flavor": ["compressed modern", "digital precision", "sidechained pumping"],
+        "instruments": {
+            "guitar": "modern electric guitar",
+            "synth": "2000s synth",
+            "drum": "2000s programmed drums",
+            "bass": "modern bass",
+            "vocal": "auto-tuned vocals",
+        }
+    },
+    "2010s": {
+        "flavor": ["trap hi-hats", "EDM build-drops", "dubstep wobbles", "maximized loudness"],
+        "instruments": {
+            "guitar": "modern processed guitar",
+            "synth": "modern synth",
+            "drum": "trap drums",
+            "bass": "sub-bass",
+            "vocal": "modern vocal production",
+        }
+    },
+    "modern": {
+        "flavor": ["spatial audio", "pristine clarity", "surgical EQ", "contemporary production"],
+        "instruments": {
+            "guitar": "contemporary guitar",
+            "synth": "contemporary synth",
+            "drum": "modern drums",
+            "bass": "contemporary bass",
+            "vocal": "contemporary vocals",
+        }
+    },
+}
 
 ENERGY_DYNAMIC_MAP = {
     SectionEnergy.LOW: ("gentle entrance", "soft release"),
@@ -170,12 +565,46 @@ CATEGORY_KEYWORDS = {
 }
 
 DEFAULT_LAYER_FALLBACKS = {
-    "rhythm": ["tight drums", "organic percussion"],
-    "bass": ["pulsing bass", "sub bass swell"],
-    "harmony": ["lush keys", "stacked synth pads"],
-    "lead": ["expressive guitar lead", "soulful brass line"],
-    "textures": ["airy ambient swells", "granular noise beds"],
-    "vocals": ["wordless vocal pads"],
+    "rhythm": [
+        "tight drums", "organic percussion", "808 drum machine", "vintage drum machine",
+        "driving drums", "crisp snare", "powerful kick", "shimmering hi-hats",
+        "hand claps", "shaker", "tambourine", "congas", "bongos", "tabla",
+        "taiko drums", "orchestral timpani", "wooden marimba", "syncopated breakbeat",
+        "four-on-the-floor kick", "swinging drums with brushes"
+    ],
+    "bass": [
+        "pulsing bass", "sub bass swell", "deep bass", "808 sub bass",
+        "walking upright bass", "electric bass groove", "synth bass", "wobble bass",
+        "funk bass", "slap bass", "rumbling sub bass", "plucky bass",
+        "distorted bass", "smooth bass line", "jazz walking bass",
+        "grounding low end", "heavy sub frequencies"
+    ],
+    "harmony": [
+        "lush keys", "stacked synth pads", "warm piano", "vintage rhodes",
+        "layered strings", "acoustic guitar", "electric guitar rhythm", "power chords",
+        "hammond organ", "mellotron", "vibraphone", "string section",
+        "brass ensemble", "woodwind harmony", "synth chords", "arpeggiated synths",
+        "piano comping", "guitar chords", "lush pads", "orchestral strings"
+    ],
+    "lead": [
+        "expressive guitar lead", "soulful brass line", "saxophone", "trumpet",
+        "violin solo", "synth lead", "flute", "electric guitar solo",
+        "vocal melodies", "clarinet", "oboe", "trombone solo",
+        "soaring lead synth", "distorted guitar", "french horn",
+        "harmonica", "lead vocals", "melodic lines"
+    ],
+    "textures": [
+        "airy ambient swells", "granular noise beds", "atmospheric pads",
+        "reverberant textures", "field recordings", "white noise sweeps",
+        "vinyl crackle", "tape hiss", "ambient guitar", "drone",
+        "choir pads", "string tremolo", "cymbal swells", "feedback",
+        "glitchy textures", "reverb tails", "sustained tones", "spectral wash"
+    ],
+    "vocals": [
+        "wordless vocal pads", "ethereal vocals", "vocal harmonies",
+        "choir voices", "soulful vocals", "falsetto", "rap vocals",
+        "sung melodies", "vocal chops", "vocoded vocals"
+    ],
 }
 
 SECTION_LAYER_PROFILE = {
@@ -289,6 +718,9 @@ def _directives_for_role(
 class CompositionPlanner:
     """Generates deterministic composition plans from prompts."""
 
+    def __init__(self):
+        self.genre_classifier = GenreClassifier()
+
     def build_plan(self, request: GenerationRequest) -> CompositionPlan:
         if float(request.duration_seconds) >= LONG_FORM_THRESHOLD:
             return self._build_long_form_plan(request)
@@ -296,23 +728,33 @@ class CompositionPlanner:
 
     def _build_long_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, LONG_FORM_THRESHOLD))
+
+        # Classify genre from prompt
+        genre_profile = self.genre_classifier.classify(request.prompt)
+        vocals = self.genre_classifier.detect_vocals(request.prompt)
+
+        # Determine time signature (genre-aware or default)
+        time_signature = _detect_time_signature(request.prompt, genre_profile)
+
         templates = list(_select_long_templates(seconds_total))
-        beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
+        beats_per_bar = _beats_per_bar(time_signature)
         tempo_hint = _tempo_hint(seconds_total, templates, beats_per_bar)
-        tempo_bpm = _select_tempo(tempo_hint)
-        effective_tempo = max(tempo_bpm, MIN_TEMPO)
+
+        # Use genre tempo constraints
+        tempo_bpm = _select_tempo_for_genre(tempo_hint, genre_profile)
+        effective_tempo = max(tempo_bpm, genre_profile.tempo_range[0])
         seconds_per_bar = (60.0 / float(effective_tempo)) * float(beats_per_bar)
 
         bars = _allocate_bars(templates, seconds_total, seconds_per_bar)
 
-        descriptor = _build_theme_descriptor(request.prompt, templates)
-        palette = _categorise_instrumentation(descriptor, request.prompt)
-        orchestrations = _plan_orchestrations(templates, palette)
+        descriptor = _build_theme_descriptor(request.prompt, templates, genre_profile, vocals)
+        palette = _categorise_instrumentation(descriptor, request.prompt, genre_profile)
+        orchestrations = _plan_orchestrations(templates, palette, genre_profile, vocals)
 
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
-        musical_key = _select_key(base_seed)
+        musical_key, mode = _select_key_and_mode(base_seed, genre_profile)
 
         sections: List[CompositionSection] = []
         total_bars = 0
@@ -357,32 +799,43 @@ class CompositionPlanner:
         return CompositionPlan(
             version=PLAN_VERSION,
             tempo_bpm=tempo_bpm,
-            time_signature=DEFAULT_TIME_SIGNATURE,
+            time_signature=time_signature,
             key=musical_key,
+            mode=mode,
             total_bars=total_bars,
             total_duration_seconds=total_duration,
             theme=descriptor,
             sections=sections,
         )
 
-def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
+    def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, SHORT_MIN_TOTAL_SECONDS))
+
+        # Classify genre from prompt
+        genre_profile = self.genre_classifier.classify(request.prompt)
+        vocals = self.genre_classifier.detect_vocals(request.prompt)
+
+        # Determine time signature (genre-aware or default)
+        time_signature = _detect_time_signature(request.prompt, genre_profile)
+
         templates = list(_select_short_templates(seconds_total))
-        beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
+        beats_per_bar = _beats_per_bar(time_signature)
         total_weight = float(sum(template.base_bars for template in templates) or 1)
         raw_tempo = int(round(240.0 * total_weight / seconds_total)) if seconds_total > 0 else 90
-        tempo_bpm = _select_tempo(raw_tempo)
-        effective_tempo = max(tempo_bpm, MIN_TEMPO)
+
+        # Use genre tempo constraints
+        tempo_bpm = _select_tempo_for_genre(raw_tempo, genre_profile)
+        effective_tempo = max(tempo_bpm, genre_profile.tempo_range[0])
         seconds_per_bar = (60.0 / float(effective_tempo)) * float(beats_per_bar)
 
-        descriptor = _build_theme_descriptor(request.prompt, templates)
-        palette = _categorise_instrumentation(descriptor, request.prompt)
-        orchestrations = _plan_orchestrations(templates, palette)
+        descriptor = _build_theme_descriptor(request.prompt, templates, genre_profile, vocals)
+        palette = _categorise_instrumentation(descriptor, request.prompt, genre_profile)
+        orchestrations = _plan_orchestrations(templates, palette, genre_profile, vocals)
 
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
-        musical_key = _select_key(base_seed)
+        musical_key, mode = _select_key_and_mode(base_seed, genre_profile)
 
         sections: List[CompositionSection] = []
         total_bars = 0
@@ -436,8 +889,9 @@ def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         return CompositionPlan(
             version=PLAN_VERSION,
             tempo_bpm=tempo_bpm,
-            time_signature=DEFAULT_TIME_SIGNATURE,
+            time_signature=time_signature,
             key=musical_key,
+            mode=mode,
             total_bars=total_bars,
             total_duration_seconds=total_duration,
             theme=descriptor,
@@ -475,6 +929,67 @@ def _select_key(seed: int) -> str:
     return keys[seed % len(keys)]
 
 
+def _select_key_and_mode(seed: int, genre_profile: GenreProfile) -> tuple[str, Optional[str]]:
+    """
+    Select musical key and mode based on genre profile and seed.
+
+    Returns:
+        tuple of (key, mode) where mode is None for standard major/minor or modal name
+    """
+    # Use genre-specific typical keys if available and high confidence
+    if genre_profile.confidence >= 0.7 and genre_profile.typical_keys:
+        keys = genre_profile.typical_keys
+        key = keys[seed % len(keys)]
+    else:
+        # Fallback to default key selection
+        key = _select_key(seed)
+
+    # Detect mode from key string or genre defaults
+    mode = None
+    if any(modal in key.lower() for modal in ["dorian", "phrygian", "lydian", "mixolydian", "aeolian", "locrian"]):
+        # Extract mode from key string
+        for modal_name in ["Dorian", "Phrygian", "Lydian", "Mixolydian", "Aeolian", "Locrian"]:
+            if modal_name in key:
+                mode = modal_name
+                break
+    elif "modal" in key.lower():
+        # Generic modal indication - choose mode based on genre
+        if genre_profile.genre == "jazz":
+            mode = "Dorian"
+        elif genre_profile.genre == "world":
+            mode = "Phrygian"
+        elif genre_profile.genre == "ambient":
+            mode = "Lydian"
+        else:
+            mode = "Dorian"  # Default modal flavor
+    elif "minor" in key.lower():
+        mode = "minor"
+    elif "major" in key.lower():
+        mode = "major"
+
+    return key, mode
+
+
+def _detect_time_signature(prompt: str, genre_profile: GenreProfile) -> str:
+    """
+    Detect time signature from prompt keywords or genre profile.
+    """
+    prompt_lower = prompt.lower()
+
+    # Check for explicit time signature keywords in prompt
+    for keyword, time_sig in TIME_SIGNATURE_KEYWORDS:
+        if keyword in prompt_lower:
+            return time_sig
+
+    # Use genre's preferred meters if high confidence
+    if genre_profile.confidence >= 0.6 and genre_profile.meters:
+        # Prefer first meter from genre (usually the most common)
+        return genre_profile.meters[0]
+
+    # Default fallback
+    return DEFAULT_TIME_SIGNATURE
+
+
 def _select_tempo(raw_tempo: int) -> int:
     clamped = max(MIN_TEMPO, min(MAX_TEMPO, raw_tempo))
     best = clamped
@@ -487,6 +1002,45 @@ def _select_tempo(raw_tempo: int) -> int:
             if error < best_error:
                 best = candidate
                 best_error = error
+    return best
+
+
+def _select_tempo_for_genre(raw_tempo: int, genre_profile: GenreProfile) -> int:
+    """
+    Select tempo constrained by genre's typical tempo range.
+
+    Uses genre's typical_tempos if high confidence, otherwise uses tempo_range.
+    Falls back to standard _select_tempo if low confidence.
+    """
+    if genre_profile.confidence < 0.6:
+        # Low confidence, use standard tempo selection
+        return _select_tempo(raw_tempo)
+
+    min_tempo, max_tempo = genre_profile.tempo_range
+
+    # Clamp to genre range
+    clamped = max(min_tempo, min(max_tempo, raw_tempo))
+
+    # Prefer genre's typical tempos if available
+    if genre_profile.typical_tempos:
+        # Find closest typical tempo
+        closest = min(genre_profile.typical_tempos, key=lambda t: abs(t - clamped))
+        # Use typical tempo if within reasonable range
+        if abs(closest - clamped) <= 20:
+            return closest
+
+    # Otherwise find best tempo within genre range
+    best = clamped
+    best_error = abs(raw_tempo - best)
+    for delta in range(1, 20):
+        for candidate in (clamped - delta, clamped + delta):
+            if candidate < min_tempo or candidate > max_tempo:
+                continue
+            error = abs(raw_tempo - candidate)
+            if error < best_error:
+                best = candidate
+                best_error = error
+
     return best
 
 
@@ -588,13 +1142,20 @@ def _expand_priority(
 def _build_theme_descriptor(
     prompt: str,
     templates: List[SectionTemplate],
+    genre_profile: GenreProfile,
+    vocals: VocalCharacteristics,
 ) -> ThemeDescriptor:
     prompt_lower = prompt.lower()
     instrumentation = _extract_keywords(prompt_lower, INSTRUMENT_KEYWORDS)
-    if not instrumentation:
-        instrumentation = list(DEFAULT_INSTRUMENTATION)
 
-    rhythm = _derive_rhythm(prompt_lower, templates)
+    # CRITICAL FIX: Populate from genre profile instead of generic fallback
+    if not instrumentation:
+        if genre_profile.confidence >= 0.4:  # Lower threshold for better variety
+            instrumentation = _extract_genre_instruments(genre_profile)
+        else:
+            instrumentation = list(DEFAULT_INSTRUMENTATION)
+
+    rhythm = _derive_rhythm(prompt_lower, templates, genre_profile)
     motif = _derive_motif(prompt)
     texture = _derive_texture(prompt_lower, instrumentation)
     dynamic_curve = [
@@ -602,12 +1163,20 @@ def _build_theme_descriptor(
         for index, template in enumerate(templates)
     ]
 
+    # Derive harmonic complexity from genre
+    harmonic_complexity = _derive_harmonic_complexity(genre_profile, prompt_lower)
+
     return ThemeDescriptor(
         motif=motif,
         instrumentation=instrumentation,
         rhythm=rhythm,
         dynamic_curve=dynamic_curve,
         texture=texture,
+        genre=genre_profile.genre,
+        genre_confidence=genre_profile.confidence,
+        era=genre_profile.era,
+        subgenre=genre_profile.subgenre,
+        harmonic_complexity=harmonic_complexity,
     )
 
 
@@ -619,10 +1188,55 @@ def _extract_keywords(prompt_lower: str, mapping: list[tuple[str, str]]) -> list
     return results
 
 
-def _derive_rhythm(prompt_lower: str, templates: List[SectionTemplate]) -> str:
+def _extract_genre_instruments(genre_profile: GenreProfile) -> list[str]:
+    """
+    Extract representative instruments from genre profile when prompt has no explicit instruments.
+
+    Takes first 2 instruments from each category to create diverse palette.
+    """
+    result: list[str] = []
+
+    # Priority order: harmony, lead, rhythm, bass, textures (most musical variety)
+    for category in ["harmony", "lead", "rhythm", "bass", "textures"]:
+        instruments = genre_profile.instruments.get(category, [])
+        if instruments:
+            # Take first 2 from each category for variety
+            result.extend(instruments[:2])
+
+    # Add vocals if genre emphasizes them
+    if genre_profile.vocal_prevalence > 0.5:
+        vocal_instruments = genre_profile.instruments.get("vocals", [])
+        if vocal_instruments:
+            result.append(vocal_instruments[0])
+
+    return result if result else ["blended instrumentation"]
+
+
+def _derive_rhythm(prompt_lower: str, templates: List[SectionTemplate], genre_profile: GenreProfile) -> str:
+    # Check prompt keywords first
     for keyword, label in RHYTHM_KEYWORDS:
         if keyword in prompt_lower:
             return label
+
+    # Use genre-specific rhythm descriptors
+    if genre_profile.genre == "jazz":
+        return "swinging groove"
+    elif genre_profile.genre == "hip_hop":
+        return "laid-back hip hop beat"
+    elif genre_profile.genre == "electronic":
+        if genre_profile.subgenre == "house":
+            return "four-on-the-floor pulse"
+        elif genre_profile.subgenre == "techno":
+            return "driving techno rhythm"
+        return "electronic pulse"
+    elif genre_profile.genre == "rock":
+        return "driving rock beat"
+    elif genre_profile.genre == "ambient":
+        return "subtle rhythmic texture"
+    elif genre_profile.genre == "classical":
+        return "orchestral rhythmic foundation"
+
+    # Fallback to energy-based rhythm
     energies = {template.energy for template in templates}
     if SectionEnergy.HIGH in energies:
         return "driving pulse"
@@ -651,6 +1265,42 @@ def _derive_texture(prompt_lower: str, instrumentation: list[str]) -> str:
     if instrumentation:
         return f"focused blend of {', '.join(instrumentation[:2])}"
     return DEFAULT_TEXTURE
+
+
+def _derive_harmonic_complexity(genre_profile: GenreProfile, prompt_lower: str) -> Optional[str]:
+    """
+    Derive harmonic complexity descriptor based on genre and prompt.
+
+    Returns genre-specific harmonic vocabulary or None for simple harmony.
+    """
+    # Check for explicit harmonic keywords in prompt
+    if "extended" in prompt_lower or "complex harmony" in prompt_lower or "jazz chords" in prompt_lower:
+        return "extended voicings and altered dominants"
+    if "simple" in prompt_lower or "basic chords" in prompt_lower:
+        return "simple triadic harmony"
+
+    # Genre-specific harmonic vocabulary
+    if genre_profile.genre == "jazz":
+        return "extended voicings, modal interchange, and altered dominants"
+    elif genre_profile.genre == "classical":
+        return "functional harmonic progression with cadential motion"
+    elif genre_profile.genre == "film_score":
+        return "cinematic harmonic swells and orchestral voicings"
+    elif genre_profile.genre == "r_and_b":
+        return "soulful chord extensions and smooth voice leading"
+    elif genre_profile.genre == "ambient":
+        return "sustained harmonic fields and drone-like textures"
+    elif genre_profile.genre == "world":
+        if "modal" in prompt_lower:
+            return "modal harmonic structures"
+        return "ethnic scale patterns and drone foundations"
+    elif genre_profile.genre == "experimental":
+        return "atonal clusters and spectral harmonies"
+    elif genre_profile.genre in ("rock", "electronic", "pop"):
+        # These genres typically use simpler harmony
+        return None
+
+    return None
 
 
 def _dynamic_label(
@@ -711,12 +1361,52 @@ def _render_prompt(
     )
 
 
+def _apply_era_modifier(instrument: str, era: Optional[str]) -> str:
+    """
+    Apply era-specific modifiers to instrument labels.
+
+    Args:
+        instrument: Base instrument description
+        era: Detected era (60s, 70s, 80s, 90s, 2000s, 2010s, modern)
+
+    Returns:
+        Modified instrument string with era flavor
+    """
+    if not era or era not in ERA_PRODUCTION_DESCRIPTORS:
+        return instrument
+
+    era_data = ERA_PRODUCTION_DESCRIPTORS[era]
+    instrument_modifiers = era_data.get("instruments", {})
+
+    instrument_lower = instrument.lower()
+
+    # Check for instrument type matches and apply era modifier
+    for inst_type, era_label in instrument_modifiers.items():
+        if inst_type in instrument_lower:
+            # Replace generic description with era-specific version
+            return era_label
+
+    # If no specific match, prepend era to instrument
+    if era in ["60s", "70s", "80s", "90s"]:
+        return f"{era} {instrument}"
+
+    return instrument
+
+
 def _categorise_instrumentation(
     descriptor: ThemeDescriptor,
     prompt: str,
+    genre_profile: GenreProfile,
 ) -> dict[str, list[str]]:
     palette = {category: [] for category in CATEGORY_KEYWORDS}
+
+    # First, add prompt-extracted instruments with era flavoring
+    era = descriptor.era
     for label in descriptor.instrumentation:
+        # Apply era modifier if era is detected
+        if era:
+            label = _apply_era_modifier(label, era)
+
         lowered = label.lower()
         matched = False
         for category, keywords in CATEGORY_KEYWORDS.items():
@@ -726,27 +1416,67 @@ def _categorise_instrumentation(
         if not matched:
             palette.setdefault("textures", []).append(label)
 
+    # Merge with genre-specific instruments (lowered threshold for better variety)
+    if genre_profile.confidence >= 0.5:  # Lowered from 0.6
+        for category, genre_instruments in genre_profile.instruments.items():
+            # Add genre instruments that aren't already present
+            existing_lower = [inst.lower() for inst in palette.get(category, [])]
+            for genre_inst in genre_instruments:
+                if genre_inst.lower() not in existing_lower:
+                    palette[category].append(genre_inst)
+
     prompt_lower = prompt.lower()
     if any(keyword in prompt_lower for keyword in CATEGORY_KEYWORDS["vocals"]):
         palette.setdefault("vocals", []).append("expressive vocals")
 
+    # Use genre-appropriate fallbacks when palette is empty
     for category, defaults in DEFAULT_LAYER_FALLBACKS.items():
         existing = palette.get(category, [])
         if category == "vocals" and not existing:
             palette[category] = []
         else:
-            palette[category] = _dedupe(existing) if existing else list(defaults)
+            # Prefer genre instruments as fallback if available
+            genre_fallback = genre_profile.instruments.get(category, [])
+            fallback = genre_fallback if genre_fallback else defaults
+            palette[category] = _dedupe(existing) if existing else list(fallback)
+
     return palette
 
 
 def _plan_orchestrations(
     templates: List[SectionTemplate],
     palette: dict[str, list[str]],
+    genre_profile: GenreProfile,
+    vocals: VocalCharacteristics,
 ) -> List[SectionOrchestration]:
     orchestrations: List[SectionOrchestration] = []
+
+    # Use genre layer counts if high confidence, otherwise use role-based defaults
+    use_genre_layers = genre_profile.confidence >= 0.7
+
     for index, template in enumerate(templates):
-        counts = SECTION_LAYER_PROFILE.get(template.role, SECTION_LAYER_PROFILE.get("default", {}))
+        if use_genre_layers:
+            # Start with genre's layer profile
+            counts = dict(genre_profile.layers)
+
+            # Adjust vocal count based on vocal prevalence and detection
+            if vocals.has_vocals or genre_profile.vocal_prevalence > 0.7:
+                # Increase vocals for chorus/development sections
+                if template.role in (SectionRole.CHORUS, SectionRole.DEVELOPMENT):
+                    counts["vocals"] = max(counts.get("vocals", 0), 2)
+                elif template.role not in (SectionRole.INTRO, SectionRole.OUTRO):
+                    counts["vocals"] = max(counts.get("vocals", 0), 1)
+            else:
+                # Reduce or eliminate vocals if not detected and genre doesn't emphasize them
+                if genre_profile.vocal_prevalence < 0.3:
+                    counts["vocals"] = 0
+
+        else:
+            # Use traditional role-based profile
+            counts = SECTION_LAYER_PROFILE.get(template.role, SECTION_LAYER_PROFILE.get("default", {}))
+
         orchestrations.append(_build_orchestration(counts, palette, offset=index))
+
     return orchestrations
 
 

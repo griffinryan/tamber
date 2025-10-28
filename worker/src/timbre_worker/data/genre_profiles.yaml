@@ -1,0 +1,337 @@
+# Genre Profile Database
+# Defines musical characteristics, typical instrumentation, and narrative structures for each genre
+
+classical:
+  display_name: "Classical"
+  tempo_range: [40, 120]
+  typical_tempos: [60, 72, 90, 108]
+  meters: ["4/4", "3/4", "6/8", "2/4"]
+  narrative_structure: "harmonic_driven"
+  vocal_prevalence: 0.3  # 30% of classical has vocals (opera, choral)
+  energy_profile: "dramatic_arc"  # Builds and releases dramatically
+  typical_keys: ["C major", "D major", "E-flat major", "F major", "G major", "A major", "A minor", "D minor", "E minor"]
+
+  layers:
+    rhythm: 0  # Classical rarely emphasizes drums
+    bass: 1    # Double bass, cello
+    harmony: 6 # Strings, woodwinds creating harmonic foundation
+    lead: 3    # Violin, flute, oboe solos
+    textures: 2 # Atmospheric strings, sustained winds
+    vocals: 0  # Default 0, increases if vocal keywords detected
+
+  instruments:
+    harmony: ["violin section", "viola section", "woodwind ensemble", "piano", "harp"]
+    lead: ["solo violin", "solo flute", "solo oboe", "solo clarinet", "french horn"]
+    bass: ["cello section", "double bass section", "bassoon"]
+    textures: ["string tremolo", "sustained woodwinds"]
+    vocals: ["soprano", "tenor", "choir", "opera vocals"]
+
+  keywords: ["classical", "orchestra", "symphony", "concerto", "chamber", "baroque", "romantic", "violin", "piano concerto"]
+
+jazz:
+  display_name: "Jazz"
+  tempo_range: [80, 200]
+  typical_tempos: [90, 120, 160, 180]
+  meters: ["4/4", "3/4", "5/4", "6/8"]
+  narrative_structure: "harmonic_driven"
+  vocal_prevalence: 0.4
+  energy_profile: "swinging_arc"
+  typical_keys: ["B-flat major", "E-flat major", "F major", "C minor", "D minor", "G minor"]
+
+  layers:
+    rhythm: 2
+    bass: 1
+    harmony: 2
+    lead: 4  # Jazz emphasizes solos
+    textures: 1
+    vocals: 0
+
+  instruments:
+    rhythm: ["swinging drums", "brushed snare", "ride cymbal"]
+    bass: ["upright bass", "walking bass"]
+    harmony: ["piano comping", "guitar chords", "vibraphone"]
+    lead: ["saxophone", "trumpet", "trombone", "guitar solo", "piano solo"]
+    textures: ["ambient piano", "sustained vibes"]
+    vocals: ["jazz vocals", "scat singing", "crooner"]
+
+  keywords: ["jazz", "bebop", "swing", "bossa nova", "latin jazz", "acid jazz", "saxophone", "trumpet", "upright bass"]
+
+hip_hop:
+  display_name: "Hip-Hop"
+  tempo_range: [70, 110]
+  typical_tempos: [85, 90, 95, 100]
+  meters: ["4/4"]
+  narrative_structure: "rhythm_driven"
+  vocal_prevalence: 0.9  # Almost always has vocals
+  energy_profile: "groove_steady"
+  typical_keys: ["C minor", "D minor", "E minor", "F minor", "G minor"]
+
+  layers:
+    rhythm: 3  # Heavy emphasis on drums/percussion
+    bass: 2    # 808 bass crucial
+    harmony: 1 # Sparse
+    lead: 1
+    textures: 1
+    vocals: 2
+
+  instruments:
+    rhythm: ["808 drums", "trap hi-hats", "boom bap kick", "crisp snare"]
+    bass: ["808 bass", "sub bass", "deep bass"]
+    harmony: ["sampled keys", "lo-fi piano", "synth stabs"]
+    lead: ["synth lead", "vocal samples"]
+    textures: ["vinyl crackle", "ambient pads", "atmospheric textures"]
+    vocals: ["rap vocals", "male rap", "female rap", "sung hooks", "ad-libs"]
+
+  keywords: ["hip hop", "hip-hop", "rap", "trap", "boom bap", "lo-fi", "lofi", "808", "the weeknd", "drake", "kendrick"]
+
+electronic:
+  display_name: "Electronic"
+  tempo_range: [100, 180]
+  typical_tempos: [120, 128, 140, 174]
+  meters: ["4/4", "6/8"]
+  narrative_structure: "rhythm_driven"
+  vocal_prevalence: 0.5
+  energy_profile: "build_drop"
+  typical_keys: ["A minor", "C major", "D minor", "F major"]
+
+  layers:
+    rhythm: 3
+    bass: 2
+    harmony: 2
+    lead: 2
+    textures: 2
+    vocals: 0
+
+  instruments:
+    rhythm: ["four-on-the-floor kick", "electronic drums", "sidechained percussion", "glitchy hi-hats"]
+    bass: ["sub bass", "wobble bass", "plucky bass", "808"]
+    harmony: ["lush synth pads", "stacked chords", "arpeggiated synths"]
+    lead: ["synth lead", "pluck lead", "laser synths"]
+    textures: ["atmospheric pads", "white noise sweeps", "granular textures", "reverb tails"]
+    vocals: ["pitched vocals", "chopped vocals", "vocoded vocals"]
+
+  keywords: ["edm", "house", "techno", "trance", "dubstep", "drum and bass", "dnb", "electronic", "synth", "rave"]
+
+rock:
+  display_name: "Rock"
+  tempo_range: [80, 160]
+  typical_tempos: [110, 120, 140]
+  meters: ["4/4", "6/8"]
+  narrative_structure: "motif_driven"
+  vocal_prevalence: 0.8
+  energy_profile: "anthemic_build"
+  typical_keys: ["E minor", "A minor", "D major", "G major", "E major"]
+
+  layers:
+    rhythm: 2
+    bass: 1
+    harmony: 2
+    lead: 2
+    textures: 1
+    vocals: 1
+
+  instruments:
+    rhythm: ["driving drums", "rock drums", "powerful kick", "crashing cymbals"]
+    bass: ["electric bass", "distorted bass", "punchy bass"]
+    harmony: ["electric guitar rhythm", "power chords", "keyboard pads"]
+    lead: ["electric guitar solo", "guitar lead", "distorted guitar"]
+    textures: ["guitar feedback", "ambient guitar", "reverb tails"]
+    vocals: ["rock vocals", "male rock vocals", "female rock vocals", "shouted vocals"]
+
+  keywords: ["rock", "indie", "alternative", "punk", "grunge", "metal", "guitar", "electric guitar", "drums"]
+
+ambient:
+  display_name: "Ambient"
+  tempo_range: [40, 90]
+  typical_tempos: [50, 60, 70, 80]
+  meters: ["4/4", "3/4", "free"]
+  narrative_structure: "texture_driven"
+  vocal_prevalence: 0.1  # Rarely has vocals
+  energy_profile: "flat_low"
+  typical_keys: ["C major", "D minor", "E minor", "F major", "modal"]
+
+  layers:
+    rhythm: 0  # Often no rhythm
+    bass: 1    # Subtle drones
+    harmony: 2
+    lead: 0    # No prominent leads
+    textures: 6 # Heavily texture-focused
+    vocals: 0
+
+  instruments:
+    rhythm: ["subtle percussion", "organic textures"]
+    bass: ["sub drone", "bass drone", "low frequency hum"]
+    harmony: ["ambient pads", "sustained synths", "bowed strings"]
+    lead: []
+    textures: ["granular clouds", "atmospheric wash", "field recordings", "reverberant textures", "evolving drones"]
+    vocals: ["wordless vocals", "ethereal voices"]
+
+  keywords: ["ambient", "drone", "atmospheric", "soundscape", "minimal", "meditative", "brian eno", "stars of the lid"]
+
+film_score:
+  display_name: "Film Score / Cinematic"
+  tempo_range: [40, 130]
+  typical_tempos: [60, 72, 90, 110]
+  meters: ["4/4", "3/4", "5/4", "6/8"]
+  narrative_structure: "cinematic"
+  vocal_prevalence: 0.2  # Occasional choir
+  energy_profile: "dramatic_arc"
+  typical_keys: ["C minor", "D minor", "E minor", "F major", "G minor", "B-flat major"]
+
+  layers:
+    rhythm: 1  # Often subdued
+    bass: 2    # Foundation
+    harmony: 5 # Rich orchestration
+    lead: 2    # Melodic themes
+    textures: 3 # Atmospheric
+    vocals: 0
+
+  instruments:
+    rhythm: ["orchestral percussion", "timpani", "taiko drums", "epic drums"]
+    bass: ["cello section", "double bass", "deep brass", "sub bass"]
+    harmony: ["string section", "brass ensemble", "woodwinds", "piano", "horns"]
+    lead: ["solo violin", "french horn", "trumpet fanfare", "soaring strings"]
+    textures: ["atmospheric strings", "choir pads", "reverberant brass", "cymbal swells"]
+    vocals: ["choir", "epic choir", "soprano soloist"]
+
+  keywords: ["cinematic", "film score", "epic", "orchestral", "soundtrack", "john williams", "hans zimmer", "trailer music", "harry potter"]
+
+pop:
+  display_name: "Pop"
+  tempo_range: [90, 140]
+  typical_tempos: [100, 110, 120, 128]
+  meters: ["4/4"]
+  narrative_structure: "motif_driven"
+  vocal_prevalence: 0.95  # Almost always vocal-driven
+  energy_profile: "catchy_build"
+  typical_keys: ["C major", "G major", "D major", "A major", "F major"]
+
+  layers:
+    rhythm: 2
+    bass: 1
+    harmony: 2
+    lead: 1
+    textures: 1
+    vocals: 2
+
+  instruments:
+    rhythm: ["pop drums", "electronic drums", "tight kick", "crisp snare"]
+    bass: ["synth bass", "electric bass", "sub bass"]
+    harmony: ["piano", "synth pads", "guitar strums", "keyboards"]
+    lead: ["synth lead", "guitar licks", "vocal harmonies"]
+    textures: ["lush pads", "shimmer", "atmospheric synths"]
+    vocals: ["pop vocals", "male pop vocals", "female pop vocals", "harmonized vocals"]
+
+  keywords: ["pop", "synthpop", "electropop", "80s", "90s", "2000s", "wham", "madonna", "michael jackson", "ariana grande"]
+
+r_and_b:
+  display_name: "R&B / Soul"
+  tempo_range: [65, 120]
+  typical_tempos: [70, 85, 95, 110]
+  meters: ["4/4", "6/8"]
+  narrative_structure: "motif_driven"
+  vocal_prevalence: 0.95
+  energy_profile: "smooth_groove"
+  typical_keys: ["E-flat major", "F major", "B-flat major", "C minor", "D minor"]
+
+  layers:
+    rhythm: 2
+    bass: 2  # Prominent bass lines
+    harmony: 3
+    lead: 1
+    textures: 2
+    vocals: 2
+
+  instruments:
+    rhythm: ["laid-back drums", "snare with ghost notes", "smooth hi-hats"]
+    bass: ["electric bass groove", "deep bass", "funk bass"]
+    harmony: ["rhodes piano", "warm keys", "guitar chords", "lush synths"]
+    lead: ["guitar licks", "brass stabs", "synth lead"]
+    textures: ["warm pads", "vinyl warmth", "reverberant keys"]
+    vocals: ["soulful vocals", "male r&b vocals", "female r&b vocals", "falsetto", "harmonies"]
+
+  keywords: ["r&b", "rnb", "soul", "neo soul", "funk", "motown", "the weeknd", "sza", "usher", "marvin gaye"]
+
+folk:
+  display_name: "Folk / Acoustic"
+  tempo_range: [70, 140]
+  typical_tempos: [90, 100, 120]
+  meters: ["4/4", "3/4", "6/8"]
+  narrative_structure: "motif_driven"
+  vocal_prevalence: 0.8
+  energy_profile: "organic_flow"
+  typical_keys: ["G major", "D major", "C major", "A minor", "E minor"]
+
+  layers:
+    rhythm: 1  # Often just acoustic percussion
+    bass: 1
+    harmony: 3  # Guitar-driven
+    lead: 1
+    textures: 1
+    vocals: 1
+
+  instruments:
+    rhythm: ["acoustic drums", "shaker", "tambourine", "cajon"]
+    bass: ["upright bass", "acoustic bass"]
+    harmony: ["acoustic guitar", "fingerstyle guitar", "banjo", "mandolin", "dulcimer"]
+    lead: ["fiddle", "harmonica", "acoustic guitar lead"]
+    textures: ["ambient guitar", "string resonance"]
+    vocals: ["folk vocals", "harmonized vocals", "storytelling vocals"]
+
+  keywords: ["folk", "acoustic", "americana", "bluegrass", "country", "singer-songwriter", "fingerstyle"]
+
+world:
+  display_name: "World Music"
+  tempo_range: [60, 180]
+  typical_tempos: [90, 110, 120, 140]
+  meters: ["4/4", "3/4", "6/8", "7/8", "9/8", "5/4"]
+  narrative_structure: "rhythm_driven"
+  vocal_prevalence: 0.6
+  energy_profile: "cultural_flow"
+  typical_keys: ["modal", "D minor", "E minor", "F major", "pentatonic"]
+
+  layers:
+    rhythm: 3  # Rhythm often central
+    bass: 1
+    harmony: 2
+    lead: 2
+    textures: 2
+    vocals: 0
+
+  instruments:
+    rhythm: ["tabla", "djembe", "taiko", "hand drums", "ethnic percussion"]
+    bass: ["low drone", "didgeridoo", "bass drum"]
+    harmony: ["sitar", "koto", "oud", "dulcimer", "ethnic strings"]
+    lead: ["flute", "shakuhachi", "erhu", "duduk", "ethnic winds"]
+    textures: ["drone", "atmospheric ethnic sounds", "field recordings"]
+    vocals: ["world vocals", "chant", "throat singing", "cultural singing"]
+
+  keywords: ["world", "ethnic", "tribal", "middle eastern", "asian", "african", "latin", "indian", "sitar", "tabla", "didgeridoo"]
+
+experimental:
+  display_name: "Experimental / Avant-Garde"
+  tempo_range: [40, 200]
+  typical_tempos: [60, 90, 120, 160]
+  meters: ["4/4", "3/4", "5/4", "7/8", "11/8", "free"]
+  narrative_structure: "texture_driven"
+  vocal_prevalence: 0.3
+  energy_profile: "unpredictable"
+  typical_keys: ["atonal", "chromatic", "modal", "microtonal"]
+
+  layers:
+    rhythm: 2
+    bass: 1
+    harmony: 2
+    lead: 2
+    textures: 4  # Heavy on experimental textures
+    vocals: 0
+
+  instruments:
+    rhythm: ["glitchy percussion", "found sounds", "prepared percussion"]
+    bass: ["distorted bass", "noise bass", "sub frequencies"]
+    harmony: ["prepared piano", "microtonal synths", "dissonant chords"]
+    lead: ["processed instruments", "circuit-bent sounds", "noise generators"]
+    textures: ["granular synthesis", "field recordings", "noise", "feedback", "spectral textures"]
+    vocals: ["processed vocals", "spoken word", "manipulated voices"]
+
+  keywords: ["experimental", "avant-garde", "noise", "glitch", "abstract", "contemporary", "art music", "sound art"]

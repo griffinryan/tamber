@@ -36,6 +36,11 @@ class ThemeDescriptor(BaseModel):
     rhythm: str = Field(default="steady pulse", min_length=1, max_length=128)
     dynamic_curve: list[str] = Field(default_factory=list)
     texture: Optional[str] = Field(default=None, max_length=128)
+    genre: Optional[str] = Field(default=None, max_length=64)  # Detected genre
+    genre_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # Genre confidence score
+    era: Optional[str] = Field(default=None, max_length=32)  # Detected era (60s, 80s, modern, etc.)
+    subgenre: Optional[str] = Field(default=None, max_length=64)  # Detected subgenre
+    harmonic_complexity: Optional[str] = Field(default=None, max_length=128)  # Harmonic vocabulary descriptor
 
 
 class SectionOrchestration(BaseModel):
@@ -69,6 +74,7 @@ class CompositionPlan(BaseModel):
     tempo_bpm: int = Field(..., ge=40, le=200)
     time_signature: str = Field(default="4/4", min_length=3, max_length=8)
     key: str = Field(default="C major", min_length=3, max_length=32)
+    mode: Optional[str] = Field(default=None, max_length=32)  # Modal flavor (Dorian, Phrygian, etc.)
     total_bars: int = Field(..., ge=1, le=512)
     total_duration_seconds: float = Field(..., gt=1.0, le=300.0)
     theme: Optional[ThemeDescriptor] = Field(default=None)
