@@ -89,3 +89,31 @@ When adding new metadata, update `docs/schemas/`, the Rust `SectionExtras` struc
 - **Placeholder audio surfacing unexpectedly**: Confirm `TIMBRE_RIFFUSION_ALLOW_INFERENCE`/`TIMBRE_INFERENCE_DEVICE` values and inspect section extras for `placeholder_reason`.
 
 Keep this file updated whenever planner templates, orchestration metadata, or mix behaviour changes.
+
+---
+
+## Related Documentation
+
+For implementation details and deeper technical understanding:
+
+### Core Technical Guides
+- **[MUSICGEN.md](MUSICGEN.md)** – MusicGen backend implementation
+  - How prompts are constructed from planner templates
+  - Audio conditioning using motif seeds and tails
+  - Sampling parameters and generation process
+- **[CONDITIONING.md](CONDITIONING.md)** – Audio conditioning strategy
+  - Why two-stream conditioning (motif seed + previous tail)
+  - How conditioning affects section coherence
+  - Metadata tracking and debugging
+- **[AUDIO_PIPELINE.md](AUDIO_PIPELINE.md)** – Complete mixing & mastering pipeline
+  - Section preparation and shaping
+  - Crossfade vs. butt-join decision logic
+  - Mastering chain (RMS, HF tilt, limiter)
+- **[PLANNER_SYNC.md](PLANNER_SYNC.md)** – Planner synchronization protocol
+  - How to modify planner logic safely
+  - Testing strategy for Rust/Python parity
+  - Common pitfalls and solutions
+
+### Related ADRs
+- **[ADR-003](adrs/ADR-003-audio-conditioning.md)** – Audio conditioning design decision
+- **[ADR-004](adrs/ADR-004-planner-mirroring.md)** – Dual planner rationale

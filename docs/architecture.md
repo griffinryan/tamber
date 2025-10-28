@@ -171,3 +171,39 @@ Testing shortcuts:
 - **Streaming transport**: HTTP polling is fine for Phase 0. WebSocket subscriptions are the likely upgrade path once we need richer progress data or streaming audio.
 
 Keep this document fresh whenever planner versions change, new metadata appears, or transports/backends evolve.
+
+---
+
+## 11. Related Documentation
+
+For deeper technical understanding, see:
+
+### Core Technical Guides
+- **[MUSICGEN.md](MUSICGEN.md)** – Comprehensive MusicGen integration guide
+  - Model architecture, prompt engineering, audio conditioning mechanics
+  - Sampling parameters, 29.5s chunking strategy, placeholder fallback
+- **[CONDITIONING.md](CONDITIONING.md)** – Audio conditioning deep dive
+  - Why conditioning matters, motif seed + previous tail strategy
+  - Impact on crossfade decisions, metadata tracking
+- **[AUDIO_PIPELINE.md](AUDIO_PIPELINE.md)** – Mixing & mastering reference
+  - Section preparation, crossfade decision matrix, mastering chain
+  - RMS normalization, HF tilt, soft limiter, resampling & dithering
+- **[PLANNER_SYNC.md](PLANNER_SYNC.md)** – Rust/Python planner synchronization
+  - Why dual planners exist, synchronization invariants
+  - Testing strategy, change protocol, common pitfalls
+- **[RIFFUSION.md](RIFFUSION.md)** – Riffusion backend guide
+  - Spectrogram diffusion overview, Griffin-Lim phase reconstruction
+  - Comparison with MusicGen, troubleshooting
+- **[TUI_GUIDE.md](TUI_GUIDE.md)** – Rust TUI implementation guide
+  - Architecture, event loop, rendering, HTTP client, audio playback
+
+### Architecture Decisions
+- **[ADR-001](adrs/ADR-001-hybrid-architecture.md)** – Hybrid Rust CLI + Python Worker
+- **[ADR-002](adrs/ADR-002-transport-strategy.md)** – HTTP Polling Transport
+- **[ADR-003](adrs/ADR-003-audio-conditioning.md)** – Audio Conditioning Strategy
+- **[ADR-004](adrs/ADR-004-planner-mirroring.md)** – Dual Planner Implementation
+
+### Support Documentation
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** – Common issues & solutions
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** – Developer contribution guide
+- **[setup.md](setup.md)** – Detailed setup instructions
