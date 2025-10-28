@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, List, Optional
 
 from ..app.models import (
@@ -47,31 +47,62 @@ REMOVE_PRIORITY = [
 
 INSTRUMENT_KEYWORDS = [
     ("piano", "warm piano"),
+    ("upright piano", "intimate upright piano"),
     ("keys", "soft keys"),
-    ("synth", "lush synth pads"),
     ("synthwave", "retro synth layers"),
+    ("synth", "lush synth pads"),
+    ("analog", "analog synths"),
     ("modular", "modular synth textures"),
+    ("arp", "arpeggiated synths"),
     ("guitar", "ambient guitar"),
     ("guitars", "layered guitars"),
-    ("bass", "deep bass"),
-    ("drum", "tight drums"),
-    ("percussion", "organic percussion"),
-    ("string", "layered strings"),
+    ("acoustic guitar", "acoustic guitar"),
+    ("electric guitar", "electric guitars"),
+    ("banjo", "twangy banjo"),
+    ("mandolin", "sparkling mandolin"),
     ("violin", "expressive strings"),
+    ("viola", "velvety viola"),
     ("cello", "warm cello"),
+    ("strings", "layered strings"),
+    ("string", "layered strings"),
+    ("orchestra", "orchestral strings"),
+    ("bass", "deep bass"),
+    ("upright bass", "upright bass"),
+    ("808", "808 bass"),
+    ("drum", "tight drums"),
+    ("drums", "tight drums"),
+    ("drum machine", "drum machine groove"),
+    ("percussion", "organic percussion"),
+    ("tabla", "tabla rhythms"),
+    ("conga", "conga grooves"),
+    ("bongo", "hand drum patterns"),
     ("choir", "airy choir voices"),
+    ("choral", "lush choir"),
     ("vocal", "ethereal vocals"),
+    ("vocals", "expressive vocals"),
     ("singer", "soulful vocalist"),
     ("vocalist", "soaring vocals"),
+    ("rap", "rhythmic rap vocals"),
     ("brass", "smooth brass"),
     ("horn", "bold brass horns"),
     ("sax", "saxophone lead"),
+    ("saxophone", "saxophone lead"),
     ("trumpet", "radiant trumpet lead"),
     ("trombone", "velvet trombone swells"),
     ("flute", "breathy flute"),
     ("clarinet", "warm clarinet"),
     ("oboe", "lyrical oboe"),
+    ("bassoon", "warm bassoon"),
     ("harp", "glittering harp arpeggios"),
+    ("organ", "vintage organ"),
+    ("rhodes", "rhodes electric piano"),
+    ("vibraphone", "glassy vibraphone"),
+    ("marimba", "woody marimba"),
+    ("kalimba", "sparkling kalimba"),
+    ("sitar", "resonant sitar"),
+    ("accordion", "lively accordion"),
+    ("harmonica", "bluesy harmonica"),
+    ("synthpop", "glassy synth pop layers"),
     ("ambient", "atmospheric textures"),
     ("lofi", "dusty keys"),
 ]
@@ -79,6 +110,7 @@ INSTRUMENT_KEYWORDS = [
 RHYTHM_KEYWORDS = [
     ("waltz", "gentle 3/4 sway"),
     ("swing", "swinging groove"),
+    ("jazz", "swinging groove"),
     ("hip hop", "laid-back hip hop beat"),
     ("boom bap", "boom-bap pulse"),
     ("house", "four-on-the-floor pulse"),
@@ -87,8 +119,18 @@ RHYTHM_KEYWORDS = [
     ("trap", "stuttered trap beat"),
     ("downtempo", "downtempo pulse"),
     ("breakbeat", "syncopated breakbeat"),
+    ("drum and bass", "rapid drum and bass break"),
+    ("dnb", "rapid drum and bass break"),
     ("bossa", "bossa nova sway"),
     ("reggae", "off-beat reggae groove"),
+    ("rock", "driving rock beat"),
+    ("metal", "pummelling double-kick groove"),
+    ("edm", "steady four-on-the-floor pulse"),
+    ("dance", "club-ready four-on-the-floor beat"),
+    ("electronic", "mechanical electronic pulse"),
+    ("folk", "organic strummed pulse"),
+    ("latin", "syncopated latin groove"),
+    ("ambient", "floating pulse"),
 ]
 
 TEXTURE_KEYWORDS = [
@@ -102,9 +144,21 @@ TEXTURE_KEYWORDS = [
     ("mystic", "mystical aura"),
     ("lofi", "dusty vignette"),
     ("rain", "rain-soaked ambience"),
+    ("storm", "electrified storm ambience"),
+    ("forest", "woodland ambience"),
+    ("ocean", "rolling ocean spray"),
+    ("space", "cosmic expanse"),
+    ("desert", "sun-baked desert shimmer"),
+    ("vintage", "vintage tape patina"),
+    ("psychedelic", "psychedelic kaleidoscope"),
 ]
 
-DEFAULT_INSTRUMENTATION = ["blended instrumentation"]
+DEFAULT_INSTRUMENTATION = [
+    "blended instrumentation",
+    "layered synth textures",
+    "hybrid acoustic-electric palette",
+    "ensemble interplay",
+]
 DEFAULT_TEXTURE = "immersive atmosphere"
 
 ENERGY_DYNAMIC_MAP = {
@@ -128,6 +182,12 @@ CATEGORY_KEYWORDS = {
         "trance",
         "breakbeat",
         "trap",
+        "tabla",
+        "conga",
+        "bongo",
+        "drum machine",
+        "brush",
+        "double-kick",
     ),
     "bass": ("bass", "sub", "808", "low end", "low-end"),
     "harmony": (
@@ -141,6 +201,10 @@ CATEGORY_KEYWORDS = {
         "rhodes",
         "guitar",
         "harp",
+        "mandolin",
+        "banjo",
+        "ukulele",
+        "accordion",
     ),
     "lead": (
         "lead",
@@ -151,6 +215,8 @@ CATEGORY_KEYWORDS = {
         "horn",
         "trumpet",
         "violin",
+        "viola",
+        "fiddle",
         "flute",
         "clarinet",
         "oboe",
@@ -165,18 +231,262 @@ CATEGORY_KEYWORDS = {
         "noise",
         "wash",
         "drone",
+        "tape",
+        "field",
     ),
     "vocals": ("vocal", "voice", "singer", "choir", "chant", "lyric"),
 }
 
 DEFAULT_LAYER_FALLBACKS = {
-    "rhythm": ["tight drums", "organic percussion"],
-    "bass": ["pulsing bass", "sub bass swell"],
-    "harmony": ["lush keys", "stacked synth pads"],
-    "lead": ["expressive guitar lead", "soulful brass line"],
-    "textures": ["airy ambient swells", "granular noise beds"],
-    "vocals": ["wordless vocal pads"],
+    "rhythm": [
+        "tight drums",
+        "organic percussion",
+        "punchy live kit",
+        "syncopated hand percussion",
+        "four-on-the-floor kick",
+        "shuffling brush kit",
+        "driving tom groove",
+    ],
+    "bass": [
+        "pulsing bass",
+        "sub bass swell",
+        "gritty electric bass",
+        "round synth bass",
+        "warm upright bass",
+    ],
+    "harmony": [
+        "lush keys",
+        "stacked synth pads",
+        "shimmering guitar chords",
+        "wide string beds",
+        "layered plucked arps",
+    ],
+    "lead": [
+        "expressive guitar lead",
+        "soulful brass line",
+        "soaring synth lead",
+        "lyrical woodwind melody",
+        "sparkling mallet motif",
+    ],
+    "textures": [
+        "airy ambient swells",
+        "granular noise beds",
+        "glassy atmosphere",
+        "crowd shimmer",
+        "analog tape haze",
+        "rolling field recordings",
+    ],
+    "vocals": [
+        "wordless vocal pads",
+        "ethereal choirs",
+        "layered vocal oohs",
+    ],
 }
+
+
+@dataclass(frozen=True)
+class GenreProfile:
+    name: str
+    keywords: tuple[str, ...]
+    instrumentation: tuple[str, ...]
+    rhythm: Optional[str] = None
+    texture: Optional[str] = None
+    layer_overrides: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+GENRE_PROFILES: tuple[GenreProfile, ...] = (
+    GenreProfile(
+        name="lofi",
+        keywords=("lofi", "lo-fi", "chillhop", "chill hop", "study beats"),
+        instrumentation=(
+            "dusty electric piano",
+            "tape-saturated drum loop",
+            "warm bass guitar",
+            "soft nylon guitar",
+        ),
+        rhythm="laid-back hip hop beat",
+        texture="hazy lo-fi ambience",
+        layer_overrides={
+            "rhythm": ("dusty drum loop", "lazy snare with brushes"),
+            "bass": ("mellow sub bass", "upright bass with tape wobble"),
+            "harmony": ("noisy electric piano chords", "soft guitar voicings"),
+            "lead": ("wistful synth lead", "gentle vibraphone motifs"),
+            "textures": ("vinyl crackle", "nocturnal rain ambience"),
+            "vocals": ("hummed vocal chops",),
+        },
+    ),
+    GenreProfile(
+        name="jazz",
+        keywords=("jazz", "bebop", "swing", "hard bop", "cool jazz"),
+        instrumentation=(
+            "upright bass",
+            "brush drum kit",
+            "extended jazz piano",
+            "saxophone lead",
+        ),
+        rhythm="swinging groove",
+        texture="smoky lounge atmosphere",
+        layer_overrides={
+            "rhythm": ("brush drum kit", "ride cymbal patterns"),
+            "bass": ("walking upright bass",),
+            "harmony": ("extended jazz piano voicings", "comping guitar chords"),
+            "lead": ("saxophone lead", "muted trumpet phrases"),
+            "textures": ("club room ambience", "late-night crowd murmur"),
+            "vocals": ("scat vocal ad-libs",),
+        },
+    ),
+    GenreProfile(
+        name="rock",
+        keywords=("rock", "alt rock", "indie rock", "garage rock", "post-punk"),
+        instrumentation=(
+            "distorted electric guitars",
+            "live drum kit",
+            "electric bass",
+            "anthemic vocals",
+        ),
+        rhythm="driving rock beat",
+        texture="amplified stage energy",
+        layer_overrides={
+            "rhythm": ("punchy live drums", "crashing cymbals"),
+            "bass": ("gritty electric bass",),
+            "harmony": ("crunchy rhythm guitars", "stadium power chords"),
+            "lead": ("soaring guitar lead", "anthemic vocal hooks"),
+            "textures": ("amp feedback swells", "crowd reverb wash"),
+            "vocals": ("anthemic rock vocals",),
+        },
+    ),
+    GenreProfile(
+        name="metal",
+        keywords=("metal", "thrash", "doom", "heavy metal", "prog metal"),
+        instrumentation=(
+            "double kick drums",
+            "down-tuned rhythm guitars",
+            "growling bass",
+            "aggressive vocals",
+        ),
+        rhythm="relentless double-kick drive",
+        texture="dense wall of distortion",
+        layer_overrides={
+            "rhythm": ("blast beat drums", "double-kick assaults"),
+            "bass": ("growling electric bass",),
+            "harmony": ("down-tuned rhythm guitars", "chugging power chords"),
+            "lead": ("shredded guitar leads", "screaming harmonised solos"),
+            "textures": ("amp roar", "crowd roar tails"),
+            "vocals": ("harsh metal vocals",),
+        },
+    ),
+    GenreProfile(
+        name="orchestral",
+        keywords=("orchestral", "symphonic", "film score", "cinematic", "soundtrack"),
+        instrumentation=(
+            "string ensemble",
+            "brass section",
+            "woodwind choir",
+            "concert percussion",
+        ),
+        rhythm="expansive cinematic pulse",
+        texture="lush orchestral hall",
+        layer_overrides={
+            "rhythm": ("gran cassa hits", "rolling orchestral percussion"),
+            "bass": ("double basses", "low brass swells"),
+            "harmony": ("legato string ensemble", "warm horn chords"),
+            "lead": ("solo violin", "trumpet fanfare"),
+            "textures": ("concert hall reverberation", "choir pads"),
+            "vocals": ("wordless choir",),
+        },
+    ),
+    GenreProfile(
+        name="folk",
+        keywords=("folk", "acoustic", "bluegrass", "roots", "americana", "country"),
+        instrumentation=(
+            "acoustic guitar",
+            "mandolin",
+            "upright bass",
+            "fiddle melodies",
+        ),
+        rhythm="organic strummed pulse",
+        texture="warm rustic atmosphere",
+        layer_overrides={
+            "rhythm": ("brushy folk kit", "hand clap patterns"),
+            "bass": ("plucked upright bass",),
+            "harmony": ("fingerpicked acoustic guitar", "sparkling mandolin arpeggios"),
+            "lead": ("fiddle leads", "slide guitar phrases"),
+            "textures": ("barn room reverb", "nature ambience"),
+            "vocals": ("stacked folk harmonies",),
+        },
+    ),
+    GenreProfile(
+        name="ambient",
+        keywords=("ambient", "soundscape", "drone", "meditation", "ethereal", "atmospheric"),
+        instrumentation=(
+            "evolving synth pads",
+            "granular textures",
+            "soft mallet swells",
+            "choral atmospheres",
+        ),
+        rhythm="floating pulse",
+        texture="expansive ambient haze",
+        layer_overrides={
+            "rhythm": ("subtle percussive pulses", "soft percussion swells"),
+            "bass": ("deep sine bass swells",),
+            "harmony": ("evolving synth pads", "glacial piano chords"),
+            "lead": ("breathy vocal motifs", "glass harmonica lines"),
+            "textures": ("wind soundscape", "distant shimmer"),
+            "vocals": ("celestial vocal layers",),
+        },
+    ),
+    GenreProfile(
+        name="electronic",
+        keywords=("electronic", "edm", "house", "techno", "trance", "club", "electro", "synthwave", "synth-pop"),
+        instrumentation=(
+            "punchy electronic kick",
+            "rolling bass synth",
+            "arpeggiated synths",
+            "bright lead plucks",
+        ),
+        rhythm="four-on-the-floor pulse",
+        texture="neon club atmosphere",
+        layer_overrides={
+            "rhythm": ("four-on-the-floor kick", "syncopated hi-hats"),
+            "bass": ("rolling bass synth", "acid bassline"),
+            "harmony": ("wide pad chords", "lush supersaw stacks"),
+            "lead": ("glittering synth lead", "vocoder hooks"),
+            "textures": ("club crowd ambience", "side-chained pads"),
+            "vocals": ("processed vocal chops",),
+        },
+    ),
+    GenreProfile(
+        name="hiphop",
+        keywords=("hip hop", "trap", "boom bap", "rap", "grime"),
+        instrumentation=(
+            "knocking drum machine",
+            "808 bass",
+            "sampled keys",
+            "vocal chops",
+        ),
+        rhythm="head-nod hip hop pulse",
+        texture="urban night energy",
+        layer_overrides={
+            "rhythm": ("punchy drum machine groove", "crisp claps"),
+            "bass": ("808 bass", "subby bass drops"),
+            "harmony": ("minor key piano loops", "sampled soul chops"),
+            "lead": ("pitched vocal chops", "synth brass stabs"),
+            "textures": ("street ambience", "vinyl noise"),
+            "vocals": ("rap ad-libs",),
+        },
+    ),
+)
+
+
+def _match_genre_profile(prompt_lower: str) -> Optional[GenreProfile]:
+    best: Optional[GenreProfile] = None
+    best_len = -1
+    for profile in GENRE_PROFILES:
+        for keyword in profile.keywords:
+            if keyword in prompt_lower and len(keyword) > best_len:
+                best = profile
+                best_len = len(keyword)
+    return best
 
 SECTION_LAYER_PROFILE = {
     SectionRole.INTRO: {
@@ -305,13 +615,26 @@ class CompositionPlanner:
 
         bars = _allocate_bars(templates, seconds_total, seconds_per_bar)
 
-        descriptor = _build_theme_descriptor(request.prompt, templates)
-        palette = _categorise_instrumentation(descriptor, request.prompt)
-        orchestrations = _plan_orchestrations(templates, palette)
-
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
+        prompt_lower = request.prompt.lower()
+        profile = _match_genre_profile(prompt_lower)
+
+        descriptor = _build_theme_descriptor(
+            request.prompt,
+            templates,
+            profile,
+            base_seed,
+        )
+        palette = _categorise_instrumentation(
+            descriptor,
+            request.prompt,
+            profile,
+            base_seed,
+        )
+        palette_offsets = _palette_offsets(palette, base_seed)
+        orchestrations = _plan_orchestrations(templates, palette, palette_offsets)
         musical_key = _select_key(base_seed)
 
         sections: List[CompositionSection] = []
@@ -365,7 +688,7 @@ class CompositionPlanner:
             sections=sections,
         )
 
-def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
+    def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, SHORT_MIN_TOTAL_SECONDS))
         templates = list(_select_short_templates(seconds_total))
         beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
@@ -375,13 +698,26 @@ def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         effective_tempo = max(tempo_bpm, MIN_TEMPO)
         seconds_per_bar = (60.0 / float(effective_tempo)) * float(beats_per_bar)
 
-        descriptor = _build_theme_descriptor(request.prompt, templates)
-        palette = _categorise_instrumentation(descriptor, request.prompt)
-        orchestrations = _plan_orchestrations(templates, palette)
-
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
+        prompt_lower = request.prompt.lower()
+        profile = _match_genre_profile(prompt_lower)
+
+        descriptor = _build_theme_descriptor(
+            request.prompt,
+            templates,
+            profile,
+            base_seed,
+        )
+        palette = _categorise_instrumentation(
+            descriptor,
+            request.prompt,
+            profile,
+            base_seed,
+        )
+        palette_offsets = _palette_offsets(palette, base_seed)
+        orchestrations = _plan_orchestrations(templates, palette, palette_offsets)
         musical_key = _select_key(base_seed)
 
         sections: List[CompositionSection] = []
@@ -407,7 +743,11 @@ def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
                 SHORT_MIN_SECTION_SECONDS,
                 seconds_total * ratio,
             )
-            bar_count = int(round(section_seconds / seconds_per_bar)) if seconds_per_bar > 0 else template.base_bars
+            bar_count = (
+                int(round(section_seconds / seconds_per_bar))
+                if seconds_per_bar > 0
+                else template.base_bars
+            )
             bar_count = max(template.min_bars, min(template.max_bars, max(1, bar_count)))
             section_seconds = max(SHORT_MIN_SECTION_SECONDS, bar_count * seconds_per_bar)
 
@@ -588,15 +928,20 @@ def _expand_priority(
 def _build_theme_descriptor(
     prompt: str,
     templates: List[SectionTemplate],
+    profile: Optional[GenreProfile],
+    base_seed: int,
 ) -> ThemeDescriptor:
     prompt_lower = prompt.lower()
     instrumentation = _extract_keywords(prompt_lower, INSTRUMENT_KEYWORDS)
+    if profile is not None:
+        instrumentation.extend(item for item in profile.instrumentation if item not in instrumentation)
     if not instrumentation:
-        instrumentation = list(DEFAULT_INSTRUMENTATION)
+        instrumentation = _fallback_instrumentation(base_seed, count=3)
+    instrumentation = _dedupe(instrumentation)
 
-    rhythm = _derive_rhythm(prompt_lower, templates)
+    rhythm = _derive_rhythm(prompt_lower, templates, profile)
     motif = _derive_motif(prompt)
-    texture = _derive_texture(prompt_lower, instrumentation)
+    texture = _derive_texture(prompt_lower, instrumentation, profile)
     dynamic_curve = [
         _dynamic_label(template.role, template.energy, index, len(templates))
         for index, template in enumerate(templates)
@@ -619,10 +964,16 @@ def _extract_keywords(prompt_lower: str, mapping: list[tuple[str, str]]) -> list
     return results
 
 
-def _derive_rhythm(prompt_lower: str, templates: List[SectionTemplate]) -> str:
+def _derive_rhythm(
+    prompt_lower: str,
+    templates: List[SectionTemplate],
+    profile: Optional[GenreProfile],
+) -> str:
     for keyword, label in RHYTHM_KEYWORDS:
         if keyword in prompt_lower:
             return label
+    if profile is not None and profile.rhythm:
+        return profile.rhythm
     energies = {template.energy for template in templates}
     if SectionEnergy.HIGH in energies:
         return "driving pulse"
@@ -644,10 +995,16 @@ def _derive_motif(prompt: str) -> str:
     return "primary motif"
 
 
-def _derive_texture(prompt_lower: str, instrumentation: list[str]) -> str:
+def _derive_texture(
+    prompt_lower: str,
+    instrumentation: list[str],
+    profile: Optional[GenreProfile],
+) -> str:
     for keyword, label in TEXTURE_KEYWORDS:
         if keyword in prompt_lower:
             return label
+    if profile is not None and profile.texture:
+        return profile.texture
     if instrumentation:
         return f"focused blend of {', '.join(instrumentation[:2])}"
     return DEFAULT_TEXTURE
@@ -714,6 +1071,8 @@ def _render_prompt(
 def _categorise_instrumentation(
     descriptor: ThemeDescriptor,
     prompt: str,
+    profile: Optional[GenreProfile],
+    base_seed: int,
 ) -> dict[str, list[str]]:
     palette = {category: [] for category in CATEGORY_KEYWORDS}
     for label in descriptor.instrumentation:
@@ -730,6 +1089,12 @@ def _categorise_instrumentation(
     if any(keyword in prompt_lower for keyword in CATEGORY_KEYWORDS["vocals"]):
         palette.setdefault("vocals", []).append("expressive vocals")
 
+    if profile is not None:
+        for category, values in profile.layer_overrides.items():
+            if not values:
+                continue
+            palette.setdefault(category, []).extend(values)
+
     for category, defaults in DEFAULT_LAYER_FALLBACKS.items():
         existing = palette.get(category, [])
         if category == "vocals" and not existing:
@@ -742,19 +1107,31 @@ def _categorise_instrumentation(
 def _plan_orchestrations(
     templates: List[SectionTemplate],
     palette: dict[str, list[str]],
+    offsets: dict[str, int],
 ) -> List[SectionOrchestration]:
     orchestrations: List[SectionOrchestration] = []
     for index, template in enumerate(templates):
         counts = SECTION_LAYER_PROFILE.get(template.role, SECTION_LAYER_PROFILE.get("default", {}))
-        orchestrations.append(_build_orchestration(counts, palette, offset=index))
+        orchestrations.append(
+            _build_orchestration(counts, palette, offsets=offsets, section_index=index)
+        )
     return orchestrations
+
+
+def _palette_offsets(palette: dict[str, list[str]], seed: int) -> dict[str, int]:
+    categories = set(DEFAULT_LAYER_FALLBACKS.keys()) | set(palette.keys())
+    offsets: dict[str, int] = {}
+    for category in categories:
+        offsets[category] = _stable_offset(f"palette:{category}", seed)
+    return offsets
 
 
 def _build_orchestration(
     counts: dict[str, int],
     palette: dict[str, list[str]],
     *,
-    offset: int,
+    offsets: dict[str, int],
+    section_index: int,
 ) -> SectionOrchestration:
     orchestration = SectionOrchestration()
     for category in ("rhythm", "bass", "harmony", "lead", "textures", "vocals"):
@@ -768,9 +1145,11 @@ def _build_orchestration(
                     items = []
                 else:
                     source = list(DEFAULT_LAYER_FALLBACKS.get(category, []))
-                    items = _cycled_slice(source, count, offset)
+            if source:
+                base_offset = offsets.get(category, 0)
+                items = _cycled_slice(source, count, base_offset + section_index)
             else:
-                items = _cycled_slice(source, count, offset)
+                items = []
         setattr(orchestration, category, items)
     return orchestration
 
@@ -783,6 +1162,22 @@ def _cycled_slice(source: list[str], count: int, offset: int) -> list[str]:
     for index in range(count):
         result.append(source[(offset + index) % length])
     return result
+
+
+def _fallback_instrumentation(seed: int, *, count: int) -> list[str]:
+    pool = list(DEFAULT_INSTRUMENTATION) or ["blended instrumentation"]
+    count = max(1, min(count, len(pool)))
+    offset = _stable_offset("instrumentation", seed)
+    return _cycled_slice(pool, count, offset)
+
+
+def _stable_offset(label: str, seed: int) -> int:
+    token = f"{label}:{seed}".encode("utf-8")
+    hash_value = 0x811C9DC5
+    for byte in token:
+        hash_value ^= byte
+        hash_value = (hash_value * 0x01000193) % (1 << 32)
+    return hash_value
 
 
 def _describe_orchestration(orchestration: SectionOrchestration) -> str:
