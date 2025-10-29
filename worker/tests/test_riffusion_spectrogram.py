@@ -10,6 +10,14 @@ from timbre_worker.services import riffusion_spectrogram as rs
 def test_decoder_handles_driver_based_inverse_mel(monkeypatch):
     calls: dict[str, object] = {}
 
+    def _fb_matrix(
+        *,
+        n_freqs: int,
+        n_mels: int,
+        **_: object,
+    ) -> torch.Tensor:
+        return torch.eye(n_freqs, n_mels)
+
     class _StubInverse:
         def __init__(
             self,
@@ -49,6 +57,12 @@ def test_decoder_handles_driver_based_inverse_mel(monkeypatch):
         rs.torchaudio,
         "transforms",
         types.SimpleNamespace(InverseMelScale=_StubInverse, GriffinLim=_StubGriffin),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        rs.torchaudio,
+        "functional",
+        types.SimpleNamespace(create_fb_matrix=_fb_matrix),
         raising=True,
     )
 

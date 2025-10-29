@@ -73,6 +73,10 @@ class SpectrogramImageDecoder:
         self._dtype = torch.float32
 
         self._inverse_mel = self._build_inverse_mel(params)
+        self._mel_basis = self._build_mel_basis(params)
+        self._analysis_window = torch.hann_window(
+            params.win_length, dtype=self._dtype, device=self._device
+        )
         self._griffin_lim = torchaudio.transforms.GriffinLim(
             n_fft=params.n_fft,
             n_iter=params.num_griffin_lim_iters,
@@ -124,25 +128,12 @@ class SpectrogramImageDecoder:
             n_fft=self._params.n_fft,
             hop_length=self._params.hop_length,
             win_length=self._params.win_length,
-            window=torch.hann_window(self._params.win_length).to(self._device),
+            window=self._analysis_window,
             center=True,
             return_complex=True,
         )
         magnitude = torch.abs(stft)
-        mel = torch.nn.functional.linear(
-            magnitude,
-            torch.tensor(
-                torchaudio.functional.create_fb_matrix(
-                    self._params.n_fft // 2 + 1,
-                    self._params.sample_rate,
-                    self._params.num_frequencies,
-                    self._params.min_frequency,
-                    self._params.max_frequency,
-                ),
-                device=self._device,
-                dtype=self._dtype,
-            ),
-        )
+        mel = torch.einsum("mf,cft->cmt", self._mel_basis, magnitude)
         mel = mel.cpu().numpy()
 
         mel = np.power(np.maximum(mel, 1e-6), self._params.power_for_image)
@@ -199,6 +190,22 @@ class SpectrogramImageDecoder:
         module = inverse_cls(**kwargs).to(self._device)
         module.decoder_mode = mode
         return module
+
+    def _build_mel_basis(self, params: SpectrogramParams) -> torch.Tensor:
+        """Construct the mel filter bank used during encoding."""
+
+        kwargs = {
+            "n_freqs": params.n_fft // 2 + 1,
+            "f_min": float(params.min_frequency),
+            "f_max": float(params.max_frequency) if params.max_frequency else None,
+            "n_mels": params.num_frequencies,
+            "sample_rate": params.sample_rate,
+            "norm": params.mel_scale_norm,
+            "mel_scale": params.mel_scale_type,
+        }
+        matrix = torchaudio.functional.create_fb_matrix(**kwargs)
+        basis = torch.as_tensor(matrix.T, dtype=self._dtype, device=self._device)
+        return basis
 
     def _spectrogram_from_image(self, image: ImageLike) -> np.ndarray:
         if isinstance(image, Image.Image):

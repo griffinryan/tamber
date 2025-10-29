@@ -798,29 +798,43 @@ class RiffusionService:
         theme: ThemeDescriptor | None,
         previous: SectionRender | None,
     ) -> str:
-        segments: list[str] = [base_prompt.strip()]
+        fragments: list[str] = []
+        base = base_prompt.strip()
+        if base:
+            fragments.append(base)
         if theme is not None:
-            instrumentation = (
-                ", ".join(theme.instrumentation)
-                if theme.instrumentation
-                else "blended instrumentation"
-            )
-            descriptor_parts = [
-                f"Maintain the {theme.motif} motif",
-                f"with {instrumentation}",
-                f"following a {theme.rhythm} feel",
-            ]
+            instrumentation = ", ".join(theme.instrumentation[:4]) if theme.instrumentation else ""
+            theme_parts: list[str] = []
+            if theme.motif:
+                theme_parts.append(f"{theme.motif} motif")
+            if instrumentation:
+                theme_parts.append(instrumentation)
+            if theme.rhythm:
+                theme_parts.append(f"{theme.rhythm} groove")
             if theme.texture:
-                descriptor_parts.append(f"and preserve the {theme.texture}")
-            segments.append(" ".join(descriptor_parts) + ".")
+                theme_parts.append(f"{theme.texture} texture")
+            if theme_parts:
+                fragments.append("; ".join(theme_parts))
         if previous is not None:
             prev_label = previous.extras.get("section_label") or previous.extras.get("section_id")
             descriptor = prev_label or "section"
-            segments.append(
-                "Flow smoothly from the previous "
-                f"{descriptor}, evolving its ideas without changing the instrumentation."
+            fragments.append(
+                f"Continue {descriptor} smoothly; keep instrumentation consistent."
             )
-        return " ".join(segment.strip() for segment in segments if segment.strip())
+        prompt = " ".join(fragment.strip() for fragment in fragments if fragment.strip())
+        return self._limit_prompt_words(prompt)
+
+    def _limit_prompt_words(self, prompt: str, *, max_words: int = 64) -> str:
+        words = prompt.split()
+        if len(words) <= max_words:
+            return prompt
+        truncated = " ".join(words[:max_words])
+        logger.debug(
+            "Truncated riffusion prompt from {} to {} words",
+            len(words),
+            max_words,
+        )
+        return truncated
 
     def _resolve_spectrogram_decoder(
         self,
@@ -876,7 +890,7 @@ class RiffusionService:
         try:
             return decoder.encode(tail, render.sample_rate)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Failed to encode continuation spectrogram: %s", exc)
+            logger.debug("Failed to encode continuation spectrogram: {}", exc)
             return None
 
     def _audio_from_images(
