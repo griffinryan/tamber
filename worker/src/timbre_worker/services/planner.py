@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Optional
 
 from ..app.models import (
@@ -45,121 +47,222 @@ REMOVE_PRIORITY = [
     SectionRole.CHORUS,
 ]
 
-INSTRUMENT_KEYWORDS = [
-    ("piano", "warm piano"),
-    ("upright piano", "intimate upright piano"),
-    ("keys", "soft keys"),
-    ("synthwave", "retro synth layers"),
-    ("synth", "lush synth pads"),
-    ("analog", "analog synths"),
-    ("modular", "modular synth textures"),
-    ("arp", "arpeggiated synths"),
-    ("guitar", "ambient guitar"),
-    ("guitars", "layered guitars"),
-    ("acoustic guitar", "acoustic guitar"),
-    ("electric guitar", "electric guitars"),
-    ("banjo", "twangy banjo"),
-    ("mandolin", "sparkling mandolin"),
-    ("violin", "expressive strings"),
-    ("viola", "velvety viola"),
-    ("cello", "warm cello"),
-    ("strings", "layered strings"),
-    ("string", "layered strings"),
-    ("orchestra", "orchestral strings"),
-    ("bass", "deep bass"),
-    ("upright bass", "upright bass"),
-    ("808", "808 bass"),
-    ("drum", "tight drums"),
-    ("drums", "tight drums"),
-    ("drum machine", "drum machine groove"),
-    ("percussion", "organic percussion"),
-    ("tabla", "tabla rhythms"),
-    ("conga", "conga grooves"),
-    ("bongo", "hand drum patterns"),
-    ("choir", "airy choir voices"),
-    ("choral", "lush choir"),
-    ("vocal", "ethereal vocals"),
-    ("vocals", "expressive vocals"),
-    ("singer", "soulful vocalist"),
-    ("vocalist", "soaring vocals"),
-    ("rap", "rhythmic rap vocals"),
-    ("brass", "smooth brass"),
-    ("horn", "bold brass horns"),
-    ("sax", "saxophone lead"),
-    ("saxophone", "saxophone lead"),
-    ("trumpet", "radiant trumpet lead"),
-    ("trombone", "velvet trombone swells"),
-    ("flute", "breathy flute"),
-    ("clarinet", "warm clarinet"),
-    ("oboe", "lyrical oboe"),
-    ("bassoon", "warm bassoon"),
-    ("harp", "glittering harp arpeggios"),
-    ("organ", "vintage organ"),
-    ("rhodes", "rhodes electric piano"),
-    ("vibraphone", "glassy vibraphone"),
-    ("marimba", "woody marimba"),
-    ("kalimba", "sparkling kalimba"),
-    ("sitar", "resonant sitar"),
-    ("accordion", "lively accordion"),
-    ("harmonica", "bluesy harmonica"),
-    ("synthpop", "glassy synth pop layers"),
-    ("ambient", "atmospheric textures"),
-    ("lofi", "dusty keys"),
-]
+_LEXICON_PATH = Path(__file__).resolve().parents[4] / "planner" / "lexicon.json"
 
-RHYTHM_KEYWORDS = [
-    ("waltz", "gentle 3/4 sway"),
-    ("swing", "swinging groove"),
-    ("jazz", "swinging groove"),
-    ("hip hop", "laid-back hip hop beat"),
-    ("boom bap", "boom-bap pulse"),
-    ("house", "four-on-the-floor pulse"),
-    ("techno", "driving techno rhythm"),
-    ("trance", "rolling trance rhythm"),
-    ("trap", "stuttered trap beat"),
-    ("downtempo", "downtempo pulse"),
-    ("breakbeat", "syncopated breakbeat"),
-    ("drum and bass", "rapid drum and bass break"),
-    ("dnb", "rapid drum and bass break"),
-    ("bossa", "bossa nova sway"),
-    ("reggae", "off-beat reggae groove"),
-    ("rock", "driving rock beat"),
-    ("metal", "pummelling double-kick groove"),
-    ("edm", "steady four-on-the-floor pulse"),
-    ("dance", "club-ready four-on-the-floor beat"),
-    ("electronic", "mechanical electronic pulse"),
-    ("folk", "organic strummed pulse"),
-    ("latin", "syncopated latin groove"),
-    ("ambient", "floating pulse"),
-]
+_ROLE_LOOKUP = {
+    "intro": SectionRole.INTRO,
+    "motif": SectionRole.MOTIF,
+    "chorus": SectionRole.CHORUS,
+    "development": SectionRole.DEVELOPMENT,
+    "bridge": SectionRole.BRIDGE,
+    "resolution": SectionRole.RESOLUTION,
+    "outro": SectionRole.OUTRO,
+}
 
-TEXTURE_KEYWORDS = [
-    ("dream", "dreamy haze"),
-    ("noir", "late-night noir mood"),
-    ("dark", "shadowy atmosphere"),
-    ("bright", "glowing shimmer"),
-    ("glitch", "glitchy texture"),
-    ("cinematic", "cinematic expanse"),
-    ("epic", "soaring atmosphere"),
-    ("mystic", "mystical aura"),
-    ("lofi", "dusty vignette"),
-    ("rain", "rain-soaked ambience"),
-    ("storm", "electrified storm ambience"),
-    ("forest", "woodland ambience"),
-    ("ocean", "rolling ocean spray"),
-    ("space", "cosmic expanse"),
-    ("desert", "sun-baked desert shimmer"),
-    ("vintage", "vintage tape patina"),
-    ("psychedelic", "psychedelic kaleidoscope"),
-]
+_ENERGY_LOOKUP = {
+    "low": SectionEnergy.LOW,
+    "medium": SectionEnergy.MEDIUM,
+    "high": SectionEnergy.HIGH,
+}
 
-DEFAULT_INSTRUMENTATION = [
-    "blended instrumentation",
-    "layered synth textures",
-    "hybrid acoustic-electric palette",
-    "ensemble interplay",
-]
-DEFAULT_TEXTURE = "immersive atmosphere"
+
+@dataclass(frozen=True)
+class KeywordMapping:
+    term: str
+    descriptor: str
+    folded: str
+
+
+@dataclass(frozen=True)
+class Defaults:
+    instrumentation: list[str]
+    texture: str
+
+
+@dataclass(frozen=True)
+class GenreLayers:
+    rhythm: list[str]
+    bass: list[str]
+    harmony: list[str]
+    lead: list[str]
+    textures: list[str]
+    vocals: list[str]
+
+
+@dataclass(frozen=True)
+class GenreProfileData:
+    keywords: list[str]
+    folded_keywords: list[str]
+    instrumentation: list[str]
+    rhythm: str | None
+    texture: str | None
+    layers: GenreLayers
+
+
+@dataclass(frozen=True)
+class SectionTemplateSpec:
+    role: SectionRole
+    label: str
+    energy: SectionEnergy
+    base_bars: int
+    min_bars: int
+    max_bars: int
+    prompt_template: str
+    transition: str | None = None
+
+    def to_template(self) -> "SectionTemplate":
+        return SectionTemplate(
+            role=self.role,
+            label=self.label,
+            energy=self.energy,
+            base_bars=self.base_bars,
+            min_bars=self.min_bars,
+            max_bars=self.max_bars,
+            prompt_template=self.prompt_template,
+            transition=self.transition,
+        )
+
+
+@dataclass(frozen=True)
+class TemplateVariant:
+    min_duration: float
+    sections: list[SectionTemplateSpec]
+
+
+@dataclass(frozen=True)
+class Lexicon:
+    version: int
+    instrument_keywords: list[KeywordMapping]
+    rhythm_keywords: list[KeywordMapping]
+    texture_keywords: list[KeywordMapping]
+    defaults: Defaults
+    genre_profiles: list[GenreProfileData]
+    long_templates: list[TemplateVariant]
+    short_templates: list[TemplateVariant]
+
+    def select_long(self, duration_seconds: float) -> list["SectionTemplate"]:
+        return [
+            spec.to_template()
+            for spec in self._select_variant(self.long_templates, duration_seconds)
+        ]
+
+    def select_short(self, duration_seconds: float) -> list["SectionTemplate"]:
+        return [
+            spec.to_template()
+            for spec in self._select_variant(self.short_templates, duration_seconds)
+        ]
+
+    @staticmethod
+    def _select_variant(
+        variants: list[TemplateVariant],
+        duration_seconds: float,
+    ) -> list[SectionTemplateSpec]:
+        for variant in variants:
+            if duration_seconds >= variant.min_duration:
+                return variant.sections
+        return variants[-1].sections
+
+
+def _casefold(value: str) -> str:
+    return value.casefold()
+
+
+def _build_keyword_mappings(entries: list[dict[str, str]]) -> list[KeywordMapping]:
+    return [
+        KeywordMapping(
+            term=entry["term"],
+            descriptor=entry["descriptor"],
+            folded=_casefold(entry["term"]),
+        )
+        for entry in entries
+    ]
+
+
+def _build_variant(entry: dict) -> TemplateVariant:
+    sections = []
+    for section in entry["sections"]:
+        role_key = section["role"].lower()
+        energy_key = section["energy"].lower()
+        try:
+            role = _ROLE_LOOKUP[role_key]
+        except KeyError as exc:  # pragma: no cover - configuration error
+            raise ValueError(f"unknown section role '{section['role']}' in lexicon") from exc
+        try:
+            energy = _ENERGY_LOOKUP[energy_key]
+        except KeyError as exc:  # pragma: no cover - configuration error
+            raise ValueError(f"unknown section energy '{section['energy']}' in lexicon") from exc
+        sections.append(
+            SectionTemplateSpec(
+                role=role,
+                label=section["label"],
+                energy=energy,
+                base_bars=int(section["base_bars"]),
+                min_bars=int(section["min_bars"]),
+                max_bars=int(section["max_bars"]),
+                prompt_template=section["prompt_template"],
+                transition=section.get("transition"),
+            )
+        )
+    return TemplateVariant(min_duration=float(entry["min_duration"]), sections=sections)
+
+
+def _load_lexicon() -> Lexicon:
+    try:
+        raw = json.loads(_LEXICON_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:  # pragma: no cover - configuration error
+        raise RuntimeError(f"planner lexicon file missing at {_LEXICON_PATH}") from exc
+
+    instrument_keywords = _build_keyword_mappings(raw["keywords"]["instrument"])
+    rhythm_keywords = _build_keyword_mappings(raw["keywords"]["rhythm"])
+    texture_keywords = _build_keyword_mappings(raw["keywords"]["texture"])
+
+    defaults = Defaults(
+        instrumentation=list(raw["defaults"]["instrumentation"]),
+        texture=raw["defaults"]["texture"],
+    )
+
+    genre_profiles: list[GenreProfileData] = []
+    for profile in raw["genre_profiles"]:
+        keywords = list(profile["keywords"])
+        layers_raw = profile["layers"]
+        layers = GenreLayers(
+            rhythm=list(layers_raw["rhythm"]),
+            bass=list(layers_raw["bass"]),
+            harmony=list(layers_raw["harmony"]),
+            lead=list(layers_raw["lead"]),
+            textures=list(layers_raw["textures"]),
+            vocals=list(layers_raw["vocals"]),
+        )
+        genre_profiles.append(
+            GenreProfileData(
+                keywords=keywords,
+                folded_keywords=[_casefold(value) for value in keywords],
+                instrumentation=list(profile["instrumentation"]),
+                rhythm=profile.get("rhythm"),
+                texture=profile.get("texture"),
+                layers=layers,
+            )
+        )
+
+    long_templates = [_build_variant(entry) for entry in raw["templates"]["long"]]
+    long_templates.sort(key=lambda variant: variant.min_duration, reverse=True)
+
+    short_templates = [_build_variant(entry) for entry in raw["templates"]["short"]]
+    short_templates.sort(key=lambda variant: variant.min_duration, reverse=True)
+
+    return Lexicon(
+        version=int(raw["version"]),
+        instrument_keywords=instrument_keywords,
+        rhythm_keywords=rhythm_keywords,
+        texture_keywords=texture_keywords,
+        defaults=defaults,
+        genre_profiles=genre_profiles,
+        long_templates=long_templates,
+        short_templates=short_templates,
+    )
+
+
+_LEXICON = _load_lexicon()
 
 ENERGY_DYNAMIC_MAP = {
     SectionEnergy.LOW: ("gentle entrance", "soft release"),
@@ -284,206 +387,12 @@ DEFAULT_LAYER_FALLBACKS = {
 }
 
 
-@dataclass(frozen=True)
-class GenreProfile:
-    name: str
-    keywords: tuple[str, ...]
-    instrumentation: tuple[str, ...]
-    rhythm: Optional[str] = None
-    texture: Optional[str] = None
-    layer_overrides: dict[str, tuple[str, ...]] = field(default_factory=dict)
-
-
-GENRE_PROFILES: tuple[GenreProfile, ...] = (
-    GenreProfile(
-        name="lofi",
-        keywords=("lofi", "lo-fi", "chillhop", "chill hop", "study beats"),
-        instrumentation=(
-            "dusty electric piano",
-            "tape-saturated drum loop",
-            "warm bass guitar",
-            "soft nylon guitar",
-        ),
-        rhythm="laid-back hip hop beat",
-        texture="hazy lo-fi ambience",
-        layer_overrides={
-            "rhythm": ("dusty drum loop", "lazy snare with brushes"),
-            "bass": ("mellow sub bass", "upright bass with tape wobble"),
-            "harmony": ("noisy electric piano chords", "soft guitar voicings"),
-            "lead": ("wistful synth lead", "gentle vibraphone motifs"),
-            "textures": ("vinyl crackle", "nocturnal rain ambience"),
-            "vocals": ("hummed vocal chops",),
-        },
-    ),
-    GenreProfile(
-        name="jazz",
-        keywords=("jazz", "bebop", "swing", "hard bop", "cool jazz"),
-        instrumentation=(
-            "upright bass",
-            "brush drum kit",
-            "extended jazz piano",
-            "saxophone lead",
-        ),
-        rhythm="swinging groove",
-        texture="smoky lounge atmosphere",
-        layer_overrides={
-            "rhythm": ("brush drum kit", "ride cymbal patterns"),
-            "bass": ("walking upright bass",),
-            "harmony": ("extended jazz piano voicings", "comping guitar chords"),
-            "lead": ("saxophone lead", "muted trumpet phrases"),
-            "textures": ("club room ambience", "late-night crowd murmur"),
-            "vocals": ("scat vocal ad-libs",),
-        },
-    ),
-    GenreProfile(
-        name="rock",
-        keywords=("rock", "alt rock", "indie rock", "garage rock", "post-punk"),
-        instrumentation=(
-            "distorted electric guitars",
-            "live drum kit",
-            "electric bass",
-            "anthemic vocals",
-        ),
-        rhythm="driving rock beat",
-        texture="amplified stage energy",
-        layer_overrides={
-            "rhythm": ("punchy live drums", "crashing cymbals"),
-            "bass": ("gritty electric bass",),
-            "harmony": ("crunchy rhythm guitars", "stadium power chords"),
-            "lead": ("soaring guitar lead", "anthemic vocal hooks"),
-            "textures": ("amp feedback swells", "crowd reverb wash"),
-            "vocals": ("anthemic rock vocals",),
-        },
-    ),
-    GenreProfile(
-        name="metal",
-        keywords=("metal", "thrash", "doom", "heavy metal", "prog metal"),
-        instrumentation=(
-            "double kick drums",
-            "down-tuned rhythm guitars",
-            "growling bass",
-            "aggressive vocals",
-        ),
-        rhythm="relentless double-kick drive",
-        texture="dense wall of distortion",
-        layer_overrides={
-            "rhythm": ("blast beat drums", "double-kick assaults"),
-            "bass": ("growling electric bass",),
-            "harmony": ("down-tuned rhythm guitars", "chugging power chords"),
-            "lead": ("shredded guitar leads", "screaming harmonised solos"),
-            "textures": ("amp roar", "crowd roar tails"),
-            "vocals": ("harsh metal vocals",),
-        },
-    ),
-    GenreProfile(
-        name="orchestral",
-        keywords=("orchestral", "symphonic", "film score", "cinematic", "soundtrack"),
-        instrumentation=(
-            "string ensemble",
-            "brass section",
-            "woodwind choir",
-            "concert percussion",
-        ),
-        rhythm="expansive cinematic pulse",
-        texture="lush orchestral hall",
-        layer_overrides={
-            "rhythm": ("gran cassa hits", "rolling orchestral percussion"),
-            "bass": ("double basses", "low brass swells"),
-            "harmony": ("legato string ensemble", "warm horn chords"),
-            "lead": ("solo violin", "trumpet fanfare"),
-            "textures": ("concert hall reverberation", "choir pads"),
-            "vocals": ("wordless choir",),
-        },
-    ),
-    GenreProfile(
-        name="folk",
-        keywords=("folk", "acoustic", "bluegrass", "roots", "americana", "country"),
-        instrumentation=(
-            "acoustic guitar",
-            "mandolin",
-            "upright bass",
-            "fiddle melodies",
-        ),
-        rhythm="organic strummed pulse",
-        texture="warm rustic atmosphere",
-        layer_overrides={
-            "rhythm": ("brushy folk kit", "hand clap patterns"),
-            "bass": ("plucked upright bass",),
-            "harmony": ("fingerpicked acoustic guitar", "sparkling mandolin arpeggios"),
-            "lead": ("fiddle leads", "slide guitar phrases"),
-            "textures": ("barn room reverb", "nature ambience"),
-            "vocals": ("stacked folk harmonies",),
-        },
-    ),
-    GenreProfile(
-        name="ambient",
-        keywords=("ambient", "soundscape", "drone", "meditation", "ethereal", "atmospheric"),
-        instrumentation=(
-            "evolving synth pads",
-            "granular textures",
-            "soft mallet swells",
-            "choral atmospheres",
-        ),
-        rhythm="floating pulse",
-        texture="expansive ambient haze",
-        layer_overrides={
-            "rhythm": ("subtle percussive pulses", "soft percussion swells"),
-            "bass": ("deep sine bass swells",),
-            "harmony": ("evolving synth pads", "glacial piano chords"),
-            "lead": ("breathy vocal motifs", "glass harmonica lines"),
-            "textures": ("wind soundscape", "distant shimmer"),
-            "vocals": ("celestial vocal layers",),
-        },
-    ),
-    GenreProfile(
-        name="electronic",
-        keywords=("electronic", "edm", "house", "techno", "trance", "club", "electro", "synthwave", "synth-pop"),
-        instrumentation=(
-            "punchy electronic kick",
-            "rolling bass synth",
-            "arpeggiated synths",
-            "bright lead plucks",
-        ),
-        rhythm="four-on-the-floor pulse",
-        texture="neon club atmosphere",
-        layer_overrides={
-            "rhythm": ("four-on-the-floor kick", "syncopated hi-hats"),
-            "bass": ("rolling bass synth", "acid bassline"),
-            "harmony": ("wide pad chords", "lush supersaw stacks"),
-            "lead": ("glittering synth lead", "vocoder hooks"),
-            "textures": ("club crowd ambience", "side-chained pads"),
-            "vocals": ("processed vocal chops",),
-        },
-    ),
-    GenreProfile(
-        name="hiphop",
-        keywords=("hip hop", "trap", "boom bap", "rap", "grime"),
-        instrumentation=(
-            "knocking drum machine",
-            "808 bass",
-            "sampled keys",
-            "vocal chops",
-        ),
-        rhythm="head-nod hip hop pulse",
-        texture="urban night energy",
-        layer_overrides={
-            "rhythm": ("punchy drum machine groove", "crisp claps"),
-            "bass": ("808 bass", "subby bass drops"),
-            "harmony": ("minor key piano loops", "sampled soul chops"),
-            "lead": ("pitched vocal chops", "synth brass stabs"),
-            "textures": ("street ambience", "vinyl noise"),
-            "vocals": ("rap ad-libs",),
-        },
-    ),
-)
-
-
-def _match_genre_profile(prompt_lower: str) -> Optional[GenreProfile]:
-    best: Optional[GenreProfile] = None
+def _match_genre_profile(prompt_fold: str) -> Optional[GenreProfileData]:
+    best: Optional[GenreProfileData] = None
     best_len = -1
-    for profile in GENRE_PROFILES:
-        for keyword in profile.keywords:
-            if keyword in prompt_lower and len(keyword) > best_len:
+    for profile in _LEXICON.genre_profiles:
+        for keyword in profile.folded_keywords:
+            if keyword in prompt_fold and len(keyword) > best_len:
                 best = profile
                 best_len = len(keyword)
     return best
@@ -606,7 +515,7 @@ class CompositionPlanner:
 
     def _build_long_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, LONG_FORM_THRESHOLD))
-        templates = list(_select_long_templates(seconds_total))
+        templates = _select_long_templates(seconds_total)
         beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
         tempo_hint = _tempo_hint(seconds_total, templates, beats_per_bar)
         tempo_bpm = _select_tempo(tempo_hint)
@@ -618,18 +527,19 @@ class CompositionPlanner:
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
-        prompt_lower = request.prompt.lower()
-        profile = _match_genre_profile(prompt_lower)
+        prompt_fold = request.prompt.casefold()
+        profile = _match_genre_profile(prompt_fold)
 
         descriptor = _build_theme_descriptor(
             request.prompt,
+            prompt_fold,
             templates,
             profile,
             base_seed,
         )
         palette = _categorise_instrumentation(
             descriptor,
-            request.prompt,
+            prompt_fold,
             profile,
             base_seed,
         )
@@ -690,7 +600,7 @@ class CompositionPlanner:
 
     def _build_short_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, SHORT_MIN_TOTAL_SECONDS))
-        templates = list(_select_short_templates(seconds_total))
+        templates = _select_short_templates(seconds_total)
         beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
         total_weight = float(sum(template.base_bars for template in templates) or 1)
         raw_tempo = int(round(240.0 * total_weight / seconds_total)) if seconds_total > 0 else 90
@@ -701,18 +611,19 @@ class CompositionPlanner:
         base_seed = (
             request.seed if request.seed is not None else _deterministic_seed(request.prompt)
         )
-        prompt_lower = request.prompt.lower()
-        profile = _match_genre_profile(prompt_lower)
+        prompt_fold = request.prompt.casefold()
+        profile = _match_genre_profile(prompt_fold)
 
         descriptor = _build_theme_descriptor(
             request.prompt,
+            prompt_fold,
             templates,
             profile,
             base_seed,
         )
         palette = _categorise_instrumentation(
             descriptor,
-            request.prompt,
+            prompt_fold,
             profile,
             base_seed,
         )
@@ -927,21 +838,23 @@ def _expand_priority(
 
 def _build_theme_descriptor(
     prompt: str,
+    prompt_fold: str,
     templates: List[SectionTemplate],
-    profile: Optional[GenreProfile],
+    profile: Optional[GenreProfileData],
     base_seed: int,
 ) -> ThemeDescriptor:
-    prompt_lower = prompt.lower()
-    instrumentation = _extract_keywords(prompt_lower, INSTRUMENT_KEYWORDS)
+    instrumentation = _extract_keywords(prompt_fold, _LEXICON.instrument_keywords)
     if profile is not None:
-        instrumentation.extend(item for item in profile.instrumentation if item not in instrumentation)
+        instrumentation.extend(
+            item for item in profile.instrumentation if item not in instrumentation
+        )
     if not instrumentation:
         instrumentation = _fallback_instrumentation(base_seed, count=3)
     instrumentation = _dedupe(instrumentation)
 
-    rhythm = _derive_rhythm(prompt_lower, templates, profile)
+    rhythm = _derive_rhythm(prompt_fold, templates, profile)
     motif = _derive_motif(prompt)
-    texture = _derive_texture(prompt_lower, instrumentation, profile)
+    texture = _derive_texture(prompt_fold, instrumentation, profile)
     dynamic_curve = [
         _dynamic_label(template.role, template.energy, index, len(templates))
         for index, template in enumerate(templates)
@@ -956,22 +869,22 @@ def _build_theme_descriptor(
     )
 
 
-def _extract_keywords(prompt_lower: str, mapping: list[tuple[str, str]]) -> list[str]:
+def _extract_keywords(prompt_fold: str, mapping: list[KeywordMapping]) -> list[str]:
     results: list[str] = []
-    for keyword, label in mapping:
-        if keyword in prompt_lower and label not in results:
-            results.append(label)
+    for entry in mapping:
+        if entry.folded in prompt_fold and entry.descriptor not in results:
+            results.append(entry.descriptor)
     return results
 
 
 def _derive_rhythm(
-    prompt_lower: str,
+    prompt_fold: str,
     templates: List[SectionTemplate],
-    profile: Optional[GenreProfile],
+    profile: Optional[GenreProfileData],
 ) -> str:
-    for keyword, label in RHYTHM_KEYWORDS:
-        if keyword in prompt_lower:
-            return label
+    for entry in _LEXICON.rhythm_keywords:
+        if entry.folded in prompt_fold:
+            return entry.descriptor
     if profile is not None and profile.rhythm:
         return profile.rhythm
     energies = {template.energy for template in templates}
@@ -996,18 +909,18 @@ def _derive_motif(prompt: str) -> str:
 
 
 def _derive_texture(
-    prompt_lower: str,
+    prompt_fold: str,
     instrumentation: list[str],
-    profile: Optional[GenreProfile],
+    profile: Optional[GenreProfileData],
 ) -> str:
-    for keyword, label in TEXTURE_KEYWORDS:
-        if keyword in prompt_lower:
-            return label
+    for entry in _LEXICON.texture_keywords:
+        if entry.folded in prompt_fold:
+            return entry.descriptor
     if profile is not None and profile.texture:
         return profile.texture
     if instrumentation:
         return f"focused blend of {', '.join(instrumentation[:2])}"
-    return DEFAULT_TEXTURE
+    return _LEXICON.defaults.texture
 
 
 def _dynamic_label(
@@ -1046,7 +959,7 @@ def _render_prompt(
 ) -> str:
     instrumentation_text = (
         ", ".join(descriptor.instrumentation)
-        or ", ".join(DEFAULT_INSTRUMENTATION)
+        or ", ".join(_LEXICON.defaults.instrumentation)
     )
     if descriptor.dynamic_curve:
         if section_index < len(descriptor.dynamic_curve):
@@ -1055,7 +968,7 @@ def _render_prompt(
             dynamic = descriptor.dynamic_curve[-1]
     else:
         dynamic = "flowing dynamic"
-    texture = descriptor.texture or DEFAULT_TEXTURE
+    texture = descriptor.texture or _LEXICON.defaults.texture
     arrangement_text = arrangement or instrumentation_text
     return template.format(
         prompt=prompt,
@@ -1070,9 +983,9 @@ def _render_prompt(
 
 def _categorise_instrumentation(
     descriptor: ThemeDescriptor,
-    prompt: str,
-    profile: Optional[GenreProfile],
-    base_seed: int,
+    prompt_fold: str,
+    profile: Optional[GenreProfileData],
+    _base_seed: int,
 ) -> dict[str, list[str]]:
     palette = {category: [] for category in CATEGORY_KEYWORDS}
     for label in descriptor.instrumentation:
@@ -1085,15 +998,16 @@ def _categorise_instrumentation(
         if not matched:
             palette.setdefault("textures", []).append(label)
 
-    prompt_lower = prompt.lower()
-    if any(keyword in prompt_lower for keyword in CATEGORY_KEYWORDS["vocals"]):
+    if any(keyword in prompt_fold for keyword in CATEGORY_KEYWORDS["vocals"]):
         palette.setdefault("vocals", []).append("expressive vocals")
 
     if profile is not None:
-        for category, values in profile.layer_overrides.items():
-            if not values:
-                continue
-            palette.setdefault(category, []).extend(values)
+        palette.setdefault("rhythm", []).extend(profile.layers.rhythm)
+        palette.setdefault("bass", []).extend(profile.layers.bass)
+        palette.setdefault("harmony", []).extend(profile.layers.harmony)
+        palette.setdefault("lead", []).extend(profile.layers.lead)
+        palette.setdefault("textures", []).extend(profile.layers.textures)
+        palette.setdefault("vocals", []).extend(profile.layers.vocals)
 
     for category, defaults in DEFAULT_LAYER_FALLBACKS.items():
         existing = palette.get(category, [])
@@ -1165,7 +1079,7 @@ def _cycled_slice(source: list[str], count: int, offset: int) -> list[str]:
 
 
 def _fallback_instrumentation(seed: int, *, count: int) -> list[str]:
-    pool = list(DEFAULT_INSTRUMENTATION) or ["blended instrumentation"]
+    pool = list(_LEXICON.defaults.instrumentation) or ["blended instrumentation"]
     count = max(1, min(count, len(pool)))
     offset = _stable_offset("instrumentation", seed)
     return _cycled_slice(pool, count, offset)
@@ -1200,269 +1114,8 @@ def _dedupe(items: Iterable[str]) -> list[str]:
 
 
 def _select_long_templates(duration_seconds: float) -> Iterable[SectionTemplate]:
-    if duration_seconds >= 150.0:
-        yield SectionTemplate(
-            role=SectionRole.INTRO,
-            label="Intro",
-            energy=SectionEnergy.LOW,
-            base_bars=16,
-            min_bars=10,
-            max_bars=18,
-            prompt_template=(
-                "Set the stage with {arrangement}, foreshadowing the {motif} motif over a {rhythm} pulse and {texture} atmosphere."
-            ),
-            transition="Invite motif",
-        )
-        yield SectionTemplate(
-            role=SectionRole.MOTIF,
-            label="Motif",
-            energy=SectionEnergy.MEDIUM,
-            base_bars=20,
-            min_bars=16,
-            max_bars=24,
-            prompt_template=(
-                "State the {motif} motif in full, letting {arrangement} lock into the {rhythm} while {dynamic} blooms."
-            ),
-            transition="Build anticipation",
-        )
-        yield SectionTemplate(
-            role=SectionRole.BRIDGE,
-            label="Bridge",
-            energy=SectionEnergy.MEDIUM,
-            base_bars=12,
-            min_bars=8,
-            max_bars=16,
-            prompt_template=(
-                "Recast the {motif} motif by thinning the layers so {arrangement} can explore contrasting colours before the chorus returns."
-            ),
-            transition="Spark chorus",
-        )
-        yield SectionTemplate(
-            role=SectionRole.CHORUS,
-            label="Chorus",
-            energy=SectionEnergy.HIGH,
-            base_bars=24,
-            min_bars=20,
-            max_bars=28,
-            prompt_template=(
-                "Lift the {motif} motif into an anthemic chorus where {arrangement} drives the groove and {dynamic} peaks."
-            ),
-            transition="Glide to outro",
-        )
-        yield SectionTemplate(
-            role=SectionRole.OUTRO,
-            label="Outro",
-            energy=SectionEnergy.MEDIUM,
-            base_bars=14,
-            min_bars=8,
-            max_bars=18,
-            prompt_template=(
-                "Close by reshaping the {motif} motif, letting {arrangement} ease the {rhythm} into a reflective {texture} fade."
-            ),
-            transition="Fade to silence",
-        )
-        return
-
-    yield SectionTemplate(
-        role=SectionRole.INTRO,
-        label="Intro",
-        energy=SectionEnergy.LOW,
-        base_bars=12,
-        min_bars=8,
-        max_bars=16,
-        prompt_template=(
-            "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop."
-        ),
-        transition="Reveal motif",
-    )
-    yield SectionTemplate(
-        role=SectionRole.MOTIF,
-        label="Motif",
-        energy=SectionEnergy.MEDIUM,
-        base_bars=18,
-        min_bars=14,
-        max_bars=22,
-        prompt_template=(
-            "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies."
-        ),
-        transition="Ignite chorus",
-    )
-    yield SectionTemplate(
-        role=SectionRole.CHORUS,
-        label="Chorus",
-        energy=SectionEnergy.HIGH,
-        base_bars=24,
-        min_bars=18,
-        max_bars=26,
-        prompt_template=(
-            "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest."
-        ),
-        transition="Settle to outro",
-    )
-    yield SectionTemplate(
-        role=SectionRole.OUTRO,
-        label="Outro",
-        energy=SectionEnergy.MEDIUM,
-        base_bars=12,
-        min_bars=8,
-        max_bars=16,
-        prompt_template=(
-            "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}."
-        ),
-        transition="Fade to silence",
-    )
+    return _LEXICON.select_long(duration_seconds)
 
 
 def _select_short_templates(duration_seconds: float) -> List[SectionTemplate]:
-    if duration_seconds >= 24.0:
-        return [
-            SectionTemplate(
-                role=SectionRole.INTRO,
-                label="Arrival",
-                energy=SectionEnergy.LOW,
-                base_bars=4,
-                min_bars=3,
-                max_bars=6,
-                prompt_template=(
-                    "Set a {texture} scene for {prompt} by introducing the {motif} motif with {instrumentation} over a {rhythm} pulse."
-                ),
-                transition="Fade in layers",
-            ),
-            SectionTemplate(
-                role=SectionRole.MOTIF,
-                label="Statement",
-                energy=SectionEnergy.MEDIUM,
-                base_bars=8,
-                min_bars=6,
-                max_bars=10,
-                prompt_template=(
-                    "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins."
-                ),
-                transition="Build momentum",
-            ),
-            SectionTemplate(
-                role=SectionRole.DEVELOPMENT,
-                label="Development",
-                energy=SectionEnergy.HIGH,
-                base_bars=8,
-                min_bars=6,
-                max_bars=10,
-                prompt_template=(
-                    "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds."
-                ),
-                transition="Evolve harmonies",
-            ),
-            SectionTemplate(
-                role=SectionRole.RESOLUTION,
-                label="Resolution",
-                energy=SectionEnergy.MEDIUM,
-                base_bars=4,
-                min_bars=3,
-                max_bars=6,
-                prompt_template=(
-                    "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}."
-                ),
-                transition="Return home",
-            ),
-            SectionTemplate(
-                role=SectionRole.OUTRO,
-                label="Release",
-                energy=SectionEnergy.LOW,
-                base_bars=4,
-                min_bars=2,
-                max_bars=6,
-                prompt_template=(
-                    "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey."
-                ),
-                transition="Fade to silence",
-            ),
-        ]
-    if duration_seconds >= 16.0:
-        return [
-            SectionTemplate(
-                role=SectionRole.INTRO,
-                label="Lead-in",
-                energy=SectionEnergy.LOW,
-                base_bars=4,
-                min_bars=2,
-                max_bars=6,
-                prompt_template=(
-                    "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}."
-                ),
-                transition="Invite motif",
-            ),
-            SectionTemplate(
-                role=SectionRole.MOTIF,
-                label="Motif A",
-                energy=SectionEnergy.MEDIUM,
-                base_bars=8,
-                min_bars=6,
-                max_bars=10,
-                prompt_template=(
-                    "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows."
-                ),
-                transition="Increase energy",
-            ),
-            SectionTemplate(
-                role=SectionRole.DEVELOPMENT,
-                label="Variation",
-                energy=SectionEnergy.HIGH,
-                base_bars=6,
-                min_bars=4,
-                max_bars=8,
-                prompt_template=(
-                    "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies."
-                ),
-                transition="Soften textures",
-            ),
-            SectionTemplate(
-                role=SectionRole.RESOLUTION,
-                label="Cadence",
-                energy=SectionEnergy.MEDIUM,
-                base_bars=4,
-                min_bars=2,
-                max_bars=6,
-                prompt_template=(
-                    "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}."
-                ),
-                transition="Release",
-            ),
-            SectionTemplate(
-                role=SectionRole.OUTRO,
-                label="Tail",
-                energy=SectionEnergy.LOW,
-                base_bars=2,
-                min_bars=1,
-                max_bars=4,
-                prompt_template=(
-                    "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out."
-                ),
-                transition="Fade",
-            ),
-        ]
-    return [
-        SectionTemplate(
-            role=SectionRole.INTRO,
-            label="Intro",
-            energy=SectionEnergy.LOW,
-            base_bars=2,
-            min_bars=1,
-            max_bars=4,
-            prompt_template=(
-                "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}."
-            ),
-            transition="Introduce motif",
-        ),
-        SectionTemplate(
-            role=SectionRole.MOTIF,
-            label="Motif",
-            energy=SectionEnergy.MEDIUM,
-            base_bars=6,
-            min_bars=4,
-            max_bars=8,
-            prompt_template=(
-                "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands."
-            ),
-            transition="Lift energy",
-        ),
-    ]
+    return _LEXICON.select_short(duration_seconds)

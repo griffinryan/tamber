@@ -2,7 +2,10 @@ use crate::types::{
     CompositionPlan, CompositionSection, SectionEnergy, SectionOrchestration, SectionRole,
     ThemeDescriptor,
 };
+use once_cell::sync::Lazy;
+use serde::Deserialize;
 use std::collections::HashSet;
+use unicode_normalization::UnicodeNormalization;
 
 const PLAN_VERSION: &str = "v3";
 const MIN_TEMPO: u16 = 68;
@@ -33,121 +36,350 @@ const REMOVE_PRIORITY: &[SectionRole] = &[
     SectionRole::Chorus,
 ];
 
-const INSTRUMENT_KEYWORDS: &[(&str, &str)] = &[
-    ("piano", "warm piano"),
-    ("upright piano", "intimate upright piano"),
-    ("keys", "soft keys"),
-    ("synthwave", "retro synth layers"),
-    ("synth", "lush synth pads"),
-    ("analog", "analog synths"),
-    ("modular", "modular synth textures"),
-    ("arp", "arpeggiated synths"),
-    ("guitar", "ambient guitar"),
-    ("guitars", "layered guitars"),
-    ("acoustic guitar", "acoustic guitar"),
-    ("electric guitar", "electric guitars"),
-    ("banjo", "twangy banjo"),
-    ("mandolin", "sparkling mandolin"),
-    ("violin", "expressive strings"),
-    ("viola", "velvety viola"),
-    ("cello", "warm cello"),
-    ("strings", "layered strings"),
-    ("string", "layered strings"),
-    ("orchestra", "orchestral strings"),
-    ("bass", "deep bass"),
-    ("upright bass", "upright bass"),
-    ("808", "808 bass"),
-    ("drum", "tight drums"),
-    ("drums", "tight drums"),
-    ("drum machine", "drum machine groove"),
-    ("percussion", "organic percussion"),
-    ("tabla", "tabla rhythms"),
-    ("conga", "conga grooves"),
-    ("bongo", "hand drum patterns"),
-    ("choir", "airy choir voices"),
-    ("choral", "lush choir"),
-    ("vocal", "ethereal vocals"),
-    ("vocals", "expressive vocals"),
-    ("singer", "soulful vocalist"),
-    ("vocalist", "soaring vocals"),
-    ("rap", "rhythmic rap vocals"),
-    ("brass", "smooth brass"),
-    ("horn", "bold brass horns"),
-    ("sax", "saxophone lead"),
-    ("saxophone", "saxophone lead"),
-    ("trumpet", "radiant trumpet lead"),
-    ("trombone", "velvet trombone swells"),
-    ("flute", "breathy flute"),
-    ("clarinet", "warm clarinet"),
-    ("oboe", "lyrical oboe"),
-    ("bassoon", "warm bassoon"),
-    ("harp", "glittering harp arpeggios"),
-    ("organ", "vintage organ"),
-    ("rhodes", "rhodes electric piano"),
-    ("vibraphone", "glassy vibraphone"),
-    ("marimba", "woody marimba"),
-    ("kalimba", "sparkling kalimba"),
-    ("sitar", "resonant sitar"),
-    ("accordion", "lively accordion"),
-    ("harmonica", "bluesy harmonica"),
-    ("synthpop", "glassy synth pop layers"),
-    ("ambient", "atmospheric textures"),
-    ("lofi", "dusty keys"),
-];
+static LEXICON: Lazy<Lexicon> = Lazy::new(|| {
+    let raw: RawLexicon =
+        serde_json::from_str(include_str!("../../planner/lexicon.json")).expect("invalid lexicon");
+    Lexicon::from_raw(raw)
+});
 
-const RHYTHM_KEYWORDS: &[(&str, &str)] = &[
-    ("waltz", "gentle 3/4 sway"),
-    ("swing", "swinging groove"),
-    ("jazz", "swinging groove"),
-    ("hip hop", "laid-back hip hop beat"),
-    ("boom bap", "boom-bap pulse"),
-    ("house", "four-on-the-floor pulse"),
-    ("techno", "driving techno rhythm"),
-    ("trance", "rolling trance rhythm"),
-    ("trap", "stuttered trap beat"),
-    ("downtempo", "downtempo pulse"),
-    ("breakbeat", "syncopated breakbeat"),
-    ("drum and bass", "rapid drum and bass break"),
-    ("dnb", "rapid drum and bass break"),
-    ("bossa", "bossa nova sway"),
-    ("reggae", "off-beat reggae groove"),
-    ("rock", "driving rock beat"),
-    ("metal", "pummelling double-kick groove"),
-    ("edm", "steady four-on-the-floor pulse"),
-    ("dance", "club-ready four-on-the-floor beat"),
-    ("electronic", "mechanical electronic pulse"),
-    ("folk", "organic strummed pulse"),
-    ("latin", "syncopated latin groove"),
-    ("ambient", "floating pulse"),
-];
+fn lexicon() -> &'static Lexicon {
+    &LEXICON
+}
 
-const TEXTURE_KEYWORDS: &[(&str, &str)] = &[
-    ("dream", "dreamy haze"),
-    ("noir", "late-night noir mood"),
-    ("dark", "shadowy atmosphere"),
-    ("bright", "glowing shimmer"),
-    ("glitch", "glitchy texture"),
-    ("cinematic", "cinematic expanse"),
-    ("epic", "soaring atmosphere"),
-    ("mystic", "mystical aura"),
-    ("lofi", "dusty vignette"),
-    ("rain", "rain-soaked ambience"),
-    ("storm", "electrified storm ambience"),
-    ("forest", "woodland ambience"),
-    ("ocean", "rolling ocean spray"),
-    ("space", "cosmic expanse"),
-    ("desert", "sun-baked desert shimmer"),
-    ("vintage", "vintage tape patina"),
-    ("psychedelic", "psychedelic kaleidoscope"),
-];
+fn leak_str(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
+}
 
-const DEFAULT_INSTRUMENTATION: &[&str] = &[
-    "blended instrumentation",
-    "layered synth textures",
-    "hybrid acoustic-electric palette",
-    "ensemble interplay",
-];
-const DEFAULT_TEXTURE: &str = "immersive atmosphere";
+fn casefold(value: &str) -> String {
+    value.nfkc().flat_map(|c| c.to_lowercase()).collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct RawLexicon {
+    version: u32,
+    keywords: RawKeywordGroups,
+    defaults: RawDefaults,
+    #[serde(rename = "genre_profiles")]
+    genre_profiles: Vec<RawGenreProfile>,
+    templates: RawTemplateLibrary,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawKeywordGroups {
+    #[serde(rename = "instrument")]
+    instrument: Vec<RawKeyword>,
+    #[serde(rename = "rhythm")]
+    rhythm: Vec<RawKeyword>,
+    #[serde(rename = "texture")]
+    texture: Vec<RawKeyword>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawKeyword {
+    term: String,
+    descriptor: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawDefaults {
+    instrumentation: Vec<String>,
+    texture: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGenreProfile {
+    keywords: Vec<String>,
+    instrumentation: Vec<String>,
+    rhythm: Option<String>,
+    texture: Option<String>,
+    layers: RawGenreLayers,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGenreLayers {
+    rhythm: Vec<String>,
+    bass: Vec<String>,
+    harmony: Vec<String>,
+    lead: Vec<String>,
+    textures: Vec<String>,
+    vocals: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTemplateLibrary {
+    long: Vec<RawTemplateVariant>,
+    short: Vec<RawTemplateVariant>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTemplateVariant {
+    min_duration: f32,
+    sections: Vec<RawSectionTemplate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSectionTemplate {
+    role: RawSectionRole,
+    label: String,
+    energy: RawSectionEnergy,
+    base_bars: u16,
+    min_bars: u16,
+    max_bars: u16,
+    prompt_template: String,
+    transition: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawSectionRole {
+    Intro,
+    Motif,
+    Chorus,
+    Development,
+    Bridge,
+    Resolution,
+    Outro,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawSectionEnergy {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug)]
+struct Lexicon {
+    _version: u32,
+    instrument_keywords: Vec<KeywordMapping>,
+    rhythm_keywords: Vec<KeywordMapping>,
+    texture_keywords: Vec<KeywordMapping>,
+    defaults: Defaults,
+    genre_profiles: Vec<GenreProfile>,
+    templates: TemplateLibrary,
+}
+
+#[derive(Debug)]
+struct KeywordMapping {
+    _term: &'static str,
+    descriptor: &'static str,
+    folded_term: &'static str,
+}
+
+#[derive(Debug)]
+struct Defaults {
+    instrumentation: Vec<&'static str>,
+    texture: &'static str,
+}
+
+#[derive(Debug)]
+struct GenreProfile {
+    _keywords: Vec<&'static str>,
+    folded_keywords: Vec<&'static str>,
+    instrumentation: Vec<&'static str>,
+    rhythm: Option<&'static str>,
+    texture: Option<&'static str>,
+    layers: GenreLayers,
+}
+
+#[derive(Debug)]
+struct GenreLayers {
+    rhythm: Vec<&'static str>,
+    bass: Vec<&'static str>,
+    harmony: Vec<&'static str>,
+    lead: Vec<&'static str>,
+    textures: Vec<&'static str>,
+    vocals: Vec<&'static str>,
+}
+
+#[derive(Debug)]
+struct TemplateLibrary {
+    long: Vec<TemplateVariant>,
+    short: Vec<TemplateVariant>,
+}
+
+#[derive(Debug)]
+struct TemplateVariant {
+    min_duration: f32,
+    sections: Vec<SectionTemplateBlueprint>,
+}
+
+#[derive(Debug)]
+struct SectionTemplateBlueprint {
+    role: SectionRole,
+    label: &'static str,
+    energy: SectionEnergy,
+    base_bars: u16,
+    min_bars: u16,
+    max_bars: u16,
+    prompt_template: &'static str,
+    transition: Option<&'static str>,
+}
+
+impl Lexicon {
+    fn from_raw(raw: RawLexicon) -> Self {
+        let instrument_keywords =
+            raw.keywords.instrument.into_iter().map(KeywordMapping::from_raw).collect();
+        let rhythm_keywords =
+            raw.keywords.rhythm.into_iter().map(KeywordMapping::from_raw).collect();
+        let texture_keywords =
+            raw.keywords.texture.into_iter().map(KeywordMapping::from_raw).collect();
+        let defaults = Defaults::from_raw(raw.defaults);
+        let genre_profiles = raw.genre_profiles.into_iter().map(GenreProfile::from_raw).collect();
+        let templates = TemplateLibrary::from_raw(raw.templates);
+        Self {
+            _version: raw.version,
+            instrument_keywords,
+            rhythm_keywords,
+            texture_keywords,
+            defaults,
+            genre_profiles,
+            templates,
+        }
+    }
+}
+
+impl KeywordMapping {
+    fn from_raw(raw: RawKeyword) -> Self {
+        let term = leak_str(raw.term);
+        let descriptor = leak_str(raw.descriptor);
+        let folded_term = leak_str(casefold(term));
+        Self { _term: term, descriptor, folded_term }
+    }
+}
+
+impl Defaults {
+    fn from_raw(raw: RawDefaults) -> Self {
+        let instrumentation = raw.instrumentation.into_iter().map(leak_str).collect();
+        let texture = leak_str(raw.texture);
+        Self { instrumentation, texture }
+    }
+}
+
+impl GenreProfile {
+    fn from_raw(raw: RawGenreProfile) -> Self {
+        let keywords: Vec<&'static str> = raw.keywords.into_iter().map(leak_str).collect();
+        let folded_keywords =
+            keywords.iter().map(|value| leak_str(casefold(value))).collect::<Vec<_>>();
+        let instrumentation = raw.instrumentation.into_iter().map(leak_str).collect();
+        let rhythm = raw.rhythm.map(leak_str);
+        let texture = raw.texture.map(leak_str);
+        let layers = GenreLayers::from_raw(raw.layers);
+        Self { _keywords: keywords, folded_keywords, instrumentation, rhythm, texture, layers }
+    }
+}
+
+impl GenreLayers {
+    fn from_raw(raw: RawGenreLayers) -> Self {
+        Self {
+            rhythm: raw.rhythm.into_iter().map(leak_str).collect(),
+            bass: raw.bass.into_iter().map(leak_str).collect(),
+            harmony: raw.harmony.into_iter().map(leak_str).collect(),
+            lead: raw.lead.into_iter().map(leak_str).collect(),
+            textures: raw.textures.into_iter().map(leak_str).collect(),
+            vocals: raw.vocals.into_iter().map(leak_str).collect(),
+        }
+    }
+}
+
+impl TemplateLibrary {
+    fn from_raw(raw: RawTemplateLibrary) -> Self {
+        let mut long = raw.long.into_iter().map(TemplateVariant::from_raw).collect::<Vec<_>>();
+        long.sort_by(|a, b| {
+            b.min_duration.partial_cmp(&a.min_duration).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut short = raw.short.into_iter().map(TemplateVariant::from_raw).collect::<Vec<_>>();
+        short.sort_by(|a, b| {
+            b.min_duration.partial_cmp(&a.min_duration).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Self { long, short }
+    }
+
+    fn select_long(&self, duration_seconds: f32) -> Vec<SectionTemplate> {
+        self.select_variant(&self.long, duration_seconds)
+    }
+
+    fn select_short(&self, duration_seconds: f32) -> Vec<SectionTemplate> {
+        self.select_variant(&self.short, duration_seconds)
+    }
+
+    fn select_variant(
+        &self,
+        variants: &[TemplateVariant],
+        duration_seconds: f32,
+    ) -> Vec<SectionTemplate> {
+        let selected = variants
+            .iter()
+            .find(|variant| duration_seconds >= variant.min_duration)
+            .or_else(|| variants.last())
+            .expect("planner templates cannot be empty");
+        selected.to_templates()
+    }
+}
+
+impl TemplateVariant {
+    fn from_raw(raw: RawTemplateVariant) -> Self {
+        let sections = raw.sections.into_iter().map(SectionTemplateBlueprint::from_raw).collect();
+        Self { min_duration: raw.min_duration, sections }
+    }
+
+    fn to_templates(&self) -> Vec<SectionTemplate> {
+        self.sections.iter().map(SectionTemplateBlueprint::to_template).collect()
+    }
+}
+
+impl SectionTemplateBlueprint {
+    fn from_raw(raw: RawSectionTemplate) -> Self {
+        Self {
+            role: raw.role.into(),
+            label: leak_str(raw.label),
+            energy: raw.energy.into(),
+            base_bars: raw.base_bars,
+            min_bars: raw.min_bars,
+            max_bars: raw.max_bars,
+            prompt_template: leak_str(raw.prompt_template),
+            transition: raw.transition.map(leak_str),
+        }
+    }
+
+    fn to_template(&self) -> SectionTemplate {
+        SectionTemplate {
+            role: self.role,
+            label: self.label,
+            energy: self.energy,
+            base_bars: self.base_bars,
+            min_bars: self.min_bars,
+            max_bars: self.max_bars,
+            prompt_template: self.prompt_template,
+            transition: self.transition,
+        }
+    }
+}
+
+impl From<RawSectionRole> for SectionRole {
+    fn from(value: RawSectionRole) -> Self {
+        match value {
+            RawSectionRole::Intro => SectionRole::Intro,
+            RawSectionRole::Motif => SectionRole::Motif,
+            RawSectionRole::Chorus => SectionRole::Chorus,
+            RawSectionRole::Development => SectionRole::Development,
+            RawSectionRole::Bridge => SectionRole::Bridge,
+            RawSectionRole::Resolution => SectionRole::Resolution,
+            RawSectionRole::Outro => SectionRole::Outro,
+        }
+    }
+}
+
+impl From<RawSectionEnergy> for SectionEnergy {
+    fn from(value: RawSectionEnergy) -> Self {
+        match value {
+            RawSectionEnergy::Low => SectionEnergy::Low,
+            RawSectionEnergy::Medium => SectionEnergy::Medium,
+            RawSectionEnergy::High => SectionEnergy::High,
+        }
+    }
+}
 
 struct LayerCounts {
     rhythm: u8,
@@ -184,213 +416,12 @@ struct PaletteOffsets {
     vocals: usize,
 }
 
-struct GenreLayers {
-    rhythm: &'static [&'static str],
-    bass: &'static [&'static str],
-    harmony: &'static [&'static str],
-    lead: &'static [&'static str],
-    textures: &'static [&'static str],
-    vocals: &'static [&'static str],
-}
-
-struct GenreProfile {
-    keywords: &'static [&'static str],
-    instrumentation: &'static [&'static str],
-    rhythm: Option<&'static str>,
-    texture: Option<&'static str>,
-    layers: GenreLayers,
-}
-
-const GENRE_PROFILES: &[GenreProfile] = &[
-    GenreProfile {
-        keywords: &["lofi", "lo-fi", "chillhop", "chill hop", "study beats"],
-        instrumentation: &[
-            "dusty electric piano",
-            "tape-saturated drum loop",
-            "warm bass guitar",
-            "soft nylon guitar",
-        ],
-        rhythm: Some("laid-back hip hop beat"),
-        texture: Some("hazy lo-fi ambience"),
-        layers: GenreLayers {
-            rhythm: &["dusty drum loop", "lazy snare with brushes"],
-            bass: &["mellow sub bass", "upright bass with tape wobble"],
-            harmony: &["noisy electric piano chords", "soft guitar voicings"],
-            lead: &["wistful synth lead", "gentle vibraphone motifs"],
-            textures: &["vinyl crackle", "nocturnal rain ambience"],
-            vocals: &["hummed vocal chops"],
-        },
-    },
-    GenreProfile {
-        keywords: &["jazz", "bebop", "swing", "hard bop", "cool jazz"],
-        instrumentation: &[
-            "upright bass",
-            "brush drum kit",
-            "extended jazz piano",
-            "saxophone lead",
-        ],
-        rhythm: Some("swinging groove"),
-        texture: Some("smoky lounge atmosphere"),
-        layers: GenreLayers {
-            rhythm: &["brush drum kit", "ride cymbal patterns"],
-            bass: &["walking upright bass"],
-            harmony: &["extended jazz piano voicings", "comping guitar chords"],
-            lead: &["saxophone lead", "muted trumpet phrases"],
-            textures: &["club room ambience", "late-night crowd murmur"],
-            vocals: &["scat vocal ad-libs"],
-        },
-    },
-    GenreProfile {
-        keywords: &["rock", "alt rock", "indie rock", "garage rock", "post-punk"],
-        instrumentation: &[
-            "distorted electric guitars",
-            "live drum kit",
-            "electric bass",
-            "anthemic vocals",
-        ],
-        rhythm: Some("driving rock beat"),
-        texture: Some("amplified stage energy"),
-        layers: GenreLayers {
-            rhythm: &["punchy live drums", "crashing cymbals"],
-            bass: &["gritty electric bass"],
-            harmony: &["crunchy rhythm guitars", "stadium power chords"],
-            lead: &["soaring guitar lead", "anthemic vocal hooks"],
-            textures: &["amp feedback swells", "crowd reverb wash"],
-            vocals: &["anthemic rock vocals"],
-        },
-    },
-    GenreProfile {
-        keywords: &["metal", "thrash", "doom", "heavy metal", "prog metal"],
-        instrumentation: &[
-            "double kick drums",
-            "down-tuned rhythm guitars",
-            "growling bass",
-            "aggressive vocals",
-        ],
-        rhythm: Some("relentless double-kick drive"),
-        texture: Some("dense wall of distortion"),
-        layers: GenreLayers {
-            rhythm: &["blast beat drums", "double-kick assaults"],
-            bass: &["growling electric bass"],
-            harmony: &["down-tuned rhythm guitars", "chugging power chords"],
-            lead: &["shredded guitar leads", "screaming harmonised solos"],
-            textures: &["amp roar", "crowd roar tails"],
-            vocals: &["harsh metal vocals"],
-        },
-    },
-    GenreProfile {
-        keywords: &["orchestral", "symphonic", "film score", "cinematic", "soundtrack"],
-        instrumentation: &[
-            "string ensemble",
-            "brass section",
-            "woodwind choir",
-            "concert percussion",
-        ],
-        rhythm: Some("expansive cinematic pulse"),
-        texture: Some("lush orchestral hall"),
-        layers: GenreLayers {
-            rhythm: &["gran cassa hits", "rolling orchestral percussion"],
-            bass: &["double basses", "low brass swells"],
-            harmony: &["legato string ensemble", "warm horn chords"],
-            lead: &["solo violin", "trumpet fanfare"],
-            textures: &["concert hall reverberation", "choir pads"],
-            vocals: &["wordless choir"],
-        },
-    },
-    GenreProfile {
-        keywords: &["folk", "acoustic", "bluegrass", "roots", "americana", "country"],
-        instrumentation: &[
-            "acoustic guitar",
-            "mandolin",
-            "upright bass",
-            "fiddle melodies",
-        ],
-        rhythm: Some("organic strummed pulse"),
-        texture: Some("warm rustic atmosphere"),
-        layers: GenreLayers {
-            rhythm: &["brushy folk kit", "hand clap patterns"],
-            bass: &["plucked upright bass"],
-            harmony: &["fingerpicked acoustic guitar", "sparkling mandolin arpeggios"],
-            lead: &["fiddle leads", "slide guitar phrases"],
-            textures: &["barn room reverb", "nature ambience"],
-            vocals: &["stacked folk harmonies"],
-        },
-    },
-    GenreProfile {
-        keywords: &["ambient", "soundscape", "drone", "meditation", "ethereal", "atmospheric"],
-        instrumentation: &[
-            "evolving synth pads",
-            "granular textures",
-            "soft mallet swells",
-            "choral atmospheres",
-        ],
-        rhythm: Some("floating pulse"),
-        texture: Some("expansive ambient haze"),
-        layers: GenreLayers {
-            rhythm: &["subtle percussive pulses", "soft percussion swells"],
-            bass: &["deep sine bass swells"],
-            harmony: &["evolving synth pads", "glacial piano chords"],
-            lead: &["breathy vocal motifs", "glass harmonica lines"],
-            textures: &["wind soundscape", "distant shimmer"],
-            vocals: &["celestial vocal layers"],
-        },
-    },
-    GenreProfile {
-        keywords: &[
-            "electronic",
-            "edm",
-            "house",
-            "techno",
-            "trance",
-            "club",
-            "electro",
-            "synthwave",
-            "synth-pop",
-        ],
-        instrumentation: &[
-            "punchy electronic kick",
-            "rolling bass synth",
-            "arpeggiated synths",
-            "bright lead plucks",
-        ],
-        rhythm: Some("four-on-the-floor pulse"),
-        texture: Some("neon club atmosphere"),
-        layers: GenreLayers {
-            rhythm: &["four-on-the-floor kick", "syncopated hi-hats"],
-            bass: &["rolling bass synth", "acid bassline"],
-            harmony: &["wide pad chords", "lush supersaw stacks"],
-            lead: &["glittering synth lead", "vocoder hooks"],
-            textures: &["club crowd ambience", "side-chained pads"],
-            vocals: &["processed vocal chops"],
-        },
-    },
-    GenreProfile {
-        keywords: &["hip hop", "trap", "boom bap", "rap", "grime"],
-        instrumentation: &[
-            "knocking drum machine",
-            "808 bass",
-            "sampled keys",
-            "vocal chops",
-        ],
-        rhythm: Some("head-nod hip hop pulse"),
-        texture: Some("urban night energy"),
-        layers: GenreLayers {
-            rhythm: &["punchy drum machine groove", "crisp claps"],
-            bass: &["808 bass", "subby bass drops"],
-            harmony: &["minor key piano loops", "sampled soul chops"],
-            lead: &["pitched vocal chops", "synth brass stabs"],
-            textures: &["street ambience", "vinyl noise"],
-            vocals: &["rap ad-libs"],
-        },
-    },
-];
-
-fn match_genre_profile(prompt_lower: &str) -> Option<&'static GenreProfile> {
+fn match_genre_profile<'a>(prompt_fold: &str, data: &'a Lexicon) -> Option<&'a GenreProfile> {
     let mut best: Option<&GenreProfile> = None;
     let mut best_len = 0usize;
-    for profile in GENRE_PROFILES {
-        for keyword in profile.keywords {
-            if prompt_lower.contains(keyword) && keyword.len() > best_len {
+    for profile in &data.genre_profiles {
+        for keyword in &profile.folded_keywords {
+            if prompt_fold.contains(keyword) && keyword.len() > best_len {
                 best = Some(profile);
                 best_len = keyword.len();
             }
@@ -443,6 +474,7 @@ fn directives_for_role(role: &SectionRole) -> (Option<String>, Vec<String>, Opti
     }
 }
 
+#[derive(Clone)]
 struct SectionTemplate {
     role: SectionRole,
     label: &'static str,
@@ -480,8 +512,9 @@ impl CompositionPlanner {
         duration_seconds: u8,
         seed: Option<u64>,
     ) -> CompositionPlan {
+        let data = lexicon();
         let seconds_total = f32::max(duration_seconds as f32, LONG_FORM_THRESHOLD);
-        let templates = select_long_templates(seconds_total);
+        let templates = select_long_templates(data, seconds_total);
         let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
         let tempo_hint = tempo_hint(seconds_total, &templates, beats_per_bar);
         let tempo_bpm = select_tempo(tempo_hint);
@@ -490,11 +523,13 @@ impl CompositionPlanner {
         let bars = allocate_bars(&templates, seconds_total, seconds_per_bar);
 
         let base_seed = seed.unwrap_or_else(|| deterministic_seed(prompt));
-        let prompt_lower = prompt.to_lowercase();
-        let profile = match_genre_profile(&prompt_lower);
+        let prompt_fold = casefold(prompt.as_ref());
+        let profile = match_genre_profile(&prompt_fold, data);
 
-        let descriptor = build_theme_descriptor(prompt, &templates, profile, base_seed);
-        let palette = categorise_instrumentation(&descriptor, prompt, profile, base_seed);
+        let descriptor =
+            build_theme_descriptor(prompt, &prompt_fold, &templates, profile, base_seed, data);
+        let palette =
+            categorise_instrumentation(&descriptor, &prompt_fold, profile, base_seed, data);
         let offsets = palette_offsets(&palette, base_seed);
         let orchestrations = plan_orchestrations(&templates, &palette, &offsets);
         let key = select_key(base_seed);
@@ -504,8 +539,14 @@ impl CompositionPlanner {
 
         for (index, template) in templates.iter().enumerate() {
             let arrangement = describe_orchestration(&orchestrations[index]);
-            let section_prompt =
-                render_prompt(template.prompt_template, prompt, &descriptor, index, &arrangement);
+            let section_prompt = render_prompt(
+                template.prompt_template,
+                prompt,
+                &descriptor,
+                index,
+                &arrangement,
+                &data.defaults,
+            );
             let (motif_directive, variation_axes, cadence_hint) =
                 directives_for_role(&template.role);
             let bar_count = bars[index].max(1);
@@ -551,8 +592,9 @@ impl CompositionPlanner {
         duration_seconds: u8,
         seed: Option<u64>,
     ) -> CompositionPlan {
+        let data = lexicon();
         let seconds_total = f32::max(duration_seconds as f32, SHORT_MIN_TOTAL_SECONDS);
-        let templates = select_short_templates(seconds_total);
+        let templates = select_short_templates(data, seconds_total);
         let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
         let total_weight: u32 = templates.iter().map(|tpl| tpl.base_bars as u32).sum();
         let weight =
@@ -566,11 +608,13 @@ impl CompositionPlanner {
         let seconds_per_bar = (60.0 / tempo_bpm as f32) * beats_per_bar as f32;
 
         let base_seed = seed.unwrap_or_else(|| deterministic_seed(prompt));
-        let prompt_lower = prompt.to_lowercase();
-        let profile = match_genre_profile(&prompt_lower);
+        let prompt_fold = casefold(prompt.as_ref());
+        let profile = match_genre_profile(&prompt_fold, data);
 
-        let descriptor = build_theme_descriptor(prompt, &templates, profile, base_seed);
-        let palette = categorise_instrumentation(&descriptor, prompt, profile, base_seed);
+        let descriptor =
+            build_theme_descriptor(prompt, &prompt_fold, &templates, profile, base_seed, data);
+        let palette =
+            categorise_instrumentation(&descriptor, &prompt_fold, profile, base_seed, data);
         let offsets = palette_offsets(&palette, base_seed);
         let orchestrations = plan_orchestrations(&templates, &palette, &offsets);
         let key = select_key(base_seed);
@@ -581,8 +625,14 @@ impl CompositionPlanner {
 
         for (index, template) in templates.iter().enumerate() {
             let arrangement = describe_orchestration(&orchestrations[index]);
-            let section_prompt =
-                render_prompt(template.prompt_template, prompt, &descriptor, index, &arrangement);
+            let section_prompt = render_prompt(
+                template.prompt_template,
+                prompt,
+                &descriptor,
+                index,
+                &arrangement,
+                &data.defaults,
+            );
             let (motif_directive, variation_axes, cadence_hint) =
                 directives_for_role(&template.role);
 
@@ -797,9 +847,10 @@ fn layer_counts_for_role(role: &SectionRole) -> LayerCounts {
 
 fn categorise_instrumentation(
     descriptor: &ThemeDescriptor,
-    prompt: &str,
+    prompt_fold: &str,
     profile: Option<&GenreProfile>,
     _seed: u64,
+    _data: &Lexicon,
 ) -> InstrumentPalette {
     let mut palette = InstrumentPalette::default();
     for label in &descriptor.instrumentation {
@@ -816,8 +867,7 @@ fn categorise_instrumentation(
         }
     }
 
-    let prompt_lower = prompt.to_lowercase();
-    if category_keywords("vocals").iter().any(|keyword| prompt_lower.contains(keyword)) {
+    if category_keywords("vocals").iter().any(|keyword| prompt_fold.contains(keyword)) {
         palette.vocals.push("expressive vocals".to_string());
     }
 
@@ -847,24 +897,12 @@ fn categorise_instrumentation(
 }
 
 fn apply_genre_layers(palette: &mut InstrumentPalette, profile: &GenreProfile) {
-    palette
-        .rhythm
-        .extend(profile.layers.rhythm.iter().map(|value| (*value).to_string()));
-    palette
-        .bass
-        .extend(profile.layers.bass.iter().map(|value| (*value).to_string()));
-    palette
-        .harmony
-        .extend(profile.layers.harmony.iter().map(|value| (*value).to_string()));
-    palette
-        .lead
-        .extend(profile.layers.lead.iter().map(|value| (*value).to_string()));
-    palette
-        .textures
-        .extend(profile.layers.textures.iter().map(|value| (*value).to_string()));
-    palette
-        .vocals
-        .extend(profile.layers.vocals.iter().map(|value| (*value).to_string()));
+    palette.rhythm.extend(profile.layers.rhythm.iter().map(|value| (*value).to_string()));
+    palette.bass.extend(profile.layers.bass.iter().map(|value| (*value).to_string()));
+    palette.harmony.extend(profile.layers.harmony.iter().map(|value| (*value).to_string()));
+    palette.lead.extend(profile.layers.lead.iter().map(|value| (*value).to_string()));
+    palette.textures.extend(profile.layers.textures.iter().map(|value| (*value).to_string()));
+    palette.vocals.extend(profile.layers.vocals.iter().map(|value| (*value).to_string()));
 }
 
 fn palette_offsets(_palette: &InstrumentPalette, seed: u64) -> PaletteOffsets {
@@ -912,34 +950,14 @@ fn build_orchestration(
     section_index: usize,
 ) -> SectionOrchestration {
     let mut orchestration = SectionOrchestration::default();
-    orchestration.rhythm = select_layer(
-        "rhythm",
-        &palette.rhythm,
-        counts.rhythm,
-        offsets.rhythm,
-        section_index,
-    );
-    orchestration.bass = select_layer(
-        "bass",
-        &palette.bass,
-        counts.bass,
-        offsets.bass,
-        section_index,
-    );
-    orchestration.harmony = select_layer(
-        "harmony",
-        &palette.harmony,
-        counts.harmony,
-        offsets.harmony,
-        section_index,
-    );
-    orchestration.lead = select_layer(
-        "lead",
-        &palette.lead,
-        counts.lead,
-        offsets.lead,
-        section_index,
-    );
+    orchestration.rhythm =
+        select_layer("rhythm", &palette.rhythm, counts.rhythm, offsets.rhythm, section_index);
+    orchestration.bass =
+        select_layer("bass", &palette.bass, counts.bass, offsets.bass, section_index);
+    orchestration.harmony =
+        select_layer("harmony", &palette.harmony, counts.harmony, offsets.harmony, section_index);
+    orchestration.lead =
+        select_layer("lead", &palette.lead, counts.lead, offsets.lead, section_index);
     orchestration.textures = select_layer(
         "textures",
         &palette.textures,
@@ -950,13 +968,7 @@ fn build_orchestration(
     orchestration.vocals = if palette.vocals.is_empty() {
         Vec::new()
     } else {
-        select_layer(
-            "vocals",
-            &palette.vocals,
-            counts.vocals,
-            offsets.vocals,
-            section_index,
-        )
+        select_layer("vocals", &palette.vocals, counts.vocals, offsets.vocals, section_index)
     };
     orchestration
 }
@@ -1001,18 +1013,16 @@ fn cycle_slice_str(source: &[&str], count: usize, offset: usize) -> Vec<String> 
     if source.is_empty() || count == 0 {
         return Vec::new();
     }
-    (0..count)
-        .map(|index| source[(offset + index) % source.len()].to_string())
-        .collect()
+    (0..count).map(|index| source[(offset + index) % source.len()].to_string()).collect()
 }
 
-fn fallback_instrumentation(seed: u64, count: usize) -> Vec<String> {
-    if DEFAULT_INSTRUMENTATION.is_empty() {
+fn fallback_instrumentation(data: &Lexicon, seed: u64, count: usize) -> Vec<String> {
+    if data.defaults.instrumentation.is_empty() {
         return vec!["blended instrumentation".to_string()];
     }
-    let count = count.max(1).min(DEFAULT_INSTRUMENTATION.len());
+    let count = count.max(1).min(data.defaults.instrumentation.len());
     let offset = stable_offset("instrumentation", seed);
-    cycle_slice_str(DEFAULT_INSTRUMENTATION, count, offset)
+    cycle_slice_str(data.defaults.instrumentation.as_slice(), count, offset)
 }
 
 fn stable_offset(label: &str, seed: u64) -> usize {
@@ -1089,19 +1099,8 @@ fn category_keywords(category: &str) -> &'static [&'static str] {
             "accordion",
         ],
         "lead" => &[
-            "lead",
-            "guitar",
-            "solo",
-            "brass",
-            "sax",
-            "horn",
-            "trumpet",
-            "violin",
-            "viola",
-            "fiddle",
-            "flute",
-            "clarinet",
-            "oboe",
+            "lead", "guitar", "solo", "brass", "sax", "horn", "trumpet", "violin", "viola",
+            "fiddle", "flute", "clarinet", "oboe",
         ],
         "textures" => &[
             "ambient",
@@ -1161,11 +1160,7 @@ fn default_layer_fallback(category: &str) -> &'static [&'static str] {
             "analog tape haze",
             "rolling field recordings",
         ],
-        "vocals" => &[
-            "wordless vocal pads",
-            "ethereal choirs",
-            "layered vocal oohs",
-        ],
+        "vocals" => &["wordless vocal pads", "ethereal choirs", "layered vocal oohs"],
         _ => &[],
     }
 }
@@ -1183,26 +1178,27 @@ fn dedupe(items: Vec<String>) -> Vec<String> {
 
 fn build_theme_descriptor(
     prompt: &str,
+    prompt_fold: &str,
     templates: &[SectionTemplate],
     profile: Option<&GenreProfile>,
     base_seed: u64,
+    data: &Lexicon,
 ) -> ThemeDescriptor {
-    let prompt_lower = prompt.to_lowercase();
-    let mut instrumentation = extract_keywords(&prompt_lower, INSTRUMENT_KEYWORDS);
+    let mut instrumentation = extract_keywords(prompt_fold, &data.instrument_keywords);
     if let Some(profile) = profile {
-        for item in profile.instrumentation {
+        for item in &profile.instrumentation {
             if !instrumentation.iter().any(|existing| existing == item) {
                 instrumentation.push((*item).to_string());
             }
         }
     }
     if instrumentation.is_empty() {
-        instrumentation = fallback_instrumentation(base_seed, 3);
+        instrumentation = fallback_instrumentation(data, base_seed, 3);
     }
 
-    let rhythm = derive_rhythm(&prompt_lower, templates, profile);
+    let rhythm = derive_rhythm(prompt_fold, templates, profile, data);
     let motif = derive_motif(prompt);
-    let texture = derive_texture(&prompt_lower, &instrumentation, profile);
+    let texture = derive_texture(prompt_fold, &instrumentation, profile, data);
     let dynamic_curve = templates
         .iter()
         .enumerate()
@@ -1214,24 +1210,27 @@ fn build_theme_descriptor(
     ThemeDescriptor { motif, instrumentation, rhythm, dynamic_curve, texture: Some(texture) }
 }
 
-fn extract_keywords(prompt_lower: &str, mapping: &[(&str, &str)]) -> Vec<String> {
+fn extract_keywords(prompt_fold: &str, mapping: &[KeywordMapping]) -> Vec<String> {
     let mut results = Vec::new();
-    for (keyword, label) in mapping {
-        if prompt_lower.contains(keyword) && !results.iter().any(|existing| existing == label) {
-            results.push((*label).to_string());
+    for entry in mapping {
+        if prompt_fold.contains(entry.folded_term)
+            && !results.iter().any(|existing| existing == entry.descriptor)
+        {
+            results.push(entry.descriptor.to_string());
         }
     }
     results
 }
 
 fn derive_rhythm(
-    prompt_lower: &str,
+    prompt_fold: &str,
     templates: &[SectionTemplate],
     profile: Option<&GenreProfile>,
+    data: &Lexicon,
 ) -> String {
-    for (keyword, label) in RHYTHM_KEYWORDS {
-        if prompt_lower.contains(keyword) {
-            return (*label).to_string();
+    for entry in &data.rhythm_keywords {
+        if prompt_fold.contains(entry.folded_term) {
+            return entry.descriptor.to_string();
         }
     }
     if let Some(profile) = profile {
@@ -1266,13 +1265,14 @@ fn derive_motif(prompt: &str) -> String {
 }
 
 fn derive_texture(
-    prompt_lower: &str,
+    prompt_fold: &str,
     instrumentation: &[String],
     profile: Option<&GenreProfile>,
+    data: &Lexicon,
 ) -> String {
-    for (keyword, label) in TEXTURE_KEYWORDS {
-        if prompt_lower.contains(keyword) {
-            return (*label).to_string();
+    for entry in &data.texture_keywords {
+        if prompt_fold.contains(entry.folded_term) {
+            return entry.descriptor.to_string();
         }
     }
     if let Some(profile) = profile {
@@ -1284,7 +1284,7 @@ fn derive_texture(
         let joined = instrumentation.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
         return format!("focused blend of {}", joined);
     }
-    DEFAULT_TEXTURE.to_string()
+    data.defaults.texture.to_string()
 }
 
 fn dynamic_label(role: &SectionRole, energy: &SectionEnergy, index: usize, total: usize) -> String {
@@ -1324,9 +1324,10 @@ fn render_prompt(
     descriptor: &ThemeDescriptor,
     index: usize,
     arrangement: &str,
+    defaults: &Defaults,
 ) -> String {
     let instrumentation_text = if descriptor.instrumentation.is_empty() {
-        DEFAULT_INSTRUMENTATION.join(", ")
+        defaults.instrumentation.join(", ")
     } else {
         descriptor.instrumentation.join(", ")
     };
@@ -1335,7 +1336,7 @@ fn render_prompt(
         .get(index)
         .cloned()
         .unwrap_or_else(|| "flowing dynamic".to_string());
-    let texture = descriptor.texture.clone().unwrap_or_else(|| DEFAULT_TEXTURE.to_string());
+    let texture = descriptor.texture.clone().unwrap_or_else(|| defaults.texture.to_string());
     let arrangement_text =
         if arrangement.is_empty() { instrumentation_text.clone() } else { arrangement.to_string() };
 
@@ -1350,239 +1351,12 @@ fn render_prompt(
     rendered.trim().to_string()
 }
 
-fn select_long_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
-    if duration_seconds >= 150.0 {
-        return vec![
-            SectionTemplate {
-                role: SectionRole::Intro,
-                label: "Intro",
-                energy: SectionEnergy::Low,
-                base_bars: 16,
-                min_bars: 10,
-                max_bars: 18,
-                prompt_template: "Set the stage with {arrangement}, foreshadowing the {motif} motif over a {rhythm} pulse and {texture} atmosphere.",
-                transition: Some("Invite motif"),
-            },
-            SectionTemplate {
-                role: SectionRole::Motif,
-                label: "Motif",
-                energy: SectionEnergy::Medium,
-                base_bars: 20,
-                min_bars: 16,
-                max_bars: 24,
-                prompt_template: "State the {motif} motif in full, letting {arrangement} lock into the {rhythm} while {dynamic} blooms.",
-                transition: Some("Build anticipation"),
-            },
-            SectionTemplate {
-                role: SectionRole::Bridge,
-                label: "Bridge",
-                energy: SectionEnergy::Medium,
-                base_bars: 12,
-                min_bars: 8,
-                max_bars: 16,
-                prompt_template: "Recast the {motif} motif by thinning the layers so {arrangement} can explore contrasting colours before the chorus returns.",
-                transition: Some("Spark chorus"),
-            },
-            SectionTemplate {
-                role: SectionRole::Chorus,
-                label: "Chorus",
-                energy: SectionEnergy::High,
-                base_bars: 24,
-                min_bars: 20,
-                max_bars: 28,
-                prompt_template: "Lift the {motif} motif into an anthemic chorus where {arrangement} drives the groove and {dynamic} peaks.",
-                transition: Some("Glide to outro"),
-            },
-            SectionTemplate {
-                role: SectionRole::Outro,
-                label: "Outro",
-                energy: SectionEnergy::Medium,
-                base_bars: 14,
-                min_bars: 8,
-                max_bars: 18,
-                prompt_template: "Close by reshaping the {motif} motif, letting {arrangement} ease the {rhythm} into a reflective {texture} fade.",
-                transition: Some("Fade to silence"),
-            },
-        ];
-    }
-
-    vec![
-        SectionTemplate {
-            role: SectionRole::Intro,
-            label: "Intro",
-            energy: SectionEnergy::Low,
-            base_bars: 12,
-            min_bars: 8,
-            max_bars: 16,
-            prompt_template: "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop.",
-            transition: Some("Reveal motif"),
-        },
-        SectionTemplate {
-            role: SectionRole::Motif,
-            label: "Motif",
-            energy: SectionEnergy::Medium,
-            base_bars: 18,
-            min_bars: 14,
-            max_bars: 22,
-            prompt_template: "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies.",
-            transition: Some("Ignite chorus"),
-        },
-        SectionTemplate {
-            role: SectionRole::Chorus,
-            label: "Chorus",
-            energy: SectionEnergy::High,
-            base_bars: 24,
-            min_bars: 18,
-            max_bars: 26,
-            prompt_template: "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest.",
-            transition: Some("Settle to outro"),
-        },
-        SectionTemplate {
-            role: SectionRole::Outro,
-            label: "Outro",
-            energy: SectionEnergy::Medium,
-            base_bars: 12,
-            min_bars: 8,
-            max_bars: 16,
-            prompt_template: "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}.",
-            transition: Some("Fade to silence"),
-        },
-    ]
+fn select_long_templates(data: &Lexicon, duration_seconds: f32) -> Vec<SectionTemplate> {
+    data.templates.select_long(duration_seconds)
 }
 
-fn select_short_templates(duration_seconds: f32) -> Vec<SectionTemplate> {
-    if duration_seconds >= 24.0 {
-        return vec![
-            SectionTemplate {
-                role: SectionRole::Intro,
-                label: "Arrival",
-                energy: SectionEnergy::Low,
-                base_bars: 4,
-                min_bars: 3,
-                max_bars: 6,
-                prompt_template: "Set a {texture} scene for {prompt} by introducing the {motif} motif with {instrumentation} over a {rhythm} pulse.",
-                transition: Some("Fade in layers"),
-            },
-            SectionTemplate {
-                role: SectionRole::Motif,
-                label: "Statement",
-                energy: SectionEnergy::Medium,
-                base_bars: 8,
-                min_bars: 6,
-                max_bars: 10,
-                prompt_template: "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins.",
-                transition: Some("Build momentum"),
-            },
-            SectionTemplate {
-                role: SectionRole::Development,
-                label: "Development",
-                energy: SectionEnergy::High,
-                base_bars: 8,
-                min_bars: 6,
-                max_bars: 10,
-                prompt_template: "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds.",
-                transition: Some("Evolve harmonies"),
-            },
-            SectionTemplate {
-                role: SectionRole::Resolution,
-                label: "Resolution",
-                energy: SectionEnergy::Medium,
-                base_bars: 4,
-                min_bars: 3,
-                max_bars: 6,
-                prompt_template: "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}.",
-                transition: Some("Return home"),
-            },
-            SectionTemplate {
-                role: SectionRole::Outro,
-                label: "Release",
-                energy: SectionEnergy::Low,
-                base_bars: 4,
-                min_bars: 2,
-                max_bars: 6,
-                prompt_template: "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey.",
-                transition: Some("Fade to silence"),
-            },
-        ];
-    }
-
-    if duration_seconds >= 16.0 {
-        return vec![
-            SectionTemplate {
-                role: SectionRole::Intro,
-                label: "Lead-in",
-                energy: SectionEnergy::Low,
-                base_bars: 4,
-                min_bars: 2,
-                max_bars: 6,
-                prompt_template: "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}.",
-                transition: Some("Invite motif"),
-            },
-            SectionTemplate {
-                role: SectionRole::Motif,
-                label: "Motif A",
-                energy: SectionEnergy::Medium,
-                base_bars: 8,
-                min_bars: 6,
-                max_bars: 10,
-                prompt_template: "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows.",
-                transition: Some("Increase energy"),
-            },
-            SectionTemplate {
-                role: SectionRole::Development,
-                label: "Variation",
-                energy: SectionEnergy::High,
-                base_bars: 6,
-                min_bars: 4,
-                max_bars: 8,
-                prompt_template: "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies.",
-                transition: Some("Soften textures"),
-            },
-            SectionTemplate {
-                role: SectionRole::Resolution,
-                label: "Cadence",
-                energy: SectionEnergy::Medium,
-                base_bars: 4,
-                min_bars: 2,
-                max_bars: 6,
-                prompt_template: "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}.",
-                transition: Some("Release"),
-            },
-            SectionTemplate {
-                role: SectionRole::Outro,
-                label: "Tail",
-                energy: SectionEnergy::Low,
-                base_bars: 2,
-                min_bars: 1,
-                max_bars: 4,
-                prompt_template: "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out.",
-                transition: Some("Fade"),
-            },
-        ];
-    }
-
-    vec![
-        SectionTemplate {
-            role: SectionRole::Intro,
-            label: "Intro",
-            energy: SectionEnergy::Low,
-            base_bars: 2,
-            min_bars: 1,
-            max_bars: 4,
-            prompt_template: "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}.",
-            transition: Some("Introduce motif"),
-        },
-        SectionTemplate {
-            role: SectionRole::Motif,
-            label: "Motif",
-            energy: SectionEnergy::Medium,
-            base_bars: 6,
-            min_bars: 4,
-            max_bars: 8,
-            prompt_template: "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands.",
-            transition: Some("Lift energy"),
-        },
-    ]
+fn select_short_templates(data: &Lexicon, duration_seconds: f32) -> Vec<SectionTemplate> {
+    data.templates.select_short(duration_seconds)
 }
 
 #[cfg(test)]
