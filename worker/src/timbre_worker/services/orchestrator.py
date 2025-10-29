@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -28,9 +27,9 @@ from .audio_utils import (
     tilt_highs,
     write_waveform,
 )
+from .exceptions import GenerationFailure
 from .musicgen import MusicGenService
 from .planner import CompositionPlanner
-from .riffusion import RiffusionService
 from .types import BackendStatus, SectionPhrase, SectionRender, SectionTrack
 
 
@@ -41,12 +40,10 @@ class ComposerOrchestrator:
         self,
         settings: Settings,
         planner: CompositionPlanner,
-        riffusion: RiffusionService,
         musicgen: MusicGenService,
     ) -> None:
         self._settings = settings
         self._planner = planner
-        self._riffusion = riffusion
         self._musicgen = musicgen
         self._artifact_root = settings.artifact_root
         self._backend_status: Dict[str, BackendStatus] = {}
@@ -56,11 +53,9 @@ class ComposerOrchestrator:
         plan: Optional[CompositionPlan] = None,
         model_hint: Optional[str] = None,
     ) -> Dict[str, BackendStatus]:
-        tokens = self._collect_backend_tokens(plan=plan, model_hint=model_hint)
-        if plan is None and model_hint is None:
-            tokens.update({"musicgen", "riffusion"})
-        statuses = await self._warmup_backends(tokens)
-        return statuses
+        status = await self._musicgen.warmup()
+        self._backend_status["musicgen"] = status
+        return {"musicgen": status}
 
     async def generate(
         self,
@@ -73,9 +68,7 @@ class ComposerOrchestrator:
     ) -> GenerationArtifact:
         plan = request.plan or self._planner.build_plan(request)
         phrases = self._build_phrase_plan(plan)
-        await self._warmup_backends(
-            self._collect_backend_tokens(plan=plan, model_hint=request.model_id)
-        )
+        await self._ensure_musicgen_ready()
 
         tracks: List[SectionTrack] = []
         total_sections = len(plan.sections)
@@ -83,21 +76,20 @@ class ComposerOrchestrator:
         motif_seed_section: CompositionSection | None = None
         for index, section in enumerate(plan.sections):
             phrase = phrases[index]
-            backend = self._select_backend_service(section.model_id or request.model_id or "")
+            resolved_model_id = self._resolve_model_id(section.model_id or request.model_id)
             render_hint = phrase.duration_with_padding
             previous_render = tracks[-1].render if tracks else None
             logger.debug(
-                "Rendering section %s via %s (phrase %.2fs, hint %.2fs)",
+                "Rendering section %s via MusicGen (phrase %.2fs, hint %.2fs)",
                 section.section_id,
-                backend.__class__.__name__,
                 phrase.seconds,
                 render_hint,
             )
-            render = await backend.render_section(
+            render = await self._musicgen.render_section(
                 request,
                 section,
                 plan=plan,
-                model_id=section.model_id or request.model_id,
+                model_id=resolved_model_id,
                 render_seconds=render_hint,
                 theme=plan.theme,
                 previous_render=previous_render,
@@ -113,7 +105,7 @@ class ComposerOrchestrator:
                 section_id=section.section_id,
                 phrase=phrase,
                 render=render,
-                backend=render.extras.get("backend", backend.__class__.__name__.lower()),
+                backend=render.extras.get("backend", "musicgen"),
                 conditioning_tail=conditioning_tail,
                 conditioning_rate=conditioning_rate,
             )
@@ -263,65 +255,29 @@ class ComposerOrchestrator:
                 tail[:fade_samples] *= fade[:, None]
         return tail, sample_rate
 
-    def _collect_backend_tokens(
-        self,
-        *,
-        plan: Optional[CompositionPlan],
-        model_hint: Optional[str],
-    ) -> set[str]:
-        tokens: set[str] = set()
-        if plan is not None:
-            for section in plan.sections:
-                model_id = section.model_id or model_hint or self._settings.default_model_id
-                tokens.add(self._backend_token(model_id))
-        else:
-            tokens.add(self._backend_token(model_hint or self._settings.default_model_id))
-        return tokens
-
-    def _backend_token(self, model_id: str) -> str:
-        token = (model_id or "").lower()
-        if "musicgen" in token or "audiocraft" in token or "facebook/musicgen" in token:
-            return "musicgen"
-        if "riffusion" in token:
-            return "riffusion"
-        if token == "composer":
-            return "musicgen"
-        return "musicgen"
-
-    async def _warmup_backends(self, tokens: Iterable[str]) -> Dict[str, BackendStatus]:
-        token_set = set(tokens)
-        task_map: list[tuple[str, asyncio.Task[BackendStatus]]] = []
-        if "musicgen" in token_set:
-            task_map.append(("musicgen", asyncio.create_task(self._musicgen.warmup())))
-        if "riffusion" in token_set:
-            task_map.append(("riffusion", asyncio.create_task(self._riffusion.warmup())))
-
-        statuses: Dict[str, BackendStatus] = {}
-        if not task_map:
-            return statuses
-
-        for name, task in task_map:
-            try:
-                status = await task
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Backend %s warmup failed", name)
-                status = BackendStatus(
-                    name=name,
-                    ready=False,
-                    device=None,
-                    dtype=None,
-                    error=str(exc),
-                )
-            self._backend_status[name] = status
-            statuses[name] = status
-        logger.info(
-            "Backend warmup status: %s",
-            {name: status.ready for name, status in statuses.items()},
-        )
-        return statuses
-
     def backend_status(self) -> Dict[str, BackendStatus]:
         return dict(self._backend_status)
+
+    async def _ensure_musicgen_ready(self) -> BackendStatus:
+        status = await self._musicgen.warmup()
+        self._backend_status["musicgen"] = status
+        logger.info("MusicGen warmup status: %s", status.ready)
+        return status
+
+    def _resolve_model_id(self, model_id: Optional[str]) -> str:
+        if model_id is None or not model_id.strip():
+            return self._settings.default_model_id
+        token = model_id.strip()
+        lowered = token.lower()
+        if lowered == "composer":
+            return self._settings.default_model_id
+        if (
+            "musicgen" in lowered
+            or "audiocraft" in lowered
+            or "facebook/musicgen" in lowered
+        ):
+            return token
+        raise GenerationFailure(f"unsupported_model:{token}")
 
     def _build_phrase_plan(self, plan: CompositionPlan) -> List[SectionPhrase]:
         tempo = max(plan.tempo_bpm, 1)
@@ -498,12 +454,6 @@ class ComposerOrchestrator:
             "Cb": 11,
         }
         return mapping.get(token)
-
-    def _select_backend_service(self, model_id: str) -> object:
-        token = (model_id or "").lower()
-        if "musicgen" in token or "audiocraft" in token or "facebook/musicgen" in token:
-            return self._musicgen
-        return self._riffusion
 
     def _prepare_section_waveforms(
         self,

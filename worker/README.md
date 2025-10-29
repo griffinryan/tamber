@@ -1,6 +1,6 @@
 # Timbre Worker
 
-FastAPI service that plans, renders, and mixes multi-section audio for the Timbre CLI. Planner v3 handles both long-form (intro → motif → chorus → outro) and short-form requests; the orchestrator stitches MusicGen/Riffusion renders, normalises loudness, and exports mastered WAVs with rich metadata. See `../docs/architecture.md` and `../docs/COMPOSITION.md` for full details.
+FastAPI service that plans, renders, and mixes multi-section audio for the Timbre CLI. Planner v3 handles both long-form (intro → motif → chorus → outro) and short-form requests; the orchestrator stitches MusicGen renders, normalises loudness, and exports mastered WAVs with rich metadata. See `../docs/architecture.md` and `../docs/COMPOSITION.md` for full details.
 
 ---
 
@@ -15,7 +15,7 @@ make setup
 # Optional: tooling & tests
 uv sync --project worker --extra dev
 
-# Optional: full inference stack (MusicGen + Riffusion)
+# Optional: full inference stack (MusicGen checkpoints)
 uv sync --project worker --extra inference   # same as `make setup-musicgen`
 ```
 
@@ -23,7 +23,6 @@ Key env vars:
 
 | Variable | Purpose |
 | --- | --- |
-| `TIMBRE_RIFFUSION_ALLOW_INFERENCE=0` | Force deterministic placeholder renders. |
 | `TIMBRE_INFERENCE_DEVICE=cpu|mps|cuda` | Override device selection. |
 | `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH` | Mastering overrides (default 48 kHz / pcm24). |
 
@@ -38,9 +37,6 @@ make worker-serve              # uvicorn with auto-reload (default localhost:800
 # standalone generation (no HTTP layer)
 uv run --project worker python -m timbre_worker.generate \
     --prompt "dreamy piano over rain" --duration 120
-
-# backend smoke test
-uv run --project worker python scripts/riffusion_smoke.py --duration 24
 ```
 
 HTTP surface:
@@ -79,8 +75,7 @@ worker/
 │  ├─ services/
 │  │  ├─ planner.py   # CompositionPlanner (v3 templates)
 │  │  ├─ orchestrator.py
-│  │  ├─ musicgen.py  # Hugging Face service wrapper
-│  │  ├─ riffusion.py # Diffusion backend + placeholders
+│  │  ├─ musicgen.py  # Hugging Face service wrapper (with placeholders)
 │  │  └─ audio_utils.py
 │  └─ generate.py     # CLI entrypoint for direct renders
 ├─ tests/             # pytest suites mirroring service modules

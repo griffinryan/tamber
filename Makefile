@@ -1,4 +1,4 @@
-.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt smoke
+.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt
 
 setup:
 	uv sync --project worker --extra dev --extra inference
@@ -16,9 +16,6 @@ worker-serve-reload:
 
 cli-run:
 	cargo run -p timbre-cli
-
-smoke:
-	uv run --project worker python scripts/riffusion_smoke.py
 
 fmt:
 	cargo fmt

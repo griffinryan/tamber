@@ -26,9 +26,6 @@ make lint               # cargo fmt --check, clippy, ruff, mypy
 make test               # cargo test + pytest
 make fmt                # cargo fmt only
 
-# Smoke testing
-make smoke              # scripts/riffusion_smoke.py
-
 # Running individual test suites
 cargo test              # Rust unit tests
 uv run --project worker pytest                    # All Python tests
@@ -92,10 +89,10 @@ Request/response contracts appear in three places and must stay aligned:
 The worker orchestrator (`worker/src/timbre_worker/services/orchestrator.py`) follows a strict sequence:
 
 ```
-warmup() → render_composition()
-  ├─ _warmup_backends()
+warmup() → generate()
+  ├─ _ensure_musicgen_ready()
   ├─ _render_section() (sequential, per section)
-  │   ├─ backend.render() (MusicGen/Riffusion)
+  │   ├─ musicgen.render_section()
   │   ├─ _capture_motif_stem() (first motif section only)
   │   └─ _shape_to_target_length()
   ├─ _assemble_mix()
@@ -121,7 +118,7 @@ warmup() → render_composition()
 
 ### 4. Backend Service Pattern
 
-Both MusicGen and Riffusion follow a consistent service interface:
+The MusicGen backend follows a simple service interface:
 
 ```python
 class Backend:
@@ -130,16 +127,16 @@ class Backend:
 ```
 
 **Placeholder fallback strategy:**
-- Services detect missing dependencies at `warmup()` and return `ready=False`
-- `render()` calls emit deterministic sine/noise placeholders when dependencies are missing
+- The service detects missing dependencies at `warmup()` and returns `ready=False`
+- `render()` emits deterministic sine/noise placeholders when dependencies are missing
 - Metadata always includes `placeholder=True` and `placeholder_reason` when fallback is active
-- CLI checks `TIMBRE_RIFFUSION_ALLOW_INFERENCE` and `TIMBRE_INFERENCE_DEVICE` env vars
+- CLI reads `TIMBRE_INFERENCE_DEVICE` to align UI messaging with worker configuration
 
 **When adding a new backend:**
 1. Implement the service interface in `worker/src/timbre_worker/services/`
-2. Add to orchestrator's `_warmup_backends()` and `_render_section()` dispatch
+2. Update `ComposerOrchestrator` to warm up and dispatch to the new service
 3. Define placeholder behavior for missing dependencies
-4. Add section extras fields to capture backend-specific parameters
+4. Extend section extras to capture backend-specific parameters
 5. Update Rust types if new metadata fields are required
 
 ---
@@ -195,7 +192,6 @@ class Backend:
 
 - Settings via `worker/src/timbre_worker/app/settings.py` (pydantic-settings)
 - Key env vars:
-  - `TIMBRE_RIFFUSION_ALLOW_INFERENCE` (set `0` to force placeholder mode)
   - `TIMBRE_INFERENCE_DEVICE` (`cpu`, `mps`, or `cuda`)
   - `TIMBRE_EXPORT_SAMPLE_RATE` (default: 48000)
   - `TIMBRE_EXPORT_BIT_DEPTH` (default: `pcm24`)
@@ -306,7 +302,7 @@ The `metadata.extras` field captures:
 2. Inspect `mix.crossfades[*].mode` to see join strategy
 3. Verify `audio_conditioning_applied` flags match expectations
 4. Review section RMS values in `mix.section_rms`
-5. Test with `scripts/riffusion_smoke.py` to isolate worker behavior
+5. Trigger a direct render via `uv run --project worker python -m timbre_worker.generate` to isolate worker behavior
 6. Use `TIMBRE_INFERENCE_DEVICE=cpu` to bypass MPS if GPU suspected
 
 ---
@@ -333,7 +329,7 @@ worker/src/timbre_worker/
     planner.py        Composition planner v3 (must match cli/planner.rs)
     orchestrator.py   Pipeline coordinator (warmup → render → mix → master)
     musicgen.py       MusicGen backend
-    riffusion.py      Riffusion backend
+    exceptions.py     Shared service exceptions
     audio_utils.py    DSP utilities (RMS, crossfade, mastering)
     types.py          Internal dataclasses (SectionRender, etc.)
 

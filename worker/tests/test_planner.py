@@ -7,7 +7,7 @@ def test_planner_builds_deterministic_plan() -> None:
     request = GenerationRequest(
         prompt="lofi piano over rain",
         duration_seconds=16,
-        model_id="riffusion-v1",
+        model_id="musicgen-stereo-medium",
     )
     plan_a = planner.build_plan(request)
     plan_b = planner.build_plan(request)
@@ -28,7 +28,7 @@ def test_planner_collapses_short_duration() -> None:
     request = GenerationRequest(
         prompt="quick arp",
         duration_seconds=8,
-        model_id="riffusion-v1",
+        model_id="musicgen-stereo-medium",
     )
     plan = planner.build_plan(request)
     assert len(plan.sections) <= 2

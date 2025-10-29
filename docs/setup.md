@@ -54,7 +54,7 @@ uv sync --project worker --extra dev
 uv sync --project worker --extra inference
 ```
 
-The `inference` extra provides PyTorch, Diffusers, Torchaudio, and Hugging Face tooling required for both Riffusion and MusicGen checkpoints. You can install everything (dev + inference) in one go:
+The `inference` extra provides PyTorch, Torchaudio, and Hugging Face tooling required for MusicGen checkpoints. You can install everything (dev + inference) in one go:
 
 ```bash
 uv sync --project worker --extra dev --extra inference
@@ -64,12 +64,6 @@ Alternatively, run the convenience target from the repo root to fetch the infere
 
 ```bash
 make setup-musicgen
-```
-
-Verify the environment by running the bundled smoke test (exits non-zero when the real pipeline cannot load and we fall back to placeholder audio):
-
-```bash
-uv run --project worker python ../scripts/riffusion_smoke.py
 ```
 
 Ensure PyTorch detects the Metal (MPS) backend if you plan to run on GPU:
@@ -84,7 +78,7 @@ If the MPS backend yields distorted or noisy audio, force the worker to fall bac
 `TIMBRE_INFERENCE_DEVICE=cpu` before launching `make worker-serve`. The worker now also prefers
 float32 precision on MPS to avoid the white-noise artefacts seen with float16.
 
-During automated testing or when you want to skip heavyweight model loads, disable Riffusion inference entirely by setting `TIMBRE_RIFFUSION_ALLOW_INFERENCE=0`. The worker will emit deterministic placeholder audio while keeping the rest of the pipeline reachable. You can also force a device (`TIMBRE_INFERENCE_DEVICE=cpu|mps|cuda`) when torch auto-detection is undesirable.
+During automated testing or when you want to skip heavyweight model loads, simply omit the inference extras—the worker will emit deterministic placeholder audio while keeping the rest of the pipeline reachable. You can also force a device (`TIMBRE_INFERENCE_DEVICE=cpu|mps|cuda`) when torch auto-detection is undesirable.
 
 ### Default durations
 

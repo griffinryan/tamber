@@ -351,14 +351,9 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
 
     lines.push(Line::from(vec![Span::raw(format!("Config: {}", app.config_summary()))]));
     if let Some(model) = app.last_submission_model() {
-        let style = if model.contains("riffusion") {
-            Style::default().fg(Color::LightMagenta)
-        } else {
-            Style::default().fg(Color::LightGreen)
-        };
         lines.push(Line::from(vec![Span::styled(
             format!("Last render: {model}"),
-            style.add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
         )]));
     }
     if app.status_lines.is_empty() {

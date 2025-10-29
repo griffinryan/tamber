@@ -18,7 +18,6 @@ from .app.settings import Settings
 from .services.musicgen import MusicGenService
 from .services.orchestrator import ComposerOrchestrator
 from .services.planner import CompositionPlanner
-from .services.riffusion import RiffusionService
 
 
 def _parse_args() -> argparse.Namespace:
@@ -68,9 +67,8 @@ async def _run(
     settings.ensure_directories()
 
     planner = CompositionPlanner()
-    riffusion = RiffusionService(settings)
     musicgen = MusicGenService(settings=settings)
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
 
     request = GenerationRequest(
         prompt=prompt,

@@ -20,7 +20,7 @@
 
 ## Configuration & Environment
 - User config defaults live at `~/.config/timbre/config.toml`; override with `TIMBRE_CONFIG_PATH` or individual keys (`TIMBRE_WORKER_URL`, `TIMBRE_DEFAULT_MODEL`, `TIMBRE_DEFAULT_DURATION`, `TIMBRE_ARTIFACT_DIR`).
-- Worker settings mirror these via `pydantic-settings`. Relevant overrides: `TIMBRE_RIFFUSION_ALLOW_INFERENCE`, `TIMBRE_INFERENCE_DEVICE`, `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH`, default model IDs, etc. Planner v3 now emits orchestration metadata—keep Python + Rust planners in sync when editing templates.
+- Worker settings mirror these via `pydantic-settings`. Relevant overrides: `TIMBRE_INFERENCE_DEVICE`, `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH`, default model IDs, etc. Planner v3 now emits orchestration metadata—keep Python + Rust planners in sync when editing templates.
 - Never commit secrets (API keys, tokens). Export them via environment variables or shell profiles.
 
 ## TUI Interaction Patterns

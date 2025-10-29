@@ -19,7 +19,7 @@ from timbre_worker.app.models import (
     SectionOrchestration,
     SectionRole,
 )
-from timbre_worker.services.riffusion import GenerationFailure
+from timbre_worker.services.exceptions import GenerationFailure
 from timbre_worker.services.types import SectionRender
 
 
@@ -111,7 +111,7 @@ class FailingOrchestrator(StubOrchestrator):
 async def test_job_manager_success_flow(tmp_path: Path) -> None:
     orchestrator = StubOrchestrator(tmp_path)
     manager = JobManager(orchestrator)
-    request = GenerationRequest(prompt="hello", duration_seconds=2, model_id="riffusion-v1")
+    request = GenerationRequest(prompt="hello", duration_seconds=2, model_id="musicgen-stereo-medium")
 
     status = await manager.enqueue(request)
     assert status.state == JobState.QUEUED
@@ -127,7 +127,7 @@ async def test_job_manager_success_flow(tmp_path: Path) -> None:
 async def test_job_manager_failure_flow(tmp_path: Path) -> None:
     orchestrator = FailingOrchestrator(tmp_path)
     manager = JobManager(orchestrator)
-    request = GenerationRequest(prompt="oops", duration_seconds=2, model_id="riffusion-v1")
+    request = GenerationRequest(prompt="oops", duration_seconds=2, model_id="musicgen-stereo-medium")
 
     status = await manager.enqueue(request)
     assert status.state == JobState.QUEUED

@@ -13,7 +13,6 @@ const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
 const MIN_DURATION_SECONDS: u8 = 90;
 const MAX_DURATION_SECONDS: u8 = 180;
-const FALLBACK_RIFFUSION_MODEL_ID: &str = "riffusion-v1";
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -228,13 +227,11 @@ pub struct AppState {
     playback: Option<PlaybackState>,
     planner: CompositionPlanner,
     musicgen_default_model_id: Option<String>,
-    riffusion_default_model_id: Option<String>,
 }
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
         let musicgen_default_model_id = config.default_model_id().to_string();
-        let riffusion_default_model_id = FALLBACK_RIFFUSION_MODEL_ID.to_string();
         Self {
             input: String::new(),
             chat: Vec::new(),
@@ -255,7 +252,6 @@ impl AppState {
             app_config: config,
             planner: CompositionPlanner::new(),
             musicgen_default_model_id: Some(musicgen_default_model_id),
-            riffusion_default_model_id: Some(riffusion_default_model_id),
         }
     }
 
@@ -380,12 +376,6 @@ impl AppState {
             self.musicgen_default_model_id = Some(default_musicgen.trim().to_string());
         }
 
-        if let Some(default_riffusion) =
-            payload.get("riffusion_default_model_id").and_then(Value::as_str)
-        {
-            self.riffusion_default_model_id = Some(default_riffusion.trim().to_string());
-        }
-
         if let Some(default_model) = payload.get("default_model_id").and_then(Value::as_str) {
             if self.generation_config.model_id == self.app_config.default_model_id() {
                 self.generation_config.model_id = default_model.trim().to_string();
@@ -435,15 +425,12 @@ impl AppState {
     }
 
     pub fn default_model_for(&self, alias: &str) -> Option<String> {
-        match alias {
-            "musicgen" => Some(Self::sanitized_model(&self.musicgen_default_model_id, || {
+        if alias == "musicgen" {
+            return Some(Self::sanitized_model(&self.musicgen_default_model_id, || {
                 self.app_config.default_model_id().to_string()
-            })),
-            "riffusion" => Some(Self::sanitized_model(&self.riffusion_default_model_id, || {
-                FALLBACK_RIFFUSION_MODEL_ID.to_string()
-            })),
-            _ => None,
+            }));
         }
+        None
     }
 
     fn sanitized_model(candidate: &Option<String>, fallback: impl FnOnce() -> String) -> String {
@@ -473,9 +460,6 @@ impl AppState {
             model_id: self.generation_config.model_id.clone(),
             cfg_scale: self.generation_config.cfg_scale,
             scheduler: None,
-            riffusion_num_inference_steps: None,
-            riffusion_guidance_scale: None,
-            riffusion_scheduler: None,
             musicgen_top_k: None,
             musicgen_top_p: None,
             musicgen_temperature: None,
@@ -517,13 +501,6 @@ impl AppState {
             "musicgen" => {
                 let model = self
                     .default_model_for("musicgen")
-                    .unwrap_or_else(|| self.generation_config.model_id.clone());
-                self.generation_config.model_id = model.clone();
-                Ok(format!("Model set to {model}"))
-            }
-            "riffusion" => {
-                let model = self
-                    .default_model_for("riffusion")
                     .unwrap_or_else(|| self.generation_config.model_id.clone());
                 self.generation_config.model_id = model.clone();
                 Ok(format!("Model set to {model}"))
@@ -576,7 +553,7 @@ impl AppState {
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
                 format!(
-                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /riffusion, /cfg <scale|off>, /seed <value|off>, /show, /reset"
+                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /cfg <scale|off>, /seed <value|off>, /show, /reset"
                 ),
             ),
             other => Err(format!("Unknown command `{other}`")),
@@ -845,12 +822,12 @@ mod tests {
         let metadata = GenerationMetadata {
             prompt: "dreamy pianos".into(),
             seed: Some(42),
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             duration_seconds: 8,
             extras: json!({
-                "backend": "riffusion",
+                "backend": "musicgen",
                 "placeholder": false,
-                "guidance_scale": 7.0,
+                "guidance_scale": 3.0,
                 "sample_rate": 44100,
                 "prompt_hash": "abc123ef"
             }),
@@ -867,7 +844,7 @@ mod tests {
         };
 
         let (status_line, chat_line) = completion_messages(&status, &artifact);
-        assert!(status_line.contains("riffusion"));
+        assert!(status_line.contains("musicgen"));
         assert!(status_line.contains("8s"));
         assert!(status_line.contains("44100 Hz"));
         assert!(status_line.contains("hash abc123ef"));
@@ -887,10 +864,10 @@ mod tests {
         let metadata = GenerationMetadata {
             prompt: "stormy guitars".into(),
             seed: None,
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             duration_seconds: 6,
             extras: json!({
-                "backend": "riffusion",
+                "backend": "musicgen",
                 "placeholder": true,
                 "placeholder_reason": "pipeline_unavailable",
                 "prompt_hash": "deadbeef"
@@ -908,7 +885,7 @@ mod tests {
         };
 
         let (status_line, chat_line) = completion_messages(&status, &artifact);
-        assert!(status_line.contains("placeholder via riffusion"));
+        assert!(status_line.contains("placeholder via musicgen"));
         assert!(status_line.contains("reason: pipeline_unavailable"));
         assert!(!status_line.contains("Hz"));
         assert!(chat_line.contains("hash deadbeef"));
@@ -927,10 +904,10 @@ mod tests {
         let metadata = GenerationMetadata {
             prompt: "seeded run".into(),
             seed: Some(7),
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             duration_seconds: 5,
             extras: json!({
-                "backend": "riffusion",
+                "backend": "musicgen",
                 "placeholder": false,
                 "guidance_scale": 4.0,
                 "sample_rate": 44100,
@@ -960,12 +937,9 @@ mod tests {
             prompt: "test".into(),
             seed: Some(99),
             duration_seconds: 12,
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             cfg_scale: Some(5.5),
             scheduler: None,
-            riffusion_num_inference_steps: None,
-            riffusion_guidance_scale: None,
-            riffusion_scheduler: None,
             musicgen_top_k: None,
             musicgen_top_p: None,
             musicgen_temperature: None,
@@ -977,7 +951,7 @@ mod tests {
             plan: None,
         };
         let summary = format_request_summary(&request);
-        assert!(summary.contains("riffusion-v1"));
+        assert!(summary.contains("musicgen-stereo-medium"));
         assert!(summary.contains("12s"));
         assert!(summary.contains("cfg 5.5"));
         assert!(summary.contains("seed 99"));

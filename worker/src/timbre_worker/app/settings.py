@@ -32,36 +32,6 @@ class Settings(BaseSettings):
         default=None,
         description="Override inference device selection (cpu, mps, cuda).",
     )
-    riffusion_allow_inference: bool = Field(
-        default=True,
-        description="Enable Riffusion pipeline loading; disable to force placeholder audio.",
-    )
-    riffusion_default_model_id: str = Field(
-        default="riffusion-v1",
-        max_length=128,
-        description="Default model identifier for the Riffusion backend.",
-    )
-    riffusion_num_inference_steps: int = Field(
-        default=75,
-        ge=1,
-        le=200,
-        description="Default number of diffusion steps for Riffusion renders.",
-    )
-    riffusion_guidance_scale: float = Field(
-        default=8.5,
-        ge=0.0,
-        le=20.0,
-        description="Default classifier-free guidance scale for Riffusion renders.",
-    )
-    riffusion_scheduler: str = Field(
-        default="dpmpp_2m",
-        max_length=64,
-        description="Default scheduler identifier for Riffusion diffusion pipeline.",
-    )
-    riffusion_enable_phase_refinement: bool = Field(
-        default=True,
-        description="Enable an additional phase refinement pass after spectrogram inversion.",
-    )
     musicgen_default_model_id: str = Field(
         default="musicgen-stereo-medium",
         max_length=128,
@@ -126,10 +96,6 @@ class Settings(BaseSettings):
                 self.musicgen_default_model_id = self.default_model_id
         elif "default_model_id" not in self.model_fields_set:
             self.default_model_id = self.musicgen_default_model_id
-
-        if "riffusion_default_model_id" not in self.model_fields_set:
-            if self.default_model_id.lower().startswith("riffusion"):
-                self.riffusion_default_model_id = self.default_model_id
 
         return self
 

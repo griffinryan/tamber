@@ -86,6 +86,6 @@ When adding new metadata, update `docs/schemas/`, the Rust `SectionExtras` struc
 
 - **Clips sound chopped**: Check `extras.mix.crossfades`—if modes show `butt` but conditioning was expected, inspect `audio_conditioning_applied` flags in section extras.
 - **Planner tests failing**: Often due to mismatched template definitions between Python and Rust. Regenerate both sides when editing templates.
-- **Placeholder audio surfacing unexpectedly**: Confirm `TIMBRE_RIFFUSION_ALLOW_INFERENCE`/`TIMBRE_INFERENCE_DEVICE` values and inspect section extras for `placeholder_reason`.
+- **Placeholder audio surfacing unexpectedly**: Confirm `TIMBRE_INFERENCE_DEVICE` value and inspect section extras for `placeholder_reason`.
 
 Keep this file updated whenever planner templates, orchestration metadata, or mix behaviour changes.

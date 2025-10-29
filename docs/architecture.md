@@ -8,7 +8,7 @@ This document describes how the current Timbre stack fits together: the Ratatui 
 
 1. Provide a terminal-first workflow for exploring prompt → music ideas in seconds.
 2. Keep planning, rendering, and asset management deterministic so sessions are reproducible.
-3. Support “light” operation (placeholder audio, no GPU) as well as full inference pipelines (MusicGen, Riffusion) on Apple Silicon.
+3. Support “light” operation (placeholder audio, no GPU) as well as full MusicGen inference on Apple Silicon.
 4. Leave space for future clients (desktop UI, web) by keeping the API boundary clean.
 
 ---
@@ -22,7 +22,7 @@ This document describes how the current Timbre stack fits together: the Ratatui 
 │ tokio + reqwest client   │ Submit GenerationRequest          │ FastAPI/uvicorn          │
 │ planner mirror (Rust)    │ Poll GenerationStatus             │ Composition planner v3   │
 │ status + chat UI         │ Download GenerationArtifact       │ Composer orchestrator    │
-│ rodio playback           │                                   │ MusicGen + Riffusion     │
+│ rodio playback           │                                   │ MusicGen backend         │
 └──────────────────────────┘                                   └──────────────────────────┘
              │                                                             │
              │ Local filesystem copies                                     │
@@ -62,9 +62,9 @@ Outputs feed both the worker orchestrator and the CLI status view through `plan.
 
 The orchestrator coordinates renders and assembles the final mix:
 
-1. **Warmup**: inspects plan sections to decide which backends to load (`musicgen`, `riffusion`). Missing backends annotate status but don’t abort.
+1. **Warmup**: primes the MusicGen backend based on the plan/model hint so renders can start without on-demand weight loads.
 2. **Section rendering**: for each section
-   - Builds MusicGen/Riffusion prompts using the planner data and previous motif tail.
+   - Builds MusicGen prompts using the planner data and previous motif tail.
    - Passes section-specific render hints (`target_seconds`, padding driven by tempo).
    - Stores render extras (backend, conditioning info, sampling params) for CLI tooling.
 3. **Motif capture**: first “motif seed” section is exported as a standalone WAV with spectral metadata.
@@ -89,14 +89,6 @@ Artifacts land in `Settings.artifact_root` (defaults to `~/Music/Timbre`). Metad
 - Prompt construction combines planner template text, arrangement sentence (“Elevate the arrangement with …”), and theme hints.
 - Extras include sampling hyperparameters (`top_k`, `top_p`, `temperature`, `cfg_coef`, `two_step_cfg`), arrangement text, orchestration payload, and conditioning info.
 - When dependencies are missing a deterministic sine/noise placeholder is produced with matching metadata.
-
-### Riffusion (`worker/services/riffusion.py`)
-
-- Loads the spectrogram diffusion pipeline when allowed, otherwise returns placeholders.
-- `_fallback_plan` still emits a single-section motif plan so metadata remains consistent.
-- Spectrogram decoder prefers stereo and float32 on MPS to avoid artefacts.
-
----
 
 ## 6. CLI (Rust `cli/`)
 
@@ -139,7 +131,6 @@ See also `docs/setup.md`.
 | --- | --- | --- |
 | `Settings.default_duration_seconds` | Worker `app/settings.py` | Defaults to 120 but clamps between 90–180 for long-form; short-form requests allowed via API. |
 | `TIMBRE_DEFAULT_DURATION` | CLI env override; values < 90 get clamped to 90. |
-| `TIMBRE_RIFFUSION_ALLOW_INFERENCE` | Disables Riffusion pipeline when set to `0`. |
 | `TIMBRE_INFERENCE_DEVICE` | Force `cpu`/`mps`/`cuda`. |
 | `TIMBRE_EXPORT_SAMPLE_RATE` / `BIT_DEPTH` / `FORMAT` | Mastering export settings. |
 | `TIMBRE_ARTIFACT_DIR` | CLI copy destination (defaults to `~/Music/Timbre`). |
@@ -159,7 +150,6 @@ Testing shortcuts:
 
 - `cargo test` (Rust planner/UI). Expects orchestrator extras to remain stable.
 - `uv run --project worker pytest` (Python planner/orchestrator/backends). Install `--extra dev` for linting, `--extra inference` for real renders.
-- `scripts/riffusion_smoke.py` for quick backend validation (respects env overrides).
 
 ---
 

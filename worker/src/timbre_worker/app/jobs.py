@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from loguru import logger
 
+from ..services.exceptions import GenerationFailure
 from ..services.orchestrator import ComposerOrchestrator
-from ..services.riffusion import GenerationFailure
 from ..services.types import SectionRender
 from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
 

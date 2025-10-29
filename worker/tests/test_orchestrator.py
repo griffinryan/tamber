@@ -15,6 +15,7 @@ from timbre_worker.app.models import (
     SectionRole,
 )
 from timbre_worker.app.settings import Settings
+from timbre_worker.services.exceptions import GenerationFailure
 from timbre_worker.services.orchestrator import ComposerOrchestrator
 from timbre_worker.services.types import BackendStatus, SectionRender
 
@@ -25,7 +26,7 @@ class PassthroughPlanner:
         return request.plan
 
 
-class DummyBackend:
+class DummyMusicGen:
     def __init__(self, name: str) -> None:
         self.name = name
         self.calls: List[str] = []
@@ -67,7 +68,7 @@ class DummyBackend:
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
 
-class PlaceholderBackend(DummyBackend):
+class PlaceholderBackend(DummyMusicGen):
     async def render_section(
         self,
         request: GenerationRequest,
@@ -101,7 +102,7 @@ def build_plan(duration: float = 6.0) -> CompositionPlan:
             bars=2,
             target_seconds=duration / 2,
             energy=SectionEnergy.LOW,
-            model_id="riffusion-v1",
+            model_id="musicgen-stereo-medium",
             seed_offset=0,
             transition=None,
             orchestration=SectionOrchestration(),
@@ -143,15 +144,14 @@ def build_request(plan: CompositionPlan) -> GenerationRequest:
 @pytest.mark.asyncio
 async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
-    riffusion = DummyBackend("riffusion")
-    musicgen = DummyBackend("musicgen")
+    musicgen = DummyMusicGen("musicgen")
     settings = Settings(
         artifact_root=tmp_path / "artifacts",
         config_dir=tmp_path / "config",
     )
     settings.ensure_directories()
 
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
 
     plan = build_plan()
     request = build_request(plan)
@@ -174,7 +174,6 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
 
     backend_status = orchestrator.backend_status()
     assert backend_status.get("musicgen") is not None
-    assert backend_status.get("riffusion") is not None
 
     assert Path(artifact.artifact_path).exists()
     assert len(progress_calls) == len(plan.sections)
@@ -228,33 +227,30 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_orchestrator_warmup_reports_backend_status(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
-    riffusion = DummyBackend("riffusion")
-    musicgen = DummyBackend("musicgen")
+    musicgen = DummyMusicGen("musicgen")
     settings = Settings(
         artifact_root=tmp_path / "artifacts",
         config_dir=tmp_path / "config",
     )
     settings.ensure_directories()
 
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
     statuses = await orchestrator.warmup()
     assert statuses.get("musicgen") is not None
-    assert statuses.get("riffusion") is not None
-    assert orchestrator.backend_status().keys() >= {"musicgen", "riffusion"}
+    assert orchestrator.backend_status().keys() >= {"musicgen"}
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
-    riffusion = PlaceholderBackend("riffusion")
-    musicgen = DummyBackend("musicgen")
+    musicgen = PlaceholderBackend("musicgen")
     settings = Settings(
         artifact_root=tmp_path / "artifacts",
         config_dir=tmp_path / "config",
     )
     settings.ensure_directories()
 
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
 
     plan = build_plan(duration=4.0)
     request = build_request(plan)
@@ -276,3 +272,24 @@ async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
         meta.get("left_placeholder") or meta.get("right_placeholder")
         for meta in (entry.get("conditioning", {}) for entry in crossfades)
     )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_unsupported_models(tmp_path: Path) -> None:
+    planner = PassthroughPlanner()
+    musicgen = DummyMusicGen("musicgen")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
+    )
+    settings.ensure_directories()
+
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
+
+    plan = build_plan()
+    for section in plan.sections:
+        section.model_id = "riffusion-v1"
+    request = build_request(plan)
+
+    with pytest.raises(GenerationFailure):
+        await orchestrator.generate(job_id="unsupported", request=request)
