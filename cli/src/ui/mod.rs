@@ -132,7 +132,8 @@ fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
 }
 
 fn render_prompt(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let mut block = Block::default().title("Prompt").borders(Borders::ALL);
+    let prompt_title = app.prompt_panel_title();
+    let mut block = Block::default().title(prompt_title).borders(Borders::ALL);
     if app.focused_pane == FocusedPane::Prompt {
         block = block.border_style(pane_border(app, FocusedPane::Prompt));
     } else {
@@ -349,6 +350,17 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     }
 
     lines.push(Line::from(vec![Span::raw(format!("Config: {}", app.config_summary()))]));
+    if let Some(model) = app.last_submission_model() {
+        let style = if model.contains("riffusion") {
+            Style::default().fg(Color::LightMagenta)
+        } else {
+            Style::default().fg(Color::LightGreen)
+        };
+        lines.push(Line::from(vec![Span::styled(
+            format!("Last render: {model}"),
+            style.add_modifier(Modifier::BOLD),
+        )]));
+    }
     if app.status_lines.is_empty() {
         lines.push(Line::from(vec![Span::raw("No activity yet.")]))
     } else {
@@ -445,19 +457,17 @@ fn handle_key(
 ) -> Result<bool> {
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
-        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('q') if matches!(app.input_mode, InputMode::Normal) => return Ok(true),
         KeyCode::Char('s') if matches!(app.focused_pane, FocusedPane::Status) => {
             let _ = command_tx.send(AppCommand::StopPlayback);
         }
-        KeyCode::Char('i') => {
-            if app.input_mode != InputMode::Insert {
-                app.input_mode = InputMode::Insert;
-                if matches!(app.focused_pane, FocusedPane::Conversation) {
-                    app.chat_following = false;
-                }
-                if matches!(app.focused_pane, FocusedPane::Status) {
-                    app.status_following = false;
-                }
+        KeyCode::Char('i') if matches!(app.input_mode, InputMode::Normal) => {
+            app.input_mode = InputMode::Insert;
+            if matches!(app.focused_pane, FocusedPane::Conversation) {
+                app.chat_following = false;
+            }
+            if matches!(app.focused_pane, FocusedPane::Status) {
+                app.status_following = false;
             }
         }
         KeyCode::Esc => {
@@ -556,24 +566,50 @@ fn handle_key(
                 return Ok(false);
             }
 
-            if line.starts_with('/') {
-                match app.handle_command(&line) {
-                    Ok(message) => {
-                        app.push_status_line(message.clone());
-                        app.append_chat(ChatRole::System, message);
-                    }
-                    Err(err) => {
-                        let message = format!("Command error: {err}");
-                        app.push_status_line(message.clone());
-                        app.append_chat(ChatRole::System, message);
-                    }
+            let mut prompt_text = line.clone();
+            let mut inline_model_override: Option<String> = None;
+
+            if let Some(stripped) = line.strip_prefix('/') {
+                let trimmed = stripped.trim_start();
+                if trimmed.is_empty() {
+                    dispatch_app_command(app, &line);
+                    app.input.clear();
+                    return Ok(false);
                 }
+
+                if let Some(command_token) = trimmed.split_whitespace().next() {
+                    let command_lower = command_token.to_ascii_lowercase();
+                    let rest = trimmed[command_token.len()..].trim_start();
+
+                    if let Some(model_id) = app.default_model_for(&command_lower) {
+                        if rest.is_empty() {
+                            dispatch_app_command(app, &line);
+                            app.input.clear();
+                            return Ok(false);
+                        }
+                        inline_model_override = Some(model_id);
+                        prompt_text = rest.to_string();
+                    } else {
+                        dispatch_app_command(app, &line);
+                        app.input.clear();
+                        return Ok(false);
+                    }
+                } else {
+                    app.input.clear();
+                    return Ok(false);
+                }
+            }
+
+            if prompt_text.is_empty() {
                 app.input.clear();
                 return Ok(false);
             }
 
-            let prompt = line;
-            let (request, plan) = app.build_generation_payload(&prompt);
+            let prompt = prompt_text;
+            let (mut request, plan) = app.build_generation_payload(&prompt);
+            if let Some(model_id) = inline_model_override {
+                request.model_id = model_id;
+            }
             app.append_chat(ChatRole::User, prompt.clone());
             if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {
                 app.push_status_line("Failed to submit prompt; worker channel closed".into());
@@ -596,6 +632,20 @@ fn handle_key(
     }
 
     Ok(false)
+}
+
+fn dispatch_app_command(app: &mut AppState, command_line: &str) {
+    match app.handle_command(command_line) {
+        Ok(message) => {
+            app.push_status_line(message.clone());
+            app.append_chat(ChatRole::System, message);
+        }
+        Err(err) => {
+            let message = format!("Command error: {err}");
+            app.push_status_line(message.clone());
+            app.append_chat(ChatRole::System, message);
+        }
+    }
 }
 
 fn chat_style(role: &ChatRole) -> Style {

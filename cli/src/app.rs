@@ -13,6 +13,7 @@ const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
 const MIN_DURATION_SECONDS: u8 = 90;
 const MAX_DURATION_SECONDS: u8 = 180;
+const FALLBACK_RIFFUSION_MODEL_ID: &str = "riffusion-v1";
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -221,14 +222,19 @@ pub struct AppState {
     pub status_following: bool,
     pub input_mode: InputMode,
     pub backend_status: Vec<BackendHealthStatus>,
+    pub last_submission_model_id: Option<String>,
     app_config: AppConfig,
     generation_config: GenerationConfig,
     playback: Option<PlaybackState>,
     planner: CompositionPlanner,
+    musicgen_default_model_id: Option<String>,
+    riffusion_default_model_id: Option<String>,
 }
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
+        let musicgen_default_model_id = config.default_model_id().to_string();
+        let riffusion_default_model_id = FALLBACK_RIFFUSION_MODEL_ID.to_string();
         Self {
             input: String::new(),
             chat: Vec::new(),
@@ -243,10 +249,13 @@ impl AppState {
             status_following: true,
             input_mode: InputMode::Normal,
             backend_status: Vec::new(),
+            last_submission_model_id: None,
             playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
             planner: CompositionPlanner::new(),
+            musicgen_default_model_id: Some(musicgen_default_model_id),
+            riffusion_default_model_id: Some(riffusion_default_model_id),
         }
     }
 
@@ -269,6 +278,7 @@ impl AppState {
                         artifact: None,
                     },
                 );
+                self.last_submission_model_id = Some(request.model_id.clone());
                 self.focused_job = Some(status.job_id.clone());
                 let summary = format_request_summary(&request);
                 self.push_status_line(format!("Job {} queued ({summary})", status.job_id));
@@ -363,6 +373,27 @@ impl AppState {
             statuses.sort_by(|a, b| a.name.cmp(&b.name));
             self.backend_status = statuses;
         }
+
+        if let Some(default_musicgen) =
+            payload.get("musicgen_default_model_id").and_then(Value::as_str)
+        {
+            self.musicgen_default_model_id = Some(default_musicgen.trim().to_string());
+        }
+
+        if let Some(default_riffusion) =
+            payload.get("riffusion_default_model_id").and_then(Value::as_str)
+        {
+            self.riffusion_default_model_id = Some(default_riffusion.trim().to_string());
+        }
+
+        if let Some(default_model) = payload.get("default_model_id").and_then(Value::as_str) {
+            if self.generation_config.model_id == self.app_config.default_model_id() {
+                self.generation_config.model_id = default_model.trim().to_string();
+            }
+            if self.musicgen_default_model_id.is_none() {
+                self.musicgen_default_model_id = Some(default_model.trim().to_string());
+            }
+        }
     }
 
     pub fn append_chat(&mut self, role: ChatRole, content: String) {
@@ -393,6 +424,40 @@ impl AppState {
 
     pub fn config_summary(&self) -> String {
         self.generation_config.summary()
+    }
+
+    pub fn prompt_panel_title(&self) -> String {
+        format!("Prompt · Model {}", self.generation_config.model_id)
+    }
+
+    pub fn last_submission_model(&self) -> Option<&str> {
+        self.last_submission_model_id.as_deref()
+    }
+
+    pub fn default_model_for(&self, alias: &str) -> Option<String> {
+        match alias {
+            "musicgen" => Some(Self::sanitized_model(&self.musicgen_default_model_id, || {
+                self.app_config.default_model_id().to_string()
+            })),
+            "riffusion" => Some(Self::sanitized_model(&self.riffusion_default_model_id, || {
+                FALLBACK_RIFFUSION_MODEL_ID.to_string()
+            })),
+            _ => None,
+        }
+    }
+
+    fn sanitized_model(candidate: &Option<String>, fallback: impl FnOnce() -> String) -> String {
+        candidate
+            .as_ref()
+            .and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .unwrap_or_else(fallback)
     }
 
     pub fn build_generation_payload(&self, prompt: &str) -> (GenerationRequest, CompositionPlan) {
@@ -449,6 +514,20 @@ impl AppState {
                 self.generation_config.duration_seconds = value;
                 Ok(format!("Duration set to {value}s"))
             }
+            "musicgen" => {
+                let model = self
+                    .default_model_for("musicgen")
+                    .unwrap_or_else(|| self.generation_config.model_id.clone());
+                self.generation_config.model_id = model.clone();
+                Ok(format!("Model set to {model}"))
+            }
+            "riffusion" => {
+                let model = self
+                    .default_model_for("riffusion")
+                    .unwrap_or_else(|| self.generation_config.model_id.clone());
+                self.generation_config.model_id = model.clone();
+                Ok(format!("Model set to {model}"))
+            }
             "model" => {
                 let model = rest.join(" ").trim().to_string();
                 if model.is_empty() {
@@ -497,7 +576,7 @@ impl AppState {
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
                 format!(
-                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /cfg <scale|off>, /seed <value|off>, /show, /reset"
+                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /riffusion, /cfg <scale|off>, /seed <value|off>, /show, /reset"
                 ),
             ),
             other => Err(format!("Unknown command `{other}`")),
