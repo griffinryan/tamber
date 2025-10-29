@@ -103,6 +103,7 @@ class ComposerOrchestrator:
                 previous_render=previous_render,
                 motif_seed=motif_seed_render,
             )
+            self._ensure_section_metadata(section, render)
             self._attach_phrase_metadata(render, phrase, render_hint)
             if motif_seed_render is None and self._is_motif_seed_section(section):
                 motif_seed_render = render
@@ -213,6 +214,28 @@ class ComposerOrchestrator:
                 "render_hint_seconds": render_hint,
             }
         )
+
+    def _ensure_section_metadata(
+        self,
+        section: CompositionSection,
+        render: SectionRender,
+    ) -> None:
+        payload = render.extras
+        payload.setdefault("section_id", section.section_id)
+        payload.setdefault("section_label", section.label)
+        payload.setdefault("section_role", section.role.value)
+        payload.setdefault("arrangement_text", self._arrangement_text(section))
+
+    def _arrangement_text(self, section: CompositionSection) -> str:
+        orchestration = section.orchestration
+        if orchestration is None:
+            return ""
+        parts: list[str] = []
+        for category in ("rhythm", "bass", "harmony", "lead", "textures", "vocals"):
+            instruments = getattr(orchestration, category, None) or []
+            if instruments:
+                parts.append(", ".join(instruments))
+        return ", ".join(parts)
 
     def _conditioning_tail(
         self,
