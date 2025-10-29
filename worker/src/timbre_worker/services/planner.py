@@ -11,6 +11,7 @@ from typing import Iterable, List, Optional
 from ..app.models import (
     CompositionPlan,
     CompositionSection,
+    GenerationMode,
     GenerationRequest,
     SectionEnergy,
     SectionOrchestration,
@@ -26,6 +27,7 @@ SHORT_MIN_TOTAL_SECONDS = 2.0
 SHORT_MIN_SECTION_SECONDS = 2.0
 LONG_FORM_THRESHOLD = 90.0
 LONG_MIN_SECTION_SECONDS = 16.0
+MOTIF_MAX_TOTAL_SECONDS = 24.0
 
 ADD_PRIORITY = [
     SectionRole.CHORUS,
@@ -509,9 +511,92 @@ class CompositionPlanner:
     """Generates deterministic composition plans from prompts."""
 
     def build_plan(self, request: GenerationRequest) -> CompositionPlan:
+        if request.mode == GenerationMode.MOTIF:
+            return self._build_motif_plan(request)
         if float(request.duration_seconds) >= LONG_FORM_THRESHOLD:
             return self._build_long_form_plan(request)
         return self._build_short_form_plan(request)
+
+    def _build_motif_plan(self, request: GenerationRequest) -> CompositionPlan:
+        seconds_total = float(request.duration_seconds)
+        seconds_total = max(SHORT_MIN_TOTAL_SECONDS, min(seconds_total, MOTIF_MAX_TOTAL_SECONDS))
+        template = _select_motif_template()
+        templates = [template]
+        beats_per_bar = _beats_per_bar(DEFAULT_TIME_SIGNATURE)
+        total_weight = max(template.base_bars, 1)
+        if seconds_total > 0.0:
+            raw_tempo = int(round(240.0 * float(total_weight) / seconds_total))
+        else:
+            raw_tempo = 90
+        tempo_bpm = _select_tempo(raw_tempo)
+        seconds_per_bar = (60.0 / float(max(tempo_bpm, 1))) * float(beats_per_bar)
+
+        base_seed = request.seed if request.seed is not None else _deterministic_seed(request.prompt)
+        prompt_fold = request.prompt.casefold()
+        profile = _match_genre_profile(prompt_fold)
+
+        descriptor = _build_theme_descriptor(
+            request.prompt,
+            prompt_fold,
+            templates,
+            profile,
+            base_seed,
+        )
+        palette = _categorise_instrumentation(
+            descriptor,
+            prompt_fold,
+            profile,
+            base_seed,
+        )
+        palette_offsets = _palette_offsets(palette, base_seed)
+        orchestrations = _plan_orchestrations(templates, palette, palette_offsets)
+        musical_key = _select_key(base_seed)
+
+        arrangement_text = _describe_orchestration(orchestrations[0])
+        prompt_text = _render_prompt(
+            template.prompt_template,
+            prompt=request.prompt,
+            descriptor=descriptor,
+            section_index=0,
+            arrangement=arrangement_text,
+        ).strip()
+
+        motif_directive, variation_axes, cadence_hint = _directives_for_role(template.role)
+
+        if seconds_per_bar > 0.0:
+            bar_count = int(round(seconds_total / seconds_per_bar))
+        else:
+            bar_count = template.base_bars
+        bar_count = max(template.min_bars, min(template.max_bars, max(bar_count, 1)))
+        target_seconds = max(SHORT_MIN_SECTION_SECONDS, bar_count * seconds_per_bar)
+
+        section = CompositionSection(
+            section_id="s00",
+            role=template.role,
+            label=template.label,
+            prompt=prompt_text,
+            bars=bar_count,
+            target_seconds=target_seconds,
+            energy=template.energy,
+            model_id=None,
+            seed_offset=0,
+            transition=template.transition,
+            motif_directive=motif_directive,
+            variation_axes=variation_axes,
+            cadence_hint=cadence_hint,
+            orchestration=orchestrations[0],
+        )
+
+        return CompositionPlan(
+            version=PLAN_VERSION,
+            tempo_bpm=tempo_bpm,
+            time_signature=DEFAULT_TIME_SIGNATURE,
+            key=musical_key,
+            total_bars=bar_count,
+            total_duration_seconds=target_seconds,
+            theme=descriptor,
+            sections=[section],
+        )
 
     def _build_long_form_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(max(request.duration_seconds, LONG_FORM_THRESHOLD))
@@ -1119,3 +1204,24 @@ def _select_long_templates(duration_seconds: float) -> Iterable[SectionTemplate]
 
 def _select_short_templates(duration_seconds: float) -> List[SectionTemplate]:
     return _LEXICON.select_short(duration_seconds)
+
+
+def _select_motif_template() -> SectionTemplate:
+    for template in _LEXICON.select_short(0.0):
+        if template.role == SectionRole.MOTIF:
+            return template
+    for template in _LEXICON.select_short(SHORT_MIN_TOTAL_SECONDS):
+        if template.role == SectionRole.MOTIF:
+            return template
+    return SectionTemplate(
+        role=SectionRole.MOTIF,
+        label="Motif",
+        energy=SectionEnergy.MEDIUM,
+        base_bars=6,
+        min_bars=4,
+        max_bars=8,
+        prompt_template=(
+            "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows."
+        ),
+        transition=None,
+    )

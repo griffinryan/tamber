@@ -24,6 +24,8 @@ pub struct GenerationRequest {
     pub seed: Option<u64>,
     pub duration_seconds: u8,
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<GenerationMode>,
     pub cfg_scale: Option<f32>,
     pub scheduler: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,6 +46,13 @@ pub struct GenerationRequest {
     pub output_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<CompositionPlan>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationMode {
+    FullTrack,
+    Motif,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

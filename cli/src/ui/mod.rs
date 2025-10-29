@@ -1,9 +1,9 @@
 use crate::{
     app::{
-        format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, InputMode,
-        JobEntry,
+        format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane,
+        GenerationOverrides, InputMode, JobEntry,
     },
-    types::{CompositionSection, JobState, SectionEnergy, SectionOrchestration},
+    types::{CompositionSection, GenerationMode, JobState, SectionEnergy, SectionOrchestration},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -562,7 +562,7 @@ fn handle_key(
             }
 
             let mut prompt_text = line.clone();
-            let mut inline_model_override: Option<String> = None;
+            let mut inline_overrides: Option<GenerationOverrides> = None;
 
             if let Some(stripped) = line.strip_prefix('/') {
                 let trimmed = stripped.trim_start();
@@ -576,13 +576,15 @@ fn handle_key(
                     let command_lower = command_token.to_ascii_lowercase();
                     let rest = trimmed[command_token.len()..].trim_start();
 
-                    if let Some(model_id) = app.default_model_for(&command_lower) {
+                    if let Some(inline) = app.inline_command_for(&command_lower) {
                         if rest.is_empty() {
-                            dispatch_app_command(app, &line);
+                            let message = inline.usage_hint.to_string();
+                            app.push_status_line(message.clone());
+                            app.append_chat(ChatRole::System, message);
                             app.input.clear();
                             return Ok(false);
                         }
-                        inline_model_override = Some(model_id);
+                        inline_overrides = Some(inline.overrides);
                         prompt_text = rest.to_string();
                     } else {
                         dispatch_app_command(app, &line);
@@ -601,9 +603,13 @@ fn handle_key(
             }
 
             let prompt = prompt_text;
-            let (mut request, plan) = app.build_generation_payload(&prompt);
-            if let Some(model_id) = inline_model_override {
-                request.model_id = model_id;
+            let overrides_ref = inline_overrides.as_ref();
+            let (request, plan) =
+                app.build_generation_payload_with_overrides(&prompt, overrides_ref);
+            if let Some(overrides) = overrides_ref {
+                if matches!(overrides.mode, Some(GenerationMode::Motif)) {
+                    app.push_status_line("Queued motif preview (~16s)".to_string());
+                }
             }
             app.append_chat(ChatRole::User, prompt.clone());
             if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {

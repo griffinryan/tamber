@@ -1,6 +1,6 @@
 use crate::types::{
-    CompositionPlan, CompositionSection, SectionEnergy, SectionOrchestration, SectionRole,
-    ThemeDescriptor,
+    CompositionPlan, CompositionSection, GenerationMode, SectionEnergy, SectionOrchestration,
+    SectionRole, ThemeDescriptor,
 };
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -15,6 +15,7 @@ const SHORT_MIN_TOTAL_SECONDS: f32 = 2.0;
 const SHORT_MIN_SECTION_SECONDS: f32 = 2.0;
 const LONG_FORM_THRESHOLD: f32 = 90.0;
 const LONG_MIN_SECTION_SECONDS: f32 = 16.0;
+const MOTIF_MAX_TOTAL_SECONDS: f32 = 24.0;
 
 const ADD_PRIORITY: &[SectionRole] = &[
     SectionRole::Chorus,
@@ -499,11 +500,108 @@ impl CompositionPlanner {
         prompt: &str,
         duration_seconds: u8,
         seed: Option<u64>,
+        mode: GenerationMode,
     ) -> CompositionPlan {
-        if (duration_seconds as f32) >= LONG_FORM_THRESHOLD {
-            return self.build_long_form_plan(prompt, duration_seconds, seed);
+        match mode {
+            GenerationMode::Motif => self.build_motif_plan(prompt, duration_seconds, seed),
+            GenerationMode::FullTrack => {
+                if (duration_seconds as f32) >= LONG_FORM_THRESHOLD {
+                    return self.build_long_form_plan(prompt, duration_seconds, seed);
+                }
+                self.build_short_form_plan(prompt, duration_seconds, seed)
+            }
         }
-        self.build_short_form_plan(prompt, duration_seconds, seed)
+    }
+
+    fn build_motif_plan(
+        &self,
+        prompt: &str,
+        duration_seconds: u8,
+        seed: Option<u64>,
+    ) -> CompositionPlan {
+        let data = lexicon();
+        let motif_template = select_motif_template(data);
+        let templates = vec![motif_template.clone()];
+        let seconds_total =
+            (duration_seconds as f32).clamp(SHORT_MIN_TOTAL_SECONDS, MOTIF_MAX_TOTAL_SECONDS);
+        let beats_per_bar = beats_per_bar(DEFAULT_TIME_SIGNATURE);
+        let total_weight = motif_template.base_bars.max(1) as u32;
+        let raw_tempo = if seconds_total > 0.0 {
+            (240.0 * total_weight as f32 / seconds_total).round().max(MIN_TEMPO as f32) as u16
+        } else {
+            90
+        };
+        let tempo_bpm = select_tempo(raw_tempo);
+        let seconds_per_bar = (60.0 / tempo_bpm as f32) * beats_per_bar as f32;
+
+        let base_seed = seed.unwrap_or_else(|| deterministic_seed(prompt));
+        let prompt_fold = casefold(prompt.as_ref());
+        let profile = match_genre_profile(&prompt_fold, data);
+
+        let descriptor =
+            build_theme_descriptor(prompt, &prompt_fold, &templates, profile, base_seed, data);
+        let palette =
+            categorise_instrumentation(&descriptor, &prompt_fold, profile, base_seed, data);
+        let offsets = palette_offsets(&palette, base_seed);
+        let orchestrations = plan_orchestrations(&templates, &palette, &offsets);
+        let key = select_key(base_seed);
+
+        let arrangement = describe_orchestration(&orchestrations[0]);
+        let section_prompt = render_prompt(
+            motif_template.prompt_template,
+            prompt,
+            &descriptor,
+            0,
+            &arrangement,
+            &data.defaults,
+        );
+        let (motif_directive, variation_axes, cadence_hint) =
+            directives_for_role(&motif_template.role);
+
+        let mut bar_count = if seconds_per_bar > 0.0 {
+            (seconds_total / seconds_per_bar).round() as i32
+        } else {
+            motif_template.base_bars as i32
+        };
+        if bar_count < motif_template.min_bars as i32 {
+            bar_count = motif_template.min_bars as i32;
+        }
+        if bar_count > motif_template.max_bars as i32 {
+            bar_count = motif_template.max_bars as i32;
+        }
+        if bar_count < 1 {
+            bar_count = 1;
+        }
+
+        let target_seconds = (bar_count as f32 * seconds_per_bar).max(SHORT_MIN_SECTION_SECONDS);
+
+        let section = CompositionSection {
+            section_id: "s00".to_string(),
+            role: motif_template.role.clone(),
+            label: motif_template.label.to_string(),
+            prompt: section_prompt,
+            bars: bar_count as u8,
+            target_seconds,
+            energy: motif_template.energy.clone(),
+            model_id: None,
+            seed_offset: Some(0),
+            transition: motif_template.transition.map(|text| text.to_string()),
+            motif_directive,
+            variation_axes,
+            cadence_hint,
+            orchestration: orchestrations[0].clone(),
+        };
+
+        CompositionPlan {
+            version: PLAN_VERSION.to_string(),
+            tempo_bpm,
+            time_signature: DEFAULT_TIME_SIGNATURE.to_string(),
+            key,
+            total_bars: bar_count as u16,
+            total_duration_seconds: target_seconds,
+            theme: Some(descriptor),
+            sections: vec![section],
+        }
     }
 
     fn build_long_form_plan(
@@ -1359,6 +1457,36 @@ fn select_short_templates(data: &Lexicon, duration_seconds: f32) -> Vec<SectionT
     data.templates.select_short(duration_seconds)
 }
 
+fn select_motif_template(data: &Lexicon) -> SectionTemplate {
+    let primary = data
+        .templates
+        .select_short(0.0)
+        .into_iter()
+        .find(|tpl| matches!(tpl.role, SectionRole::Motif));
+    if let Some(template) = primary {
+        return template;
+    }
+    let fallback = data
+        .templates
+        .select_short(SHORT_MIN_TOTAL_SECONDS)
+        .into_iter()
+        .find(|tpl| matches!(tpl.role, SectionRole::Motif));
+    if let Some(template) = fallback {
+        return template;
+    }
+    SectionTemplate {
+        role: SectionRole::Motif,
+        label: "Motif",
+        energy: SectionEnergy::Medium,
+        base_bars: 6,
+        min_bars: 4,
+        max_bars: 8,
+        prompt_template:
+            "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows.",
+        transition: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1367,7 +1495,8 @@ mod tests {
     fn builds_plan_with_at_least_three_sections() {
         let planner = CompositionPlanner::new();
         let requested = 16;
-        let plan = planner.build_plan("dreamy piano", requested, Some(42));
+        let plan =
+            planner.build_plan("dreamy piano", requested, Some(42), GenerationMode::FullTrack);
         assert!(plan.sections.len() >= 3);
         assert_eq!(plan.version, PLAN_VERSION);
         assert!(plan.total_duration_seconds > 0.0);
@@ -1383,11 +1512,24 @@ mod tests {
     #[test]
     fn collapses_short_duration_into_minimum_sections() {
         let planner = CompositionPlanner::new();
-        let plan = planner.build_plan("short clip", 8, None);
+        let plan = planner.build_plan("short clip", 8, None, GenerationMode::FullTrack);
         assert!(plan.sections.len() <= 2);
         assert!(plan.sections.iter().any(|section| matches!(section.role, SectionRole::Motif)));
         assert!(plan.sections.iter().all(|section| section.target_seconds >= 2.0));
         assert!(plan.theme.is_some());
         assert!(plan.sections.iter().all(|section| section.motif_directive.is_some()));
+    }
+
+    #[test]
+    fn builds_motif_only_plan() {
+        let planner = CompositionPlanner::new();
+        let plan = planner.build_plan("motif test", 12, Some(7), GenerationMode::Motif);
+        assert_eq!(plan.sections.len(), 1);
+        let section = &plan.sections[0];
+        assert!(matches!(section.role, SectionRole::Motif));
+        assert!(section.target_seconds >= 2.0);
+        assert!(section.target_seconds <= MOTIF_MAX_TOTAL_SECONDS + 1.0);
+        assert!(section.motif_directive.is_some());
+        assert!(plan.theme.is_some());
     }
 }

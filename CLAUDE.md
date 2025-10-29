@@ -152,7 +152,7 @@ class Backend:
 
 **Critical areas to test:**
 - Planner output matches Python planner (template selection, bar allocation, orchestration)
-- Slash command parsing (`/duration`, `/model`, `/cfg`, `/seed`, `/reset`)
+- Slash command parsing (`/duration`, `/model`, `/cfg`, `/seed`, `/reset`, `/motif`, `/small`, `/medium`, `/large`)
 - Type deserialization from worker JSON responses
 
 ### Python (worker/)

@@ -16,8 +16,10 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
   - `/duration 120` keeps long-form (intro → motif → chorus → outro). Values 90–180 are accepted; shorter values are clamped to 90 in the CLI but still honoured when calling the worker API directly.
   - `/duration 24` (after sending the job) is useful for verifying short-form plan previews—expect fewer sections.
   - `/model musicgen-stereo-medium` (or another MusicGen checkpoint) swaps models.
+  - `/small loft jazz trio`, `/medium orchestral sweep`, or `/large epic score` run one-off generations against specific MusicGen checkpoints without changing defaults.
   - `/cfg 6.5` or `/cfg off` tunes classifier-free guidance strength.
   - `/seed 42` (or `/seed off`) locks deterministic runs; `/reset` restores defaults.
+  - `/motif Jazz trio with trumpet lead` queues a motif-only preview (~16 s) for quick iteration.
 5. Watch the job transition `Queued → Running → Done`. Progress updates stream every few seconds.
 6. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `Ctrl+P` with the job highlighted to surface the path again.
 7. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the inference extras (torch, transformers, torchaudio) and will reflect the prompt more directly.

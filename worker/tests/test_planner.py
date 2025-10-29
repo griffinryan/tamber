@@ -1,4 +1,4 @@
-from timbre_worker.app.models import GenerationRequest, SectionRole
+from timbre_worker.app.models import GenerationMode, GenerationRequest, SectionRole
 from timbre_worker.services.planner import PLAN_VERSION, CompositionPlanner
 
 
@@ -36,3 +36,21 @@ def test_planner_collapses_short_duration() -> None:
     assert all(section.target_seconds >= 2.0 for section in plan.sections)
     assert plan.theme is not None
     assert all(section.motif_directive is not None for section in plan.sections)
+
+
+def test_planner_builds_motif_mode_plan() -> None:
+    planner = CompositionPlanner()
+    request = GenerationRequest(
+        prompt="motif spotlight",
+        duration_seconds=12,
+        model_id="musicgen-stereo-medium",
+        mode=GenerationMode.MOTIF,
+    )
+    plan = planner.build_plan(request)
+    assert len(plan.sections) == 1
+    section = plan.sections[0]
+    assert section.role == SectionRole.MOTIF
+    assert section.target_seconds >= 2.0
+    assert section.target_seconds <= 25.0
+    assert section.motif_directive == "state motif"
+    assert plan.theme is not None

@@ -26,7 +26,7 @@
 ## TUI Interaction Patterns
 - Run `make cli-run` to open the chat-style interface. Left pane = conversation history; right rail = job list + status log.
 - Submit prompts with `Enter`; use `↑/↓` to change focus; press `Ctrl+P` on a completed job to print the artifact path.
-- Slash commands: `/duration 120` (UI clamps 90–180 s), `/model musicgen-stereo-medium`, `/cfg 6.5` or `/cfg off`, `/seed 42`, `/reset`. Short clips (< 90 s) remain available via the worker API for tests.
+- Slash commands: `/duration 120` (UI clamps 90–180 s), `/model musicgen-stereo-medium`, `/cfg 6.5` or `/cfg off`, `/seed 42`, `/reset`. Inline prompts: `/motif <prompt>` for motif-only previews, `/small|/medium|/large <prompt>` to pick MusicGen sizes. Short clips (< 90 s) remain available via the worker API for tests.
 - The CLI polls `/status`, fetches `/artifact/{job_id}`, and copies audio + metadata into `~/Music/Timbre/<job_id>/`; see `metadata.json` for prompt/model details.
 - Status lines surface worker health, queue updates, and errors so issues show without leaving the TUI.
 

@@ -1,7 +1,10 @@
 use crate::{
     config::AppConfig,
     planner::CompositionPlanner,
-    types::{CompositionPlan, GenerationArtifact, GenerationRequest, GenerationStatus, JobState},
+    types::{
+        CompositionPlan, GenerationArtifact, GenerationMode, GenerationRequest, GenerationStatus,
+        JobState,
+    },
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
@@ -13,6 +16,7 @@ const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
 const MIN_DURATION_SECONDS: u8 = 90;
 const MAX_DURATION_SECONDS: u8 = 180;
+const MOTIF_PRESET_DURATION_SECONDS: u8 = 16;
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -20,6 +24,7 @@ pub struct GenerationConfig {
     pub duration_seconds: u8,
     pub cfg_scale: Option<f32>,
     pub seed: Option<u64>,
+    pub mode: GenerationMode,
 }
 
 impl GenerationConfig {
@@ -29,6 +34,7 @@ impl GenerationConfig {
             duration_seconds: config.default_duration_seconds(),
             cfg_scale: None,
             seed: None,
+            mode: GenerationMode::FullTrack,
         }
     }
 
@@ -41,8 +47,28 @@ impl GenerationConfig {
             .seed
             .map(|value| format!("Seed {value}"))
             .unwrap_or_else(|| "Seed auto".to_string());
-        format!("{} · {}s · {} · {}", self.model_id, self.duration_seconds, cfg_text, seed_text)
+        let mode_text = match self.mode {
+            GenerationMode::FullTrack => "Full".to_string(),
+            GenerationMode::Motif => "Motif".to_string(),
+        };
+        format!(
+            "{} · {}s · {} · {} · {}",
+            self.model_id, self.duration_seconds, cfg_text, seed_text, mode_text
+        )
     }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct GenerationOverrides {
+    pub model_id: Option<String>,
+    pub duration_seconds: Option<u8>,
+    pub mode: Option<GenerationMode>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InlineCommand {
+    pub overrides: GenerationOverrides,
+    pub usage_hint: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -433,6 +459,53 @@ impl AppState {
         None
     }
 
+    pub fn inline_command_for(&self, alias: &str) -> Option<InlineCommand> {
+        match alias {
+            "musicgen" => {
+                let model = Self::sanitized_model(&self.musicgen_default_model_id, || {
+                    self.app_config.default_model_id().to_string()
+                });
+                Some(InlineCommand {
+                    overrides: GenerationOverrides {
+                        model_id: Some(model),
+                        ..GenerationOverrides::default()
+                    },
+                    usage_hint: "Usage: /musicgen <prompt>",
+                })
+            }
+            "small" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-small".to_string()),
+                    ..GenerationOverrides::default()
+                },
+                usage_hint: "Usage: /small <prompt>",
+            }),
+            "medium" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-medium".to_string()),
+                    ..GenerationOverrides::default()
+                },
+                usage_hint: "Usage: /medium <prompt>",
+            }),
+            "large" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-large".to_string()),
+                    ..GenerationOverrides::default()
+                },
+                usage_hint: "Usage: /large <prompt>",
+            }),
+            "motif" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-medium".to_string()),
+                    duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
+                    mode: Some(GenerationMode::Motif),
+                },
+                usage_hint: "Usage: /motif <prompt>",
+            }),
+            _ => None,
+        }
+    }
+
     fn sanitized_model(candidate: &Option<String>, fallback: impl FnOnce() -> String) -> String {
         candidate
             .as_ref()
@@ -448,16 +521,31 @@ impl AppState {
     }
 
     pub fn build_generation_payload(&self, prompt: &str) -> (GenerationRequest, CompositionPlan) {
-        let plan = self.planner.build_plan(
-            prompt,
-            self.generation_config.duration_seconds,
-            self.generation_config.seed,
-        );
+        self.build_generation_payload_with_overrides(prompt, None)
+    }
+
+    pub fn build_generation_payload_with_overrides(
+        &self,
+        prompt: &str,
+        overrides: Option<&GenerationOverrides>,
+    ) -> (GenerationRequest, CompositionPlan) {
+        let duration_seconds = overrides
+            .and_then(|opts| opts.duration_seconds)
+            .unwrap_or(self.generation_config.duration_seconds);
+        let model_id = overrides
+            .and_then(|opts| opts.model_id.as_ref())
+            .cloned()
+            .unwrap_or_else(|| self.generation_config.model_id.clone());
+        let mode = overrides.and_then(|opts| opts.mode).unwrap_or(self.generation_config.mode);
+
+        let plan =
+            self.planner.build_plan(prompt, duration_seconds, self.generation_config.seed, mode);
         let request = GenerationRequest {
             prompt: prompt.to_string(),
             seed: self.generation_config.seed,
-            duration_seconds: self.generation_config.duration_seconds,
-            model_id: self.generation_config.model_id.clone(),
+            duration_seconds,
+            model_id,
+            mode: Some(mode),
             cfg_scale: self.generation_config.cfg_scale,
             scheduler: None,
             musicgen_top_k: None,
@@ -553,7 +641,7 @@ impl AppState {
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
                 format!(
-                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /cfg <scale|off>, /seed <value|off>, /show, /reset"
+                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /cfg <scale|off>, /seed <value|off>, /show, /reset · inline prompts: /motif <prompt>, /small|/medium|/large <prompt>"
                 ),
             ),
             other => Err(format!("Unknown command `{other}`")),
@@ -722,6 +810,10 @@ pub fn format_request_summary(request: &GenerationRequest) -> String {
         parts.push(format!("plan {} sections", plan.sections.len()));
     }
 
+    if matches!(request.mode, Some(GenerationMode::Motif)) {
+        parts.push("mode motif".to_string());
+    }
+
     parts.join(", ")
 }
 
@@ -805,7 +897,7 @@ fn plan_summary(plan: &CompositionPlan) -> String {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
-    use crate::types::GenerationMetadata;
+    use crate::types::{GenerationMetadata, SectionRole};
     use chrono::Utc;
     use serde_json::json;
 
@@ -938,6 +1030,7 @@ mod tests {
             seed: Some(99),
             duration_seconds: 12,
             model_id: "musicgen-stereo-medium".into(),
+            mode: Some(GenerationMode::FullTrack),
             cfg_scale: Some(5.5),
             scheduler: None,
             musicgen_top_k: None,
@@ -983,8 +1076,27 @@ mod tests {
         assert_eq!(request.cfg_scale, Some(6.5));
         assert_eq!(request.seed, Some(77));
         assert_eq!(request.model_id, "musicgen-stereo-medium");
+        assert_eq!(request.mode, Some(GenerationMode::FullTrack));
         assert!(request.plan.is_some());
         assert_eq!(plan.sections.len(), request.plan.as_ref().unwrap().sections.len());
+    }
+
+    #[test]
+    fn build_generation_payload_supports_motif_override() {
+        let state = AppState::new(AppConfig::default());
+        let overrides = GenerationOverrides {
+            model_id: Some("musicgen-stereo-medium".to_string()),
+            duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
+            mode: Some(GenerationMode::Motif),
+        };
+        let (request, plan) =
+            state.build_generation_payload_with_overrides("motif spotlight", Some(&overrides));
+        assert_eq!(request.mode, Some(GenerationMode::Motif));
+        assert_eq!(request.duration_seconds, MOTIF_PRESET_DURATION_SECONDS);
+        assert_eq!(plan.sections.len(), 1);
+        assert!(matches!(plan.sections[0].role, SectionRole::Motif));
+        let summary = format_request_summary(&request);
+        assert!(summary.contains("mode motif"));
     }
 
     #[test]

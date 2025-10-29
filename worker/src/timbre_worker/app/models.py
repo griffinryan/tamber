@@ -30,6 +30,11 @@ class SectionEnergy(str, Enum):
     HIGH = "high"
 
 
+class GenerationMode(str, Enum):
+    FULL_TRACK = "full_track"
+    MOTIF = "motif"
+
+
 class ThemeDescriptor(BaseModel):
     motif: str = Field(..., min_length=1, max_length=128)
     instrumentation: list[str] = Field(default_factory=list)
@@ -80,6 +85,7 @@ class GenerationRequest(BaseModel):
     seed: Optional[int] = Field(default=None, ge=0)
     duration_seconds: int = Field(default=120, ge=1, le=300)
     model_id: str = Field(default="musicgen-stereo-medium")
+    mode: GenerationMode = Field(default=GenerationMode.FULL_TRACK)
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)
     musicgen_top_k: Optional[int] = Field(default=None, ge=0, le=2048)

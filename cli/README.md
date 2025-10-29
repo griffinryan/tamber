@@ -36,6 +36,8 @@ While the CLI is running type `/command value` in the prompt area:
 | `/cfg 6.5` / `/cfg off` | Adjust classifier-free guidance. |
 | `/seed 42` / `/seed off` | Lock or release deterministic seeds. |
 | `/reset` | Restore defaults from config/env. |
+| `/motif <prompt>` | Queue a motif-only preview (~16 s) on MusicGen stereo medium. |
+| `/small <prompt>` / `/medium <prompt>` / `/large <prompt>` | One-off generation using a specific MusicGen size. |
 
 The status sidebar mirrors the worker’s `CompositionPlan`: section roles, bars, target seconds, orchestration highlights, backend, conditioning flags, and active section indicator (`▶`).
 
