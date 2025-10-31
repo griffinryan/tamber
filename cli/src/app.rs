@@ -247,11 +247,6 @@ impl SplashAnimationState {
     pub fn elapsed(&self) -> StdDuration {
         self.started_at.elapsed()
     }
-
-    #[cfg(test)]
-    pub fn with_started_at(started_at: Instant) -> Self {
-        Self { started_at }
-    }
 }
 
 impl Default for SplashAnimationState {
