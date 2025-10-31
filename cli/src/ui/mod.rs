@@ -36,7 +36,12 @@ pub fn run<B: ratatui::backend::Backend>(
         drain_events(app, event_rx);
         terminal.draw(|frame| draw_ui(frame, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
+        let poll_duration = if app.showing_splash() {
+            Duration::from_millis(16)
+        } else {
+            Duration::from_millis(100)
+        };
+        if event::poll(poll_duration)? {
             if let Event::Key(key) = event::read()? {
                 if handle_key(app, &command_tx, key)? {
                     break;

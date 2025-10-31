@@ -1,5 +1,5 @@
 use ratatui::text::Line;
-use std::f32::consts::TAU;
+use std::f32::consts::{FRAC_PI_4, TAU};
 use std::time::Duration as StdDuration;
 
 #[derive(Clone, Copy)]
@@ -188,8 +188,9 @@ impl RotatingEighthNote {
         }
 
         let t = elapsed.as_secs_f32();
-        let spin_angle = (t * self.spin_speed).rem_euclid(TAU);
-        let tilt_angle = (t * self.tilt_speed).rem_euclid(TAU);
+        let spin_angle = (t * self.spin_speed * 0.5).rem_euclid(TAU);
+        let tilt_phase = t * self.tilt_speed;
+        let tilt_angle = tilt_phase.sin() * FRAC_PI_4;
         let (sin_a, cos_a) = spin_angle.sin_cos();
         let (sin_b, cos_b) = tilt_angle.sin_cos();
 
@@ -210,7 +211,7 @@ impl RotatingEighthNote {
         let half_h = ((height as f32).max(2.0) - 2.0) * 0.5;
         let scale_x = half_w * base_depth / self.extent_x;
         let scale_y = half_h * base_depth / self.extent_y;
-        let scale = scale_x.min(scale_y) * 0.96;
+        let scale = scale_x.min(scale_y) * 1.08;
 
         let center_x = (width as f32 - 1.0) / 2.0;
         let center_y = (height as f32 - 1.0) / 2.0;
@@ -276,7 +277,7 @@ fn build_points() -> Vec<NotePoint> {
 }
 
 fn build_head(points: &mut Vec<NotePoint>) {
-    const STEP: f32 = 0.45;
+    const STEP: f32 = 0.35;
     const CENTER: Vec2 = Vec2 { x: -4.0, y: -6.0 };
     const RADIUS_X: f32 = 5.8;
     const RADIUS_Y: f32 = 3.9;
@@ -307,7 +308,7 @@ fn build_head(points: &mut Vec<NotePoint>) {
 }
 
 fn build_stem(points: &mut Vec<NotePoint>) {
-    const STEP: f32 = 0.5;
+    const STEP: f32 = 0.4;
     const LEFT: f32 = 1.6;
     const RIGHT: f32 = 3.0;
     const BOTTOM: f32 = -6.5;
