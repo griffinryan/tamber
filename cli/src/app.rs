@@ -1557,14 +1557,18 @@ mod tests {
     }
 
     #[test]
-    fn toggle_active_clip_target_toggles_selection() {
+    fn toggle_active_clip_target_stays_selected_once_active() {
         let mut state = AppState::new(AppConfig::default());
+        if let Some((layer, scene)) = state.active_clip_target() {
+            // Clear any persisted selection from a prior CLI snapshot on disk.
+            assert!(!state.session_view.toggle_active_target(layer, scene));
+        }
         let initial_target = state.session_view.focused();
         assert!(state.active_clip_target().is_none());
         assert!(state.toggle_active_clip_target());
         assert_eq!(state.active_clip_target(), Some(initial_target));
         assert!(!state.toggle_active_clip_target());
-        assert!(state.active_clip_target().is_none());
+        assert_eq!(state.active_clip_target(), None);
     }
 
     #[test]
