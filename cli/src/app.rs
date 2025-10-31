@@ -14,7 +14,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 const MAX_STATUS_LINES: usize = 8;
 const MIN_DURATION_SECONDS: u8 = 90;
@@ -235,6 +235,32 @@ impl Default for StatusBarState {
 }
 
 #[derive(Debug)]
+pub struct SplashAnimationState {
+    started_at: Instant,
+}
+
+impl SplashAnimationState {
+    pub fn new() -> Self {
+        Self { started_at: Instant::now() }
+    }
+
+    pub fn elapsed(&self) -> StdDuration {
+        self.started_at.elapsed()
+    }
+
+    #[cfg(test)]
+    pub fn with_started_at(started_at: Instant) -> Self {
+        Self { started_at }
+    }
+}
+
+impl Default for SplashAnimationState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
 pub struct AppState {
     pub input: String,
     pub jobs: IndexMap<String, JobEntry>,
@@ -258,6 +284,7 @@ pub struct AppState {
     showing_splash: bool,
     splash_selection: SplashSelection,
     pending_snapshot: Option<SessionSnapshot>,
+    splash_animation: SplashAnimationState,
 }
 
 impl AppState {
@@ -288,6 +315,7 @@ impl AppState {
             showing_splash: true,
             splash_selection: SplashSelection::StartNew,
             pending_snapshot: pending_snapshot.clone(),
+            splash_animation: SplashAnimationState::default(),
         };
 
         if pending_snapshot.is_some() {
@@ -311,6 +339,10 @@ impl AppState {
 
     pub fn splash_selection(&self) -> SplashSelection {
         self.splash_selection
+    }
+
+    pub fn splash_elapsed(&self) -> StdDuration {
+        self.splash_animation.elapsed()
     }
 
     pub fn select_next_splash_option(&mut self) {
