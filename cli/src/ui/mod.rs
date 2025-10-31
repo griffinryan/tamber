@@ -5,7 +5,7 @@ use crate::{
         format_request_summary, AppCommand, AppEvent, AppState, FocusedPane, GenerationOverrides,
         InputMode, JobEntry, SessionCliCommand, SplashSelection,
     },
-    session::{clip_layer_label, ClipSlotStatus, SessionScene, LAYER_ORDER},
+    session::{clip_layer_label, ClipSlotStatus, SessionScene, LAYER_ORDER, MAX_SCENES},
     types::{
         ClipLayer, CompositionSection, GenerationMode, JobState, SectionEnergy,
         SectionOrchestration, SessionCreateRequest,
@@ -1026,13 +1026,18 @@ fn dispatch_app_command(
         match parts.next() {
             Some("add") => {
                 let name = parts.collect::<Vec<_>>().join(" ");
-                let new_index = app.session_view.add_scene_after_focus();
-                if !name.trim().is_empty() {
-                    app.session_view.rename_scene(new_index, name.clone());
+                if let Some(new_index) = app.session_view.add_scene_after_focus() {
+                    if !name.trim().is_empty() {
+                        app.session_view.rename_scene(new_index, name.clone());
+                    }
+                    app.session_view.focus_scene(new_index);
+                    let scene_name = app.session_view.scene_name(new_index);
+                    app.push_status_line(format!("Added {scene_name}"));
+                } else {
+                    app.push_status_line(format!(
+                        "Scene limit reached ({MAX_SCENES}). Rename existing scenes instead."
+                    ));
                 }
-                app.session_view.focus_scene(new_index);
-                let scene_name = app.session_view.scene_name(new_index);
-                app.push_status_line(format!("Added {scene_name}"));
             }
             Some("rename") => {
                 let scene_index = app.session_view.focused().1;
@@ -1052,7 +1057,8 @@ fn dispatch_app_command(
                 app.push_status_line(message);
             }
             None => {
-                let message = "Usage: /scene add [name] | /scene rename <name>".to_string();
+                let message =
+                    "Usage: /scene rename <name> (three scene columns available)".to_string();
                 app.push_status_line(message);
             }
         }

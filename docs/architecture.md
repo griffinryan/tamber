@@ -95,7 +95,7 @@ Artifacts land in `Settings.artifact_root` (defaults to `~/Music/Timbre`). Metad
 ## 6. CLI (Rust `cli/`)
 
 - `AppState` holds config (`cli/src/config.rs`), active jobs, planner previews, and the Session View grid. Session layouts are snapshotted to `~/.config/timbre/session.json` on exit and restored at start-up.
-- Slash commands modify `GenerationConfig` and session state. In addition to `/duration`, `/model`, `/cfg`, `/seed`, the CLI exposes `/session start`, `/session status`, `/clip <layer> [prompt]`, and `/scene add|rename` for Ableton-style clip launching.
+- Slash commands modify `GenerationConfig` and session state. In addition to `/duration`, `/model`, `/cfg`, `/seed`, the CLI exposes `/session start`, `/session status`, `/clip <layer> [prompt]`, and `/scene rename` for Ableton-style clip launching across three fixed scene columns.
 - Planner mirror (`cli/src/planner.rs`) mirrors Python logic so previews match worker output (long-form v3 plans for full tracks, `build_clip_plan` v4 for session clips).
 - `cli/src/ui/mod.rs` renders the Session View grid, job list, and status sidebar. Clip cells reflect layer/scene status (queued, rendering, ready, failed) and playback state; section extras from metadata populate the status panel once a job finishes.
 - Artifacts are copied into the user artifact directory and enriched with CLI-only extras (`local_path`).

@@ -98,7 +98,7 @@ class GenerationRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, min_length=8, max_length=64)
     mode: GenerationMode = Field(default=GenerationMode.FULL_TRACK)
     clip_layer: Optional[ClipLayer] = Field(default=None)
-    clip_scene_index: Optional[int] = Field(default=None, ge=0, le=512)
+    clip_scene_index: Optional[int] = Field(default=None, ge=0, le=2)
     clip_bars: Optional[int] = Field(default=None, ge=1, le=64)
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)
@@ -179,4 +179,4 @@ class SessionClipRequest(BaseModel):
     layer: ClipLayer
     prompt: Optional[str] = Field(default=None, max_length=512)
     bars: Optional[int] = Field(default=None, ge=1, le=64)
-    scene_index: Optional[int] = Field(default=None, ge=0, le=512)
+    scene_index: Optional[int] = Field(default=None, ge=0, le=2)

@@ -12,6 +12,8 @@ pub const LAYER_ORDER: [ClipLayer; 6] = [
     ClipLayer::Vocals,
 ];
 
+pub const MAX_SCENES: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipSlotStatus {
     Empty,
@@ -88,7 +90,9 @@ pub struct SessionView {
 impl SessionView {
     pub fn new() -> Self {
         let mut view = Self::default();
-        view.ensure_scene(0);
+        for index in 0..MAX_SCENES {
+            view.ensure_scene(index);
+        }
         view
     }
 
@@ -127,6 +131,9 @@ impl SessionView {
     }
 
     pub fn focus_scene(&mut self, index: usize) {
+        if index >= MAX_SCENES {
+            return;
+        }
         self.ensure_scene(index);
         self.focused_scene = index;
     }
@@ -136,6 +143,9 @@ impl SessionView {
     }
 
     pub fn ensure_scene(&mut self, index: usize) {
+        if index >= MAX_SCENES {
+            return;
+        }
         if self.scenes.iter().all(|scene| scene.index != index) {
             let name = format!("Scene {}", index + 1);
             self.scenes.push(SessionScene { index, name });
@@ -146,14 +156,19 @@ impl SessionView {
         }
     }
 
-    pub fn add_scene_after_focus(&mut self) -> usize {
-        let new_index = if let Some(max_scene) = self.scenes.iter().map(|s| s.index).max() {
-            max_scene + 1
-        } else {
-            0
-        };
-        self.ensure_scene(new_index);
-        new_index
+    pub fn add_scene_after_focus(&mut self) -> Option<usize> {
+        if self.scenes.len() >= MAX_SCENES {
+            return None;
+        }
+        let mut candidate = 0;
+        while candidate < MAX_SCENES && self.scenes.iter().any(|scene| scene.index == candidate) {
+            candidate += 1;
+        }
+        if candidate >= MAX_SCENES {
+            return None;
+        }
+        self.ensure_scene(candidate);
+        Some(candidate)
     }
 
     pub fn rename_scene(&mut self, index: usize, name: String) {
@@ -179,22 +194,26 @@ impl SessionView {
         self.slots.clear();
         self.pending_jobs.clear();
         self.playing.clear();
+        for index in 0..MAX_SCENES {
+            self.ensure_scene(index);
+        }
         for scene in &snapshot.scenes {
-            self.ensure_scene(scene.index);
+            if scene.index >= MAX_SCENES {
+                continue;
+            }
             if let Some(existing) = self.scenes.iter_mut().find(|s| s.index == scene.index) {
                 existing.name = scene.name.clone();
             }
         }
         self.focused_layer = snapshot.focused_layer;
-        self.focused_scene = snapshot.focused_scene;
-        if self.scenes.is_empty() {
-            self.ensure_scene(0);
-            self.focused_scene = 0;
-        }
+        self.focused_scene = snapshot.focused_scene.min(MAX_SCENES.saturating_sub(1));
         let active_scene = snapshot.active_scene.unwrap_or(self.focused_scene);
         if let Some(layer) = snapshot.active_layer {
-            self.ensure_scene(active_scene);
-            self.active = Some((layer, active_scene));
+            if active_scene < MAX_SCENES {
+                self.active = Some((layer, active_scene));
+            } else {
+                self.active = None;
+            }
         } else {
             self.active = None;
         }
@@ -206,13 +225,14 @@ impl SessionView {
             .iter()
             .map(|scene| SceneSnapshot { index: scene.index, name: scene.name.clone() })
             .collect();
+        let active = self.active.filter(|(_, scene)| *scene < MAX_SCENES);
         SessionSnapshot {
             session_id,
             scenes,
             focused_layer: self.focused_layer,
-            focused_scene: self.focused_scene,
-            active_layer: self.active.map(|(layer, _)| layer),
-            active_scene: self.active.map(|(_, scene)| scene),
+            focused_scene: self.focused_scene.min(MAX_SCENES.saturating_sub(1)),
+            active_layer: active.map(|(layer, _)| layer),
+            active_scene: active.map(|(_, scene)| scene),
         }
     }
 
@@ -284,7 +304,9 @@ impl SessionView {
         for clip in &summary.clips {
             let Some(layer) = clip.layer else { continue };
             let scene_index = clip.scene_index.unwrap_or(0) as usize;
-            self.ensure_scene(scene_index);
+            if scene_index < MAX_SCENES {
+                self.ensure_scene(scene_index);
+            }
             let slot = self.slot_mut(layer, scene_index);
             slot.prompt = Some(clip.prompt.clone());
             slot.job_id = Some(clip.job_id.clone());
@@ -310,6 +332,9 @@ impl SessionView {
     }
 
     pub fn set_playing(&mut self, layer: ClipLayer, scene_index: usize) {
+        if scene_index >= MAX_SCENES {
+            return;
+        }
         self.playing.insert(layer, scene_index);
         self.focused_layer = layer;
         self.focused_scene = scene_index;
@@ -333,6 +358,9 @@ impl SessionView {
     }
 
     pub fn toggle_active_target(&mut self, layer: ClipLayer, scene_index: usize) -> bool {
+        if scene_index >= MAX_SCENES {
+            return false;
+        }
         self.ensure_scene(scene_index);
         let target = Some((layer, scene_index));
         if self.active == target {
@@ -372,4 +400,62 @@ pub fn clip_layer_label(layer: ClipLayer) -> &'static str {
 
 pub fn scene_name(index: usize) -> String {
     format!("Scene {}", index + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handles_session_view_limits_to_three_scenes() {
+        let mut view = SessionView::new();
+        assert_eq!(view.scenes().len(), MAX_SCENES);
+        assert!(view.scenes().iter().map(|scene| scene.index).eq(0..MAX_SCENES));
+        assert!(view.add_scene_after_focus().is_none());
+
+        let mut seen_slots = 0;
+        for layer in LAYER_ORDER {
+            for scene_index in 0..MAX_SCENES {
+                let slot = view.slot(layer, scene_index);
+                assert!(slot.prompt.is_none());
+                seen_slots += 1;
+            }
+        }
+        assert_eq!(seen_slots, LAYER_ORDER.len() * MAX_SCENES);
+    }
+
+    #[test]
+    fn handles_focus_scene_ignores_out_of_range() {
+        let mut view = SessionView::new();
+        let initial = view.focused();
+        view.focus_scene(MAX_SCENES + 2);
+        assert_eq!(view.focused(), initial);
+    }
+
+    #[test]
+    fn handles_restore_clamps_snapshot_scenes() {
+        let mut view = SessionView::new();
+        let snapshot = SessionSnapshot {
+            session_id: Some("session-123".to_string()),
+            scenes: vec![
+                SceneSnapshot { index: 0, name: "Alpha".to_string() },
+                SceneSnapshot { index: 1, name: "Beta".to_string() },
+                SceneSnapshot { index: 2, name: "Gamma".to_string() },
+                SceneSnapshot { index: 5, name: "Overflow".to_string() },
+            ],
+            focused_layer: ClipLayer::Lead,
+            focused_scene: 4,
+            active_layer: Some(ClipLayer::Bass),
+            active_scene: Some(4),
+        };
+
+        view.restore(&snapshot);
+
+        assert_eq!(view.scenes().len(), MAX_SCENES);
+        assert_eq!(view.scene_name(0), "Alpha");
+        assert_eq!(view.scene_name(1), "Beta");
+        assert_eq!(view.scene_name(2), "Gamma");
+        assert_eq!(view.focused(), (ClipLayer::Lead, MAX_SCENES - 1));
+        assert!(view.active_target().is_none());
+    }
 }
