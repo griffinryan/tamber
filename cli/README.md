@@ -45,12 +45,14 @@ While the CLI is running type `/command value` in the prompt area:
 
 ### Session View shortcuts
 
-- `Enter` (when Session View focused) launches the highlighted clip, quantised to the session tempo.
-- `Space` stops playback for the focused layer; `x` stops all clips.
-- Arrow keys move focus across tracks/scenes; `/clip` targets the focused slot.
-- `Ctrl+P` still reprints the artifact path for the selected job.
+- Press `i` to enter Insert mode; only then do arrow keys navigate layers/scenes.
+- `Enter` in Insert mode toggles the active layer (adds an ASCII `[x]`) for clip generation.
+- `Esc` returns to Normal mode so you can tab to the prompt; `Enter` there launches playback.
+- `Space` stops playback for the focused layer; `x` stops every clip; `Ctrl+P` reprints the artifact path.
 
-The Session View (left pane) mirrors the worker-backed session: tracks (layers) down the side, scenes across, and per-clip status/loop metadata. The status sidebar continues to reflect the active job/plan—section roles, bars, durations, orchestration highlights, backend, conditioning flags, and the active section indicator (`▶`).
+The left rail now includes a Motif pane that tracks session seeding. The first prompt you submit against an active session captures a ~16 s motif; subsequent prompts require an `[x]`-selected layer and render a Scene 1 clip aligned to the motif’s tempo, key, and feel.
+
+The Session grid mirrors the worker-backed session: tracks (layers) down the side, scenes across, per-clip status metadata inside each cell, and the active section indicator (`▶`). The status sidebar continues to surface section roles, bars, durations, orchestration highlights, backend, conditioning flags, and any worker nudges.
 
 ---
 

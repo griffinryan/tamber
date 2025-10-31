@@ -180,6 +180,7 @@ impl JobEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusedPane {
     StatusBar,
+    Motif,
     SessionView,
     Jobs,
     Status,
@@ -547,15 +548,33 @@ impl AppState {
         self.session.as_ref().map(|summary| summary.session_id.clone())
     }
 
+    pub fn motif_ready(&self) -> bool {
+        self.session.as_ref().map(|summary| summary.seed_plan.is_some()).unwrap_or(false)
+    }
+
+    pub fn active_clip_target(&self) -> Option<(ClipLayer, usize)> {
+        self.session_view.active_target()
+    }
+
+    pub fn toggle_active_clip_target(&mut self) -> bool {
+        let (layer, scene_index) = self.session_view.focused();
+        self.session_view.toggle_active_target(layer, scene_index)
+    }
+
     pub fn prompt_panel_title(&self) -> String {
         if let Some(session) = &self.session {
             let label = Self::format_session_label(session);
-            let (layer, scene_index) = self.session_view.focused();
+            let (layer, scene_index) =
+                self.active_clip_target().unwrap_or_else(|| self.session_view.focused());
             let scene_name = self.session_view.scene_name(scene_index);
+            let layer_label = clip_layer_label(layer);
+            let target_text = if self.active_clip_target().is_some() {
+                format!("{scene_name} · {layer_label} (active)")
+            } else {
+                format!("{scene_name} · {layer_label}")
+            };
             format!(
-                "Prompt · Session {label} · {} · {} · Model {}",
-                scene_name,
-                clip_layer_label(layer),
+                "Prompt · Session {label} · {target_text} · Model {}",
                 self.generation_config.model_id
             )
         } else {
@@ -683,16 +702,22 @@ impl AppState {
         (request, plan)
     }
 
-    pub fn build_clip_payload(
+    pub fn build_clip_payload_for(
         &self,
         layer: ClipLayer,
-        prompt_override: Option<String>,
+        scene_index: usize,
+        prompt_override: Option<&str>,
     ) -> Result<(GenerationRequest, CompositionPlan, String), String> {
         let session = self
             .session
             .as_ref()
             .ok_or_else(|| "No active session. Use /session start first.".to_string())?;
-        let (_, scene_index) = self.session_view.focused();
+        if session.seed_plan.is_none() {
+            return Err("Motif not ready yet. Generate a motif before queuing clips.".to_string());
+        }
+        if !self.session_view.scenes().iter().any(|scene| scene.index == scene_index) {
+            return Err("Select a valid scene before submitting a clip.".to_string());
+        }
 
         let bars: u8 = 4;
         let tempo = session.tempo_bpm.unwrap_or(100);
@@ -701,7 +726,16 @@ impl AppState {
         let seconds_per_bar = (60.0_f32 / tempo.max(1) as f32) * beats.max(1.0);
         let total_seconds = (bars as f32 * seconds_per_bar).max(1.0);
 
-        let clip_prompt = prompt_override.unwrap_or_else(|| {
+        let explicit_prompt = prompt_override.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+        let clip_prompt = explicit_prompt.unwrap_or_else(|| {
             session
                 .seed_prompt
                 .clone()
@@ -775,6 +809,24 @@ impl AppState {
         };
 
         Ok((request, plan, clip_prompt))
+    }
+
+    pub fn build_motif_payload(
+        &self,
+        prompt: &str,
+    ) -> Result<(GenerationRequest, CompositionPlan), String> {
+        if prompt.trim().is_empty() {
+            return Err("Motif prompt cannot be empty.".to_string());
+        }
+        if self.session.is_none() {
+            return Err("No active session. Use /session start first.".to_string());
+        }
+        let overrides = GenerationOverrides {
+            duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
+            mode: Some(GenerationMode::Motif),
+            ..GenerationOverrides::default()
+        };
+        Ok(self.build_generation_payload_with_overrides(prompt, Some(&overrides)))
     }
 
     pub fn handle_command(&mut self, input: &str) -> Result<String, String> {
@@ -940,7 +992,8 @@ impl AppState {
 
     pub fn focus_next(&mut self) {
         self.focused_pane = match self.focused_pane {
-            FocusedPane::StatusBar => FocusedPane::SessionView,
+            FocusedPane::StatusBar => FocusedPane::Motif,
+            FocusedPane::Motif => FocusedPane::SessionView,
             FocusedPane::SessionView => FocusedPane::Jobs,
             FocusedPane::Jobs => FocusedPane::Status,
             FocusedPane::Status => FocusedPane::Prompt,
@@ -951,7 +1004,8 @@ impl AppState {
     pub fn focus_previous(&mut self) {
         self.focused_pane = match self.focused_pane {
             FocusedPane::StatusBar => FocusedPane::Prompt,
-            FocusedPane::SessionView => FocusedPane::StatusBar,
+            FocusedPane::Motif => FocusedPane::StatusBar,
+            FocusedPane::SessionView => FocusedPane::Motif,
             FocusedPane::Jobs => FocusedPane::SessionView,
             FocusedPane::Status => FocusedPane::Jobs,
             FocusedPane::Prompt => FocusedPane::Status,
@@ -1297,7 +1351,10 @@ fn clip_orchestration(layer: ClipLayer, theme: Option<&ThemeDescriptor>) -> Sect
 mod tests {
     use super::*;
     use crate::config::AppConfig;
-    use crate::types::{GenerationMetadata, SectionRole};
+    use crate::types::{
+        ClipLayer, CompositionPlan, CompositionSection, GenerationMetadata, GenerationMode,
+        SectionEnergy, SectionOrchestration, SectionRole, SessionSummary,
+    };
     use chrono::Utc;
     use serde_json::json;
 
@@ -1451,6 +1508,88 @@ mod tests {
         assert!(summary.contains("12s"));
         assert!(summary.contains("cfg 5.5"));
         assert!(summary.contains("seed 99"));
+    }
+
+    fn sample_plan() -> CompositionPlan {
+        CompositionPlan {
+            version: "v4".to_string(),
+            tempo_bpm: 120,
+            time_signature: "4/4".to_string(),
+            key: "C major".to_string(),
+            total_bars: 4,
+            total_duration_seconds: 8.0,
+            theme: None,
+            sections: vec![CompositionSection {
+                section_id: "s00".to_string(),
+                role: SectionRole::Motif,
+                label: "Motif".to_string(),
+                prompt: "motif".to_string(),
+                bars: 4,
+                target_seconds: 8.0,
+                energy: SectionEnergy::Medium,
+                model_id: None,
+                seed_offset: None,
+                transition: None,
+                motif_directive: None,
+                variation_axes: Vec::new(),
+                cadence_hint: None,
+                orchestration: SectionOrchestration::default(),
+            }],
+        }
+    }
+
+    fn session_summary_with_plan(plan: Option<CompositionPlan>) -> SessionSummary {
+        SessionSummary {
+            session_id: "session-test".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            name: None,
+            tempo_bpm: Some(120),
+            key: Some("C major".to_string()),
+            time_signature: Some("4/4".to_string()),
+            seed_job_id: None,
+            seed_prompt: Some("motif seed".to_string()),
+            seed_plan: plan,
+            theme: None,
+            clip_count: 0,
+            clips: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn toggle_active_clip_target_toggles_selection() {
+        let mut state = AppState::new(AppConfig::default());
+        let initial_target = state.session_view.focused();
+        assert!(state.active_clip_target().is_none());
+        assert!(state.toggle_active_clip_target());
+        assert_eq!(state.active_clip_target(), Some(initial_target));
+        assert!(!state.toggle_active_clip_target());
+        assert!(state.active_clip_target().is_none());
+    }
+
+    #[test]
+    fn build_clip_payload_rejects_missing_motif() {
+        let mut state = AppState::new(AppConfig::default());
+        state.session = Some(session_summary_with_plan(None));
+        let error =
+            state.build_clip_payload_for(ClipLayer::Bass, 0, Some("groovy bass")).unwrap_err();
+        assert!(error.contains("Motif not ready"), "expected motif readiness error, got {error}");
+    }
+
+    #[test]
+    fn build_clip_payload_targets_selected_layer() {
+        let mut state = AppState::new(AppConfig::default());
+        let plan = sample_plan();
+        state.session = Some(session_summary_with_plan(Some(plan.clone())));
+        let (request, built_plan, used_prompt) =
+            state.build_clip_payload_for(ClipLayer::Lead, 0, Some("lead line")).unwrap();
+        assert_eq!(request.clip_layer, Some(ClipLayer::Lead));
+        assert_eq!(request.clip_scene_index, Some(0));
+        assert_eq!(request.mode, Some(GenerationMode::Clip));
+        assert_eq!(used_prompt, "lead line");
+        assert_eq!(built_plan.sections.len(), 1);
+        assert!(built_plan.sections[0].variation_axes.contains(&"lead".to_string()));
+        assert!(plan.sections[0].variation_axes.is_empty());
     }
 
     #[test]

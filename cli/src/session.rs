@@ -68,6 +68,10 @@ pub struct SessionSnapshot {
     pub scenes: Vec<SceneSnapshot>,
     pub focused_layer: ClipLayer,
     pub focused_scene: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_layer: Option<ClipLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_scene: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +82,7 @@ pub struct SessionView {
     focused_scene: usize,
     pending_jobs: HashMap<String, (ClipLayer, usize)>,
     playing: HashMap<ClipLayer, usize>,
+    active: Option<(ClipLayer, usize)>,
 }
 
 impl SessionView {
@@ -186,6 +191,13 @@ impl SessionView {
             self.ensure_scene(0);
             self.focused_scene = 0;
         }
+        let active_scene = snapshot.active_scene.unwrap_or(self.focused_scene);
+        if let Some(layer) = snapshot.active_layer {
+            self.ensure_scene(active_scene);
+            self.active = Some((layer, active_scene));
+        } else {
+            self.active = None;
+        }
     }
 
     pub fn snapshot(&self, session_id: Option<String>) -> SessionSnapshot {
@@ -199,6 +211,8 @@ impl SessionView {
             scenes,
             focused_layer: self.focused_layer,
             focused_scene: self.focused_scene,
+            active_layer: self.active.map(|(layer, _)| layer),
+            active_scene: self.active.map(|(_, scene)| scene),
         }
     }
 
@@ -313,6 +327,22 @@ impl SessionView {
     pub fn pending_scene_for_job(&self, job_id: &str) -> Option<(ClipLayer, usize)> {
         self.pending_jobs.get(job_id).copied()
     }
+
+    pub fn active_target(&self) -> Option<(ClipLayer, usize)> {
+        self.active
+    }
+
+    pub fn toggle_active_target(&mut self, layer: ClipLayer, scene_index: usize) -> bool {
+        self.ensure_scene(scene_index);
+        let target = Some((layer, scene_index));
+        if self.active == target {
+            self.active = None;
+            false
+        } else {
+            self.active = target;
+            true
+        }
+    }
 }
 
 impl Default for SessionView {
@@ -324,6 +354,7 @@ impl Default for SessionView {
             focused_scene: 0,
             pending_jobs: HashMap::new(),
             playing: HashMap::new(),
+            active: None,
         }
     }
 }
