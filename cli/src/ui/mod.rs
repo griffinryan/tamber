@@ -998,6 +998,21 @@ fn dispatch_app_command(
         }
         return;
     }
+    if trimmed == "/session-new" {
+        app.reset_session_state();
+        match crate::session_store::clear_snapshot() {
+            Ok(()) => app.push_status_line("Cleared saved session snapshot.".to_string()),
+            Err(err) => app.push_status_line(format!("Failed to clear session snapshot: {err}")),
+        }
+        let payload = SessionCreateRequest::default();
+        if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
+            let message = "Failed to request session creation; worker channel closed".to_string();
+            app.push_status_line(message);
+        } else {
+            app.push_status_line("Requesting fresh session from worker…".to_string());
+        }
+        return;
+    }
     if trimmed.starts_with("/session") {
         match app.parse_session_command(command_line) {
             Ok(SessionCliCommand::Start) => {

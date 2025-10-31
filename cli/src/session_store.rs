@@ -36,3 +36,12 @@ pub fn save_snapshot(snapshot: &SessionSnapshot) -> Result<()> {
     fs::write(&path, data)
         .with_context(|| format!("failed to write session snapshot to {}", path.display()))
 }
+
+pub fn clear_snapshot() -> Result<()> {
+    let path = snapshot_path()?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("failed to remove session snapshot at {}", path.display()))?;
+    }
+    Ok(())
+}

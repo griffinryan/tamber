@@ -980,6 +980,15 @@ impl AppState {
         self.session_view.focused().0
     }
 
+    pub fn reset_session_state(&mut self) {
+        self.session = None;
+        self.restored_session_id = None;
+        self.session_view = SessionView::new();
+        self.jobs.clear();
+        self.focused_job = None;
+        self.playback = None;
+    }
+
     pub fn save_session_snapshot(&self) -> Result<()> {
         let session_id = self
             .session
@@ -1554,6 +1563,72 @@ mod tests {
             clip_count: 0,
             clips: Vec::new(),
         }
+    }
+
+    #[test]
+    fn reset_session_state_clears_session_context() {
+        let mut state = AppState::new(AppConfig::default());
+        let plan = sample_plan();
+        state.session = Some(session_summary_with_plan(Some(plan.clone())));
+        state.restored_session_id = Some("session-old".to_string());
+
+        let request = GenerationRequest {
+            prompt: "inspired groove".to_string(),
+            seed: None,
+            duration_seconds: 12,
+            model_id: "musicgen-stereo-medium".to_string(),
+            session_id: Some("session-old".to_string()),
+            clip_layer: None,
+            clip_scene_index: None,
+            clip_bars: None,
+            mode: Some(GenerationMode::FullTrack),
+            cfg_scale: Some(5.5),
+            scheduler: None,
+            musicgen_top_k: None,
+            musicgen_top_p: None,
+            musicgen_temperature: None,
+            musicgen_cfg_coef: None,
+            musicgen_two_step_cfg: None,
+            output_sample_rate: None,
+            output_bit_depth: None,
+            output_format: None,
+            plan: Some(plan.clone()),
+        };
+        let status = GenerationStatus {
+            job_id: "job-123".to_string(),
+            state: JobState::Queued,
+            progress: 0.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        state.jobs.insert(
+            status.job_id.clone(),
+            JobEntry {
+                prompt: "inspired groove".to_string(),
+                request,
+                status: status.clone(),
+                plan,
+                artifact: None,
+            },
+        );
+        state.focused_job = Some(status.job_id.clone());
+        state.playback = Some(PlaybackState {
+            job_id: status.job_id.clone(),
+            path: PathBuf::from("clip.wav"),
+            duration: StdDuration::from_secs(12),
+            started_at: Utc::now(),
+            is_playing: true,
+        });
+
+        state.reset_session_state();
+
+        assert!(state.session.is_none());
+        assert!(state.restored_session_id.is_none());
+        assert!(state.jobs.is_empty());
+        assert!(state.focused_job.is_none());
+        assert!(state.playback.is_none());
+        assert_eq!(state.session_view.focused(), (ClipLayer::Rhythm, 0));
     }
 
     #[test]
