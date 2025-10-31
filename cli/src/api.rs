@@ -1,4 +1,7 @@
-use crate::types::{GenerationArtifact, GenerationRequest, GenerationStatus};
+use crate::types::{
+    GenerationArtifact, GenerationRequest, GenerationStatus, SessionClipRequest,
+    SessionCreateRequest, SessionSummary,
+};
 use anyhow::{Context, Result};
 use reqwest::Url;
 
@@ -69,6 +72,51 @@ impl Client {
             anyhow::bail!("artifact fetch failed with status {}", response.status());
         }
         response.json().await.context("failed to decode artifact response")
+    }
+
+    pub async fn create_session(&self, payload: &SessionCreateRequest) -> Result<SessionSummary> {
+        let url = self.base_url.join("session").context("failed to build session URL")?;
+        let response =
+            self.http.post(url).json(payload).send().await.context("failed to create session")?;
+        if !response.status().is_success() {
+            anyhow::bail!("session creation failed with status {}", response.status());
+        }
+        response.json().await.context("failed to decode session response")
+    }
+
+    pub async fn session_summary(&self, session_id: &str) -> Result<SessionSummary> {
+        let url = self
+            .base_url
+            .join(&format!("session/{session_id}"))
+            .context("failed to build session summary URL")?;
+        let response =
+            self.http.get(url).send().await.context("failed to fetch session summary")?;
+        if !response.status().is_success() {
+            anyhow::bail!("session fetch failed with status {}", response.status());
+        }
+        response.json().await.context("failed to decode session response")
+    }
+
+    pub async fn submit_session_clip(
+        &self,
+        session_id: &str,
+        payload: &SessionClipRequest,
+    ) -> Result<GenerationStatus> {
+        let url = self
+            .base_url
+            .join(&format!("session/{session_id}/clip"))
+            .context("failed to build session clip URL")?;
+        let response = self
+            .http
+            .post(url)
+            .json(payload)
+            .send()
+            .await
+            .context("failed to submit session clip request")?;
+        if !response.status().is_success() {
+            anyhow::bail!("clip submission failed with status {}", response.status());
+        }
+        response.json().await.context("failed to decode clip response")
     }
 
     pub fn base_url(&self) -> &Url {

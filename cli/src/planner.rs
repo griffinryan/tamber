@@ -510,6 +510,7 @@ impl CompositionPlanner {
                 }
                 self.build_short_form_plan(prompt, duration_seconds, seed)
             }
+            GenerationMode::Clip => panic!("clip planning requires session context"),
         }
     }
 

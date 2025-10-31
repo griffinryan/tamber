@@ -25,6 +25,14 @@ pub struct GenerationRequest {
     pub duration_seconds: u8,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_layer: Option<ClipLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_scene_index: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_bars: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<GenerationMode>,
     pub cfg_scale: Option<f32>,
     pub scheduler: Option<String>,
@@ -53,6 +61,7 @@ pub struct GenerationRequest {
 pub enum GenerationMode {
     FullTrack,
     Motif,
+    Clip,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +118,17 @@ pub enum SectionEnergy {
     Low,
     Medium,
     High,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipLayer {
+    Rhythm,
+    Bass,
+    Harmony,
+    Lead,
+    Textures,
+    Vocals,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -175,4 +195,72 @@ pub struct CompositionPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeDescriptor>,
     pub sections: Vec<CompositionSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionClipSummary {
+    pub job_id: String,
+    pub prompt: String,
+    pub state: JobState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<ClipLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_index: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bars: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionCreateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_bpm: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionClipRequest {
+    pub layer: ClipLayer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bars: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_index: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_bpm: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_plan: Option<CompositionPlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeDescriptor>,
+    pub clip_count: usize,
+    #[serde(default)]
+    pub clips: Vec<SessionClipSummary>,
 }

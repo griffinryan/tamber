@@ -33,6 +33,16 @@ class SectionEnergy(str, Enum):
 class GenerationMode(str, Enum):
     FULL_TRACK = "full_track"
     MOTIF = "motif"
+    CLIP = "clip"
+
+
+class ClipLayer(str, Enum):
+    RHYTHM = "rhythm"
+    BASS = "bass"
+    HARMONY = "harmony"
+    LEAD = "lead"
+    TEXTURES = "textures"
+    VOCALS = "vocals"
 
 
 class ThemeDescriptor(BaseModel):
@@ -85,7 +95,11 @@ class GenerationRequest(BaseModel):
     seed: Optional[int] = Field(default=None, ge=0)
     duration_seconds: int = Field(default=120, ge=1, le=300)
     model_id: str = Field(default="musicgen-stereo-medium")
+    session_id: Optional[str] = Field(default=None, min_length=8, max_length=64)
     mode: GenerationMode = Field(default=GenerationMode.FULL_TRACK)
+    clip_layer: Optional[ClipLayer] = Field(default=None)
+    clip_scene_index: Optional[int] = Field(default=None, ge=0, le=512)
+    clip_bars: Optional[int] = Field(default=None, ge=1, le=64)
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)
     musicgen_top_k: Optional[int] = Field(default=None, ge=0, le=2048)
@@ -124,3 +138,45 @@ class GenerationArtifact(BaseModel):
     job_id: str
     artifact_path: str
     metadata: GenerationMetadata
+
+
+class SessionClipSummary(BaseModel):
+    job_id: str
+    prompt: str
+    state: JobState
+    duration_seconds: Optional[float] = None
+    artifact_path: Optional[str] = None
+    layer: Optional[ClipLayer] = None
+    scene_index: Optional[int] = None
+    bars: Optional[int] = None
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
+    name: Optional[str] = None
+    tempo_bpm: Optional[int] = None
+    key: Optional[str] = None
+    time_signature: Optional[str] = None
+    seed_job_id: Optional[str] = None
+    seed_prompt: Optional[str] = None
+    seed_plan: Optional[CompositionPlan] = None
+    theme: Optional[ThemeDescriptor] = None
+    clip_count: int = 0
+    clips: list[SessionClipSummary] = Field(default_factory=list)
+
+
+class SessionCreateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=64)
+    prompt: Optional[str] = Field(default=None, max_length=512)
+    tempo_bpm: Optional[int] = Field(default=None, ge=40, le=300)
+    key: Optional[str] = Field(default=None, max_length=32)
+    time_signature: Optional[str] = Field(default=None, max_length=8)
+
+
+class SessionClipRequest(BaseModel):
+    layer: ClipLayer
+    prompt: Optional[str] = Field(default=None, max_length=512)
+    bars: Optional[int] = Field(default=None, ge=1, le=64)
+    scene_index: Optional[int] = Field(default=None, ge=0, le=512)

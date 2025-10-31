@@ -13,7 +13,7 @@ use std::{
     io::{self, BufReader},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration as StdDuration,
+    time::{Duration as StdDuration, Instant},
 };
 use tokio::{
     sync::{
@@ -30,12 +30,18 @@ mod api;
 mod app;
 mod config;
 mod planner;
+mod session;
+mod session_store;
 mod types;
 mod ui;
 
 use app::{AppCommand, AppEvent, AppState, LocalArtifact};
 use config::AppConfig;
-use types::{CompositionPlan, GenerationArtifact, GenerationRequest, JobState};
+use session::LAYER_ORDER;
+use types::{
+    ClipLayer, CompositionPlan, GenerationArtifact, GenerationRequest, JobState,
+    SessionClipRequest, SessionCreateRequest,
+};
 
 const PULSE_MESSAGES: &[&str] = &[
     "Stirring the sound cauldron…",
@@ -49,6 +55,7 @@ struct AudioPlayer {
     _stream: OutputStream,
     handle: rodio::OutputStreamHandle,
     sink: Option<Sink>,
+    clip_sinks: HashMap<ClipLayer, Sink>,
 }
 
 unsafe impl Send for AudioPlayer {}
@@ -58,7 +65,7 @@ impl AudioPlayer {
     fn new() -> Result<Self> {
         let (stream, handle) =
             OutputStream::try_default().context("failed to open audio output")?;
-        Ok(Self { _stream: stream, handle, sink: None })
+        Ok(Self { _stream: stream, handle, sink: None, clip_sinks: HashMap::new() })
     }
 
     fn play(&mut self, path: &Path) -> Result<()> {
@@ -79,12 +86,38 @@ impl AudioPlayer {
         }
     }
 
+    fn play_clip(&mut self, layer: ClipLayer, path: &Path) -> Result<()> {
+        self.stop_clip(layer);
+        let file =
+            File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+        let decoder = Decoder::new(BufReader::new(file)).context("failed to decode audio")?;
+        let sink = Sink::try_new(&self.handle).context("failed to create audio sink")?;
+        let source = decoder.buffered();
+        sink.append(source.repeat_infinite());
+        sink.play();
+        self.clip_sinks.insert(layer, sink);
+        Ok(())
+    }
+
+    fn stop_clip(&mut self, layer: ClipLayer) {
+        if let Some(sink) = self.clip_sinks.remove(&layer) {
+            sink.stop();
+        }
+    }
+
+    fn stop_all_clips(&mut self) {
+        for (_, sink) in self.clip_sinks.drain() {
+            sink.stop();
+        }
+    }
+
     fn is_playing(&self) -> bool {
         self.sink.as_ref().map(|sink| !sink.empty()).unwrap_or(false)
     }
 
     fn reset(&mut self) {
         self.stop();
+        self.stop_all_clips();
     }
 }
 
@@ -119,6 +152,10 @@ async fn main() -> Result<()> {
     terminal.show_cursor()?;
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+
+    if let Err(err) = app_state.save_session_snapshot() {
+        error!("failed to save session snapshot: {err}");
+    }
 
     ui_result
 }
@@ -173,12 +210,20 @@ struct Controller {
     inner: Arc<ControllerInner>,
 }
 
+struct ClipClock {
+    tempo_bpm: u16,
+    beats_per_bar: f32,
+    last_launch: Instant,
+}
+
 struct ControllerInner {
     client: api::Client,
     event_tx: UnboundedSender<AppEvent>,
     config: AppConfig,
     artifact_paths: Mutex<HashMap<String, PathBuf>>,
+    session_jobs: Mutex<HashMap<String, String>>,
     player: Mutex<AudioPlayer>,
+    clip_clock: Mutex<Option<ClipClock>>,
 }
 
 impl Controller {
@@ -193,7 +238,9 @@ impl Controller {
             event_tx,
             config,
             artifact_paths: Mutex::new(HashMap::new()),
+            session_jobs: Mutex::new(HashMap::new()),
             player: Mutex::new(player),
+            clip_clock: Mutex::new(None),
         };
         Ok(Self { inner: Arc::new(inner) })
     }
@@ -215,11 +262,30 @@ impl Controller {
             AppCommand::SubmitPrompt { prompt, request, plan } => {
                 Controller::submit_prompt(inner, prompt, request, plan).await?;
             }
+            AppCommand::SubmitClip { prompt, layer, request, plan } => {
+                Controller::submit_clip(inner, prompt, layer, request, plan).await?;
+            }
             AppCommand::PlayJob { job_id } => {
                 Controller::play_job(inner, job_id).await?;
             }
             AppCommand::StopPlayback => {
                 Controller::stop_playback(inner).await?;
+            }
+            AppCommand::CreateSession { payload } => {
+                Controller::create_session(inner, payload).await?;
+            }
+            AppCommand::FetchSession { session_id } => {
+                Controller::refresh_session(inner, session_id).await?;
+            }
+            AppCommand::LaunchClip { layer, scene_index, path, tempo_bpm, beats_per_bar } => {
+                Controller::launch_clip(inner, layer, scene_index, path, tempo_bpm, beats_per_bar)
+                    .await?;
+            }
+            AppCommand::StopClip { layer } => {
+                Controller::stop_clip(inner, layer).await?;
+            }
+            AppCommand::StopAllClips => {
+                Controller::stop_all_clips(inner).await?;
             }
         }
         Ok(())
@@ -239,6 +305,52 @@ impl Controller {
         {
             let mut player = inner.player.lock().await;
             player.reset();
+        }
+
+        if let Some(session_id) = request.session_id.clone() {
+            let mut jobs = inner.session_jobs.lock().await;
+            jobs.insert(status.job_id.clone(), session_id);
+        }
+
+        let _ = inner.event_tx.send(AppEvent::JobQueued {
+            status: status.clone(),
+            prompt,
+            request,
+            plan,
+        });
+
+        Controller::spawn_poll_task(inner, status.job_id.clone());
+        Ok(())
+    }
+
+    async fn submit_clip(
+        inner: Arc<ControllerInner>,
+        prompt: String,
+        layer: ClipLayer,
+        request: GenerationRequest,
+        plan: CompositionPlan,
+    ) -> Result<()> {
+        let session_id = request
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow!("clip requests require an active session"))?;
+
+        let payload = SessionClipRequest {
+            layer,
+            prompt: Some(prompt.clone()),
+            bars: request.clip_bars,
+            scene_index: request.clip_scene_index,
+        };
+
+        let status = inner
+            .client
+            .submit_session_clip(&session_id, &payload)
+            .await
+            .context("failed to submit session clip")?;
+
+        {
+            let mut jobs = inner.session_jobs.lock().await;
+            jobs.insert(status.job_id.clone(), session_id.clone());
         }
 
         let _ = inner.event_tx.send(AppEvent::JobQueued {
@@ -261,6 +373,104 @@ impl Controller {
                     .send(AppEvent::Error(format!("Failed to poll job {job_id}: {err}")));
             }
         });
+    }
+
+    async fn create_session(
+        inner: Arc<ControllerInner>,
+        payload: SessionCreateRequest,
+    ) -> Result<()> {
+        let summary =
+            inner.client.create_session(&payload).await.context("failed to create session")?;
+        let _ = inner.event_tx.send(AppEvent::SessionStarted { summary });
+        Ok(())
+    }
+
+    async fn refresh_session(inner: Arc<ControllerInner>, session_id: String) -> Result<()> {
+        let summary =
+            inner.client.session_summary(&session_id).await.context("failed to refresh session")?;
+        let _ = inner.event_tx.send(AppEvent::SessionUpdated { summary });
+        Ok(())
+    }
+
+    async fn launch_clip(
+        inner: Arc<ControllerInner>,
+        layer: ClipLayer,
+        scene_index: usize,
+        path: PathBuf,
+        tempo_bpm: u16,
+        beats_per_bar: f32,
+    ) -> Result<()> {
+        let quant_seconds = (60.0_f32 / tempo_bpm.max(1) as f32) * beats_per_bar.max(1.0);
+        let mut wait_duration = StdDuration::default();
+
+        {
+            let mut clock = inner.clip_clock.lock().await;
+            let now = Instant::now();
+            if quant_seconds <= f32::EPSILON {
+                *clock = Some(ClipClock { tempo_bpm, beats_per_bar, last_launch: now });
+            } else if let Some(clock_state) = clock.as_mut() {
+                if clock_state.tempo_bpm != tempo_bpm
+                    || (clock_state.beats_per_bar - beats_per_bar).abs() > f32::EPSILON
+                {
+                    *clock_state = ClipClock { tempo_bpm, beats_per_bar, last_launch: now };
+                } else {
+                    let elapsed = now.saturating_duration_since(clock_state.last_launch);
+                    let elapsed_secs = elapsed.as_secs_f32();
+                    let remainder = elapsed_secs.rem_euclid(quant_seconds);
+                    if remainder > 0.01 {
+                        let wait_secs = quant_seconds - remainder;
+                        wait_duration = StdDuration::from_secs_f32(wait_secs);
+                        clock_state.last_launch = now + wait_duration;
+                    } else {
+                        clock_state.last_launch = now;
+                    }
+                }
+            } else {
+                *clock = Some(ClipClock { tempo_bpm, beats_per_bar, last_launch: now });
+            }
+        }
+
+        let inner_clone = inner.clone();
+        tokio::spawn(async move {
+            if !wait_duration.is_zero() {
+                sleep(TokioDuration::from_secs_f64(wait_duration.as_secs_f64())).await;
+            }
+            let mut player = inner_clone.player.lock().await;
+            if let Err(err) = player.play_clip(layer, &path) {
+                error!("failed to launch clip: {err}");
+                let _ = inner_clone
+                    .event_tx
+                    .send(AppEvent::Error(format!("Failed to play clip: {err}")));
+            } else {
+                let _ = inner_clone.event_tx.send(AppEvent::ClipPlaying { layer, scene_index });
+            }
+        });
+
+        Ok(())
+    }
+
+    async fn stop_clip(inner: Arc<ControllerInner>, layer: ClipLayer) -> Result<()> {
+        let mut player = inner.player.lock().await;
+        player.stop_clip(layer);
+        let _ = inner.event_tx.send(AppEvent::ClipStopped { layer });
+        Ok(())
+    }
+
+    async fn stop_all_clips(inner: Arc<ControllerInner>) -> Result<()> {
+        let mut player = inner.player.lock().await;
+        player.stop_all_clips();
+        drop(player);
+        for layer in LAYER_ORDER {
+            let _ = inner.event_tx.send(AppEvent::ClipStopped { layer });
+        }
+        let mut clock = inner.clip_clock.lock().await;
+        *clock = None;
+        Ok(())
+    }
+
+    async fn take_session_job(inner: Arc<ControllerInner>, job_id: &str) -> Option<String> {
+        let mut guard = inner.session_jobs.lock().await;
+        guard.remove(job_id)
     }
 
     async fn poll_job(inner: Arc<ControllerInner>, job_id: String) -> Result<()> {
@@ -295,6 +505,8 @@ impl Controller {
 
             match status.state {
                 JobState::Succeeded => {
+                    let session_binding =
+                        Controller::take_session_job(inner.clone(), &job_id).await;
                     let artifact = inner
                         .client
                         .fetch_artifact(&job_id)
@@ -306,19 +518,22 @@ impl Controller {
                         guard.insert(job_id.clone(), local.local_path.clone());
                     }
                     let _ = inner.event_tx.send(AppEvent::JobCompleted { status, artifact: local });
-                    if let Some(path) = inner.artifact_paths.lock().await.get(&job_id).cloned() {
-                        if let Ok(duration) = audio_duration(&path) {
-                            let mut player = inner.player.lock().await;
-                            if let Err(err) = player.play(&path) {
-                                error!("failed to start playback: {err}");
-                            } else {
-                                drop(player);
-                                let _ = inner.event_tx.send(AppEvent::PlaybackStarted {
-                                    job_id: job_id.clone(),
-                                    path,
-                                    duration,
-                                });
-                                Controller::spawn_playback_monitor(inner.clone());
+                    if session_binding.is_none() {
+                        if let Some(path) = inner.artifact_paths.lock().await.get(&job_id).cloned()
+                        {
+                            if let Ok(duration) = audio_duration(&path) {
+                                let mut player = inner.player.lock().await;
+                                if let Err(err) = player.play(&path) {
+                                    error!("failed to start playback: {err}");
+                                } else {
+                                    drop(player);
+                                    let _ = inner.event_tx.send(AppEvent::PlaybackStarted {
+                                        job_id: job_id.clone(),
+                                        path,
+                                        duration,
+                                    });
+                                    Controller::spawn_playback_monitor(inner.clone());
+                                }
                             }
                         }
                     }
@@ -326,9 +541,29 @@ impl Controller {
                         progress: 1.0,
                         message: "Render complete — ready for playback".to_string(),
                     });
+                    if let Some(session_id) = session_binding {
+                        if let Err(err) =
+                            Controller::refresh_session(inner.clone(), session_id.clone()).await
+                        {
+                            error!("failed to refresh session {session_id}: {err}");
+                            let _ = inner.event_tx.send(AppEvent::Error(format!(
+                                "Failed to refresh session {session_id}: {err}"
+                            )));
+                        }
+                    }
                     break;
                 }
-                JobState::Failed => break,
+                JobState::Failed => {
+                    let session_id = Controller::take_session_job(inner.clone(), &job_id).await;
+                    if let Some(session_id) = session_id {
+                        if let Err(err) =
+                            Controller::refresh_session(inner.clone(), session_id.clone()).await
+                        {
+                            error!("failed to refresh session {session_id}: {err}");
+                        }
+                    }
+                    break;
+                }
                 _ => {}
             }
         }

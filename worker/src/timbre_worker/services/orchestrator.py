@@ -8,10 +8,12 @@ import numpy as np
 from loguru import logger
 
 from ..app.models import (
+    ClipLayer,
     CompositionPlan,
     CompositionSection,
     GenerationArtifact,
     GenerationMetadata,
+    GenerationMode,
     GenerationRequest,
     SectionRole,
 )
@@ -66,7 +68,11 @@ class ComposerOrchestrator:
         ] = None,
         mix_cb: Optional[Callable[[float], Awaitable[None]]] = None,
     ) -> GenerationArtifact:
+        if request.mode == GenerationMode.CLIP and request.plan is None:
+            raise GenerationFailure("clip request missing precomputed plan")
+
         plan = request.plan or self._planner.build_plan(request)
+        clip_mode = request.mode == GenerationMode.CLIP
         phrases = self._build_phrase_plan(plan)
         await self._ensure_musicgen_ready()
 
@@ -119,6 +125,8 @@ class ComposerOrchestrator:
 
         trimmed, sample_rate, section_rms = self._prepare_section_waveforms(plan, tracks)
         waveform, crossfades = self._combine_sections(plan, trimmed, sample_rate, tracks)
+        if clip_mode:
+            waveform = self._enforce_clip_length(waveform, sample_rate, plan.total_duration_seconds)
         waveform = normalise_loudness(waveform, target_rms=0.2)
         waveform = tilt_highs(waveform, sample_rate)
         waveform = soft_limiter(waveform, threshold=0.98)
@@ -165,6 +173,16 @@ class ComposerOrchestrator:
         extras["format"] = self._settings.export_format
         if plan.theme is not None:
             extras["theme"] = plan.theme.model_dump()
+
+        if clip_mode:
+            extras["clip"] = {
+                "session_id": request.session_id,
+                "layer": request.clip_layer.value if isinstance(request.clip_layer, ClipLayer) else request.clip_layer,
+                "bars": request.clip_bars,
+                "scene_index": request.clip_scene_index,
+                "loop_seconds": plan.total_duration_seconds,
+                "loop_ready": True,
+            }
 
         metadata = GenerationMetadata(
             prompt=request.prompt,
@@ -548,6 +566,25 @@ class ComposerOrchestrator:
                 )
 
         return combined.astype(np.float32), crossfade_records
+
+    def _enforce_clip_length(
+        self,
+        waveform: np.ndarray,
+        sample_rate: int,
+        target_seconds: float,
+    ) -> np.ndarray:
+        target_samples = max(1, int(round(target_seconds * sample_rate)))
+        shaped = self._shape_to_target_length(waveform, target_samples, sample_rate)
+        fade_samples = max(1, int(round(sample_rate * 0.005)))
+        if fade_samples > 0 and shaped.shape[0] >= fade_samples:
+            fade = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+            if shaped.ndim == 1:
+                shaped[:fade_samples] *= fade
+                shaped[-fade_samples:] *= fade[::-1]
+            else:
+                shaped[:fade_samples] *= fade[:, None]
+                shaped[-fade_samples:] *= fade[::-1][:, None]
+        return shaped
 
     def _crossfade_seconds(
         self,

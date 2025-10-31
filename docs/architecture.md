@@ -21,7 +21,7 @@ This document describes how the current Timbre stack fits together: the Ratatui 
 │ ──────────────────────── │                                   │ ──────────────────────── │
 │ tokio + reqwest client   │ Submit GenerationRequest          │ FastAPI/uvicorn          │
 │ planner mirror (Rust)    │ Poll GenerationStatus             │ Composition planner v3   │
-│ status + chat UI         │ Download GenerationArtifact       │ Composer orchestrator    │
+│ session view + status UI │ Download GenerationArtifact       │ Composer orchestrator    │
 │ rodio playback           │                                   │ MusicGen backend         │
 └──────────────────────────┘                                   └──────────────────────────┘
              │                                                             │
@@ -52,7 +52,8 @@ Common behaviour:
 - **ThemeDescriptor**: motif phrase, instrumentation keywords, rhythm tag, texture, dynamic curve. Derived from prompt tokens and template energies.
 - **Orchestration layers**: per-section lists for rhythm, bass, harmony, lead, textures, vocals. These inform MusicGen prompts and show up in CLI UI extras.
 - **Seed strategy**: base seed derived from prompt hash unless explicitly provided. Section offsets are deterministic (motif seed = base, chorus = base+1, etc.).
-- **Plan versioning**: `CompositionPlan.version = "v3"`. Downstream consumers should guard on this before assuming certain fields exist.
+- **Plan versioning**: Long-form/short-form tracks remain `"v3"`. Clip-oriented requests (via `/clip` or session APIs) emit `"v4"` single-section plans tuned for loop playback.
+- **Clip planning**: `CompositionPlanner.build_clip_plan` constrains tempo/key to the session seed, focuses orchestration on the requested layer, and emits bar-perfect loop durations for the CLI Session View.
 
 Outputs feed both the worker orchestrator and the CLI status view through `plan.sections[*]`.
 
@@ -71,6 +72,7 @@ The orchestrator coordinates renders and assembles the final mix:
 4. **Preparation**: `_shape_to_target_length` normalises duration, trims or pads with short fades, and records per-section RMS.
 5. **Mix assembly**: sections are concatenated with either butt joins (micro fades) or longer crossfades when conditioning is missing or placeholders appear. Metadata captures duration, transition mode, and conditioning flags.
 6. **Mastering**: normalise to target RMS (0.2), apply a gentle high tilt, run a soft limiter, resample to `Settings.export_sample_rate` (default 48 kHz), and write PCM WAV (`export_bit_depth`).
+7. **Clip loops**: when handling `GenerationMode::CLIP`, the orchestrator trims/fades the render to an exact bar length and tags `extras.clip` with loop metadata for the Session View.
 
 Artifacts land in `Settings.artifact_root` (defaults to `~/Music/Timbre`). Metadata extras include:
 
@@ -92,10 +94,10 @@ Artifacts land in `Settings.artifact_root` (defaults to `~/Music/Timbre`). Metad
 
 ## 6. CLI (Rust `cli/`)
 
-- `AppState` holds config (`cli/src/config.rs`), active jobs, and planner previews.
-- Slash commands modify `GenerationConfig` and are applied to subsequent jobs.
-- Planner mirror (`cli/src/planner.rs`) mirrors Python logic so previews match worker output.
-- `cli/src/ui/mod.rs` renders chat history, job list, and per-section status. Section extras from metadata (“MusicGen · render 42.1s · arrangement …”) are displayed once a job finishes.
+- `AppState` holds config (`cli/src/config.rs`), active jobs, planner previews, and the Session View grid. Session layouts are snapshotted to `~/.config/timbre/session.json` on exit and restored at start-up.
+- Slash commands modify `GenerationConfig` and session state. In addition to `/duration`, `/model`, `/cfg`, `/seed`, the CLI exposes `/session start`, `/session status`, `/clip <layer> [prompt]`, and `/scene add|rename` for Ableton-style clip launching.
+- Planner mirror (`cli/src/planner.rs`) mirrors Python logic so previews match worker output (long-form v3 plans for full tracks, `build_clip_plan` v4 for session clips).
+- `cli/src/ui/mod.rs` renders the Session View grid, job list, and status sidebar. Clip cells reflect layer/scene status (queued, rendering, ready, failed) and playback state; section extras from metadata populate the status panel once a job finishes.
 - Artifacts are copied into the user artifact directory and enriched with CLI-only extras (`local_path`).
 
 Error handling:

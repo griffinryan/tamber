@@ -38,8 +38,19 @@ While the CLI is running type `/command value` in the prompt area:
 | `/reset` | Restore defaults from config/env. |
 | `/motif <prompt>` | Queue a motif-only preview (~16 s) on MusicGen stereo medium. |
 | `/small <prompt>` / `/medium <prompt>` / `/large <prompt>` | One-off generation using a specific MusicGen size. |
+| `/session start` | Create a new worker-owned session (clears previous tempo/key and clips). |
+| `/session status` | Refresh session metadata (tempo, key, clips) from the worker. |
+| `/clip <layer> [prompt]` | Queue a loopable clip for the focused scene/layer (`layer` = rhythm, bass, harmony, lead, textures, vocals). |
+| `/scene add [name]` / `/scene rename <name>` | Manage scenes in the Session View without leaving the TUI. |
 
-The status sidebar mirrors the worker’s `CompositionPlan`: section roles, bars, target seconds, orchestration highlights, backend, conditioning flags, and active section indicator (`▶`).
+### Session View shortcuts
+
+- `Enter` (when Session View focused) launches the highlighted clip, quantised to the session tempo.
+- `Space` stops playback for the focused layer; `x` stops all clips.
+- Arrow keys move focus across tracks/scenes; `/clip` targets the focused slot.
+- `Ctrl+P` still reprints the artifact path for the selected job.
+
+The Session View (left pane) mirrors the worker-backed session: tracks (layers) down the side, scenes across, and per-clip status/loop metadata. The status sidebar continues to reflect the active job/plan—section roles, bars, durations, orchestration highlights, backend, conditioning flags, and the active section indicator (`▶`).
 
 ---
 
@@ -50,7 +61,7 @@ cli/
 ├─ src/
 │  ├─ app.rs          # AppState, HTTP client, slash command handling
 │  ├─ planner.rs      # Rust mirror of CompositionPlanner v3
-│  ├─ ui/mod.rs       # Ratatui widgets (chat, jobs, status, logs)
+│  ├─ ui/mod.rs       # Ratatui widgets (session grid, jobs, status, logs)
 │  ├─ config.rs       # Config loading (env + TOML)
 │  └─ types.rs        # Serde models mirroring worker schemas
 └─ Cargo.toml

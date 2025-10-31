@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime
 from typing import Dict, Optional
 from uuid import uuid4
@@ -9,15 +10,31 @@ from loguru import logger
 
 from ..services.exceptions import GenerationFailure
 from ..services.orchestrator import ComposerOrchestrator
+from ..services.planner import CompositionPlanner
 from ..services.types import SectionRender
-from .models import GenerationArtifact, GenerationRequest, GenerationStatus, JobState
+from .models import (
+    ClipLayer,
+    GenerationArtifact,
+    GenerationMode,
+    GenerationRequest,
+    GenerationStatus,
+    JobState,
+)
+from .sessions import SessionManager, UnknownSessionError
 
 
 class JobManager:
     """Coordinates asynchronous generation jobs and exposes status artifacts."""
 
-    def __init__(self, orchestrator: ComposerOrchestrator):
+    def __init__(
+        self,
+        orchestrator: ComposerOrchestrator,
+        planner: CompositionPlanner,
+        sessions: SessionManager,
+    ):
         self._orchestrator = orchestrator
+        self._planner = planner
+        self._sessions = sessions
         self._statuses: Dict[str, GenerationStatus] = {}
         self._artifacts: Dict[str, GenerationArtifact] = {}
         self._requests: Dict[str, GenerationRequest] = {}
@@ -27,13 +44,86 @@ class JobManager:
     async def enqueue(self, request: GenerationRequest) -> GenerationStatus:
         job_id = str(uuid4())
         status = GenerationStatus(job_id=job_id, state=JobState.QUEUED, message="queued")
+
+        if request.session_id is not None:
+            exists = await self._sessions.session_exists(request.session_id)
+            if not exists:
+                raise UnknownSessionError(request.session_id)
+            if request.mode == GenerationMode.CLIP or request.clip_layer is not None:
+                await self._prepare_clip_request(request)
+
+
         async with self._lock:
             self._statuses[job_id] = status
             self._requests[job_id] = request
         task = asyncio.create_task(self._execute_job(job_id, request))
         async with self._lock:
             self._tasks[job_id] = task
+
+        if request.session_id is not None:
+            await self._sessions.register_job(
+                request.session_id,
+                job_id,
+                request.prompt,
+                layer=request.clip_layer,
+                scene_index=request.clip_scene_index,
+                bars=request.clip_bars,
+            )
+
         return status
+
+    async def _prepare_clip_request(self, request: GenerationRequest) -> None:
+        session_id = request.session_id
+        if session_id is None:
+            raise RuntimeError("clip requests require a session")
+        summary = await self._sessions.get_summary(session_id)
+        if summary is None:
+            raise UnknownSessionError(session_id)
+        seed_plan = summary.seed_plan
+        if seed_plan is None:
+            raise RuntimeError("session seed plan not ready")
+
+        clip_layer = request.clip_layer or ClipLayer.RHYTHM
+        bars = request.clip_bars or 4
+        prompt = request.prompt or summary.seed_prompt or "Session clip"
+        request.prompt = prompt
+
+        plan = self._planner.build_clip_plan(
+            seed_plan=seed_plan,
+            session_theme=summary.theme or seed_plan.theme,
+            clip_prompt=prompt,
+            layer=clip_layer,
+            bars=bars,
+        )
+
+        request.plan = plan
+        request.mode = GenerationMode.CLIP
+        request.clip_layer = clip_layer
+        request.clip_bars = bars
+
+        loop_seconds = max(1.0, float(plan.total_duration_seconds))
+        request.duration_seconds = max(1, int(round(loop_seconds)))
+
+        if request.seed is None:
+            request.seed = self._derive_clip_seed(
+                session_id=session_id,
+                layer=clip_layer,
+                scene_index=request.clip_scene_index,
+                prompt=prompt,
+            )
+
+    @staticmethod
+    def _derive_clip_seed(
+        *,
+        session_id: str,
+        layer: ClipLayer,
+        scene_index: Optional[int],
+        prompt: str,
+    ) -> int:
+        scene_fragment = str(scene_index) if scene_index is not None else "none"
+        payload = f"{session_id}|{layer.value}|{scene_fragment}|{prompt}".encode("utf-8")
+        digest = hashlib.sha256(payload).digest()
+        return int.from_bytes(digest[:8], "little") & ((1 << 62) - 1)
 
     async def get_status(self, job_id: str) -> Optional[GenerationStatus]:
         async with self._lock:
@@ -56,6 +146,7 @@ class JobManager:
             progress=0.05,
             message="planning composition",
         )
+        session_id = request.session_id
         try:
             async def progress_cb(position: int, total: int, render: SectionRender) -> None:
                 ratio = position / max(total, 1)
@@ -115,6 +206,8 @@ class JobManager:
             progress=1.0,
             message="generation complete",
         )
+        if session_id is not None:
+            await self._sessions.record_artifact(session_id, job_id, artifact)
         async with self._lock:
             self._tasks.pop(job_id, None)
             self._requests.pop(job_id, None)
@@ -127,6 +220,7 @@ class JobManager:
         progress: Optional[float] = None,
         message: Optional[str] = None,
     ) -> None:
+        session_id: Optional[str] = None
         async with self._lock:
             status = self._statuses[job_id]
             status.state = state
@@ -134,3 +228,8 @@ class JobManager:
                 status.progress = max(0.0, min(progress, 1.0))
             status.message = message
             status.updated_at = datetime.now(tz=UTC)
+            request = self._requests.get(job_id)
+            if request is not None:
+                session_id = request.session_id
+        if session_id is not None:
+            await self._sessions.mark_job_state(session_id, job_id, state)

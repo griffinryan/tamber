@@ -8,6 +8,7 @@ from ..services.orchestrator import ComposerOrchestrator
 from ..services.planner import CompositionPlanner
 from .jobs import JobManager
 from .routes import router
+from .sessions import SessionManager
 from .settings import get_settings
 
 
@@ -17,13 +18,15 @@ def create_app() -> FastAPI:
     planner = CompositionPlanner()
     musicgen = MusicGenService(settings=settings)
     orchestrator = ComposerOrchestrator(settings, planner, musicgen)
-    manager = JobManager(orchestrator)
+    sessions = SessionManager()
+    manager = JobManager(orchestrator, planner, sessions)
     app = FastAPI(title="Timbre Worker", version="0.1.0")
     app.state.settings = settings
     app.state.musicgen_service = musicgen
     app.state.composer = orchestrator
     app.state.planner = planner
     app.state.job_manager = manager
+    app.state.session_manager = sessions
     app.state.backend_status = {}
 
     async def _warmup_background() -> None:

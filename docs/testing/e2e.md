@@ -10,8 +10,8 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
 
 ## Test Flow
 1. Run `make cli-run`.
-2. Observe the status panel: it should show health info and default model.
-3. Enter a prompt (e.g., `dreamy piano over rain`). The conversation pane logs your entry and the job appears in the Jobs panel.
+2. Observe the Session View (left pane): each layer/scene slot should be empty and the status panel should show worker health/default model.
+3. Enter a prompt (e.g., `dreamy piano over rain`). The Jobs panel lists the new job and status lines report the queued plan summary.
 4. Adjust generation settings on the fly with slash commands if desired:
   - `/duration 120` keeps long-form (intro → motif → chorus → outro). Values 90–180 are accepted; shorter values are clamped to 90 in the CLI but still honoured when calling the worker API directly.
   - `/duration 24` (after sending the job) is useful for verifying short-form plan previews—expect fewer sections.
@@ -24,14 +24,15 @@ Use this checklist to validate the Timbre CLI ↔ worker integration after signi
 6. When complete, the CLI copies outputs into `~/Music/Timbre/<job_id>/` and logs the artifact path. Press `Ctrl+P` with the job highlighted to surface the path again.
 7. Play back the WAV manually (`open <path>` on macOS). Placeholder audio includes a noisy sine tone and metadata flag `placeholder=true`; real outputs require the inference extras (torch, transformers, torchaudio) and will reflect the prompt more directly.
 8. Inspect `metadata.json` in the job directory:
-   - `plan.version` should read `v3`.
+   - `plan.version` should read `v3` for full-track requests (clip jobs will report `v4`).
    - `plan.sections[*].orchestration` lists the layered instrumentation the planner derived.
    - `extras.sections[*].arrangement_text` summarises the section focus.
    - `extras.mix.crossfades[*]` shows transition mode (`butt` vs `crossfade`) and duration.
+9. (Optional) Trigger a clip in the same session with `/clip rhythm deep drums` (or another layer). The Session View cell should move from `queued` → `rendering` → `ready`, and `Enter` should launch the loop in sync with the session tempo.
 
 ## Composition Plan Smoke
 1. Launch the worker with the dev + inference extras installed (e.g., `uv sync --project worker --extra dev --extra inference`).
-2. In the CLI, submit a descriptive prompt (e.g., `wistful piano resolving to hope`). The system chat should print a planner summary (`4 sections · 96 BPM · C major` etc.).
+2. In the CLI, submit a descriptive prompt (e.g., `wistful piano resolving to hope`). Status lines should echo the planner summary (`4 sections · 96 BPM · C major` etc.).
 3. Focus the job and check the Status panel: it should list each section with role, energy, bars, target seconds, backend, orchestration highlights, and indicate which section is currently rendering (`▶`).
 4. Watch the job status lines update to `rendering 1/N: … (musicgen)` etc., ending with `assembling mixdown` before completion.
 5. After completion, open `~/Music/Timbre/<job_id>/metadata.json`:

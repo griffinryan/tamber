@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from ..app.models import (
+    ClipLayer,
     CompositionPlan,
     CompositionSection,
     GenerationMode,
@@ -20,6 +21,7 @@ from ..app.models import (
 )
 
 PLAN_VERSION = "v3"
+CLIP_PLAN_VERSION = "v4"
 DEFAULT_TIME_SIGNATURE = "4/4"
 MIN_TEMPO = 68
 MAX_TEMPO = 128
@@ -507,15 +509,164 @@ def _directives_for_role(
     return (None, [], None)
 
 
+CLIP_LAYER_PROMPTS: dict[ClipLayer, str] = {
+    ClipLayer.RHYTHM: "Focus on tight percussion and groove-locked drums with tasteful syncopation.",
+    ClipLayer.BASS: "Deliver a supportive bassline that locks to the kick and outlines the harmony.",
+    ClipLayer.HARMONY: "Layer warm harmonic stabs or pads that reinforce the progression without overcrowding.",
+    ClipLayer.LEAD: "Craft a memorable lead motif that plays call-and-response with the established theme.",
+    ClipLayer.TEXTURES: "Add evolving textures and atmosphere to widen the stereo field.",
+    ClipLayer.VOCALS: "Improvise expressive wordless vocals floating above the arrangement.",
+}
+
+
+def _clip_orchestration(base: SectionOrchestration, layer: ClipLayer) -> SectionOrchestration:
+    def clone(values: list[str], fallback: list[str]) -> list[str]:
+        return list(values) if values else list(fallback)
+
+    if layer == ClipLayer.RHYTHM:
+        return SectionOrchestration(
+            rhythm=clone(base.rhythm, ["tight kit", "syncopated percussion"]),
+        )
+    if layer == ClipLayer.BASS:
+        return SectionOrchestration(
+            bass=clone(base.bass, ["electric bass", "synth low-end"]),
+        )
+    if layer == ClipLayer.HARMONY:
+        return SectionOrchestration(
+            harmony=clone(base.harmony, ["chord stabs", "lush pads"]),
+            textures=clone(base.textures, []),
+        )
+    if layer == ClipLayer.LEAD:
+        return SectionOrchestration(
+            lead=clone(base.lead, ["expressive lead", "hook synth"]),
+            harmony=clone(base.harmony, []),
+        )
+    if layer == ClipLayer.TEXTURES:
+        return SectionOrchestration(
+            textures=clone(base.textures, ["ambient wash", "granular shimmer"]),
+        )
+    if layer == ClipLayer.VOCALS:
+        return SectionOrchestration(
+            vocals=clone(base.vocals, ["wordless vocal", "airy choir"]),
+            textures=clone(base.textures, []),
+        )
+    return SectionOrchestration()
+
+
+def _clip_prompt_text(
+    clip_prompt: str,
+    descriptor: ThemeDescriptor,
+    layer: ClipLayer,
+) -> str:
+    base = clip_prompt.strip() if clip_prompt else descriptor.motif
+    layer_line = CLIP_LAYER_PROMPTS.get(layer, "Add musical interest.")
+    motif = descriptor.motif or "the established motif"
+    return f"{base.strip()} {layer_line} Reinforce the motif \"{motif}\" with seamless looping."
+
+
+def _clip_label(layer: ClipLayer) -> str:
+    return f"{layer.value.title()} clip"
+
+
+def _clip_energy(layer: ClipLayer) -> SectionEnergy:
+    if layer in {ClipLayer.LEAD, ClipLayer.RHYTHM}:
+        return SectionEnergy.HIGH
+    if layer in {ClipLayer.HARMONY, ClipLayer.BASS}:
+        return SectionEnergy.MEDIUM
+    return SectionEnergy.LOW
+
+
+def _clip_directive(layer: ClipLayer) -> str:
+    mapping = {
+        ClipLayer.RHYTHM: "drive motif groove",
+        ClipLayer.BASS: "anchor harmonic floor",
+        ClipLayer.HARMONY: "reinforce progression",
+        ClipLayer.LEAD: "embellish motif",
+        ClipLayer.TEXTURES: "expand atmosphere",
+        ClipLayer.VOCALS: "float vocalise",
+    }
+    return mapping.get(layer, "develop motif")
+
+
 class CompositionPlanner:
     """Generates deterministic composition plans from prompts."""
 
     def build_plan(self, request: GenerationRequest) -> CompositionPlan:
+        if request.mode == GenerationMode.CLIP:
+            raise RuntimeError("clip plans require session context")
         if request.mode == GenerationMode.MOTIF:
             return self._build_motif_plan(request)
         if float(request.duration_seconds) >= LONG_FORM_THRESHOLD:
             return self._build_long_form_plan(request)
         return self._build_short_form_plan(request)
+
+    def build_clip_plan(
+        self,
+        *,
+        seed_plan: CompositionPlan,
+        session_theme: ThemeDescriptor | None,
+        clip_prompt: str,
+        layer: ClipLayer,
+        bars: int,
+    ) -> CompositionPlan:
+        if bars <= 0:
+            raise ValueError("clip bars must be positive")
+
+        tempo_bpm = seed_plan.tempo_bpm
+        time_signature = seed_plan.time_signature or DEFAULT_TIME_SIGNATURE
+        beats_per_bar = _beats_per_bar(time_signature)
+        seconds_per_bar = (60.0 / float(max(tempo_bpm, 1))) * float(max(beats_per_bar, 1))
+        target_seconds = max(SHORT_MIN_SECTION_SECONDS, float(bars) * seconds_per_bar)
+
+        descriptor = session_theme
+        if descriptor is None:
+            descriptor = ThemeDescriptor(
+                motif=clip_prompt[:64] if clip_prompt else "session motif clip",
+                instrumentation=[],
+                rhythm="steady pulse",
+                dynamic_curve=[],
+                texture=None,
+            )
+
+        base_orchestration = (
+            seed_plan.sections[0].orchestration
+            if seed_plan.sections
+            else SectionOrchestration()
+        )
+        orchestration = _clip_orchestration(base_orchestration, layer)
+
+        prompt_text = _clip_prompt_text(clip_prompt, descriptor, layer)
+        label = _clip_label(layer)
+        energy = _clip_energy(layer)
+        motif_directive = _clip_directive(layer)
+
+        section = CompositionSection(
+            section_id="c00",
+            role=SectionRole.DEVELOPMENT,
+            label=label,
+            prompt=prompt_text,
+            bars=bars,
+            target_seconds=target_seconds,
+            energy=energy,
+            model_id=None,
+            seed_offset=0,
+            transition=None,
+            motif_directive=motif_directive,
+            variation_axes=["layer", layer.value],
+            cadence_hint=None,
+            orchestration=orchestration,
+        )
+
+        return CompositionPlan(
+            version=CLIP_PLAN_VERSION,
+            tempo_bpm=tempo_bpm,
+            time_signature=time_signature,
+            key=seed_plan.key,
+            total_bars=bars,
+            total_duration_seconds=target_seconds,
+            theme=descriptor,
+            sections=[section],
+        )
 
     def _build_motif_plan(self, request: GenerationRequest) -> CompositionPlan:
         seconds_total = float(request.duration_seconds)
