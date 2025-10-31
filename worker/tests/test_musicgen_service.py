@@ -71,3 +71,18 @@ def test_device_override_falls_back_to_cpu(tmp_path: Path) -> None:
     )
     service = MusicGenService(settings=settings)
     assert service._device == "cpu"  # type: ignore[attr-defined]
+
+
+def test_model_supports_generator_detection() -> None:
+    service = MusicGenService()
+
+    class WithGenerator:
+        def generate(self, *, generator=None):
+            return generator
+
+    class WithoutGenerator:
+        def generate(self, *, guidance_scale=None):
+            return guidance_scale
+
+    assert service._model_supports_generator(WithGenerator())  # type: ignore[attr-defined]
+    assert service._model_supports_generator(WithoutGenerator()) is False  # type: ignore[attr-defined]

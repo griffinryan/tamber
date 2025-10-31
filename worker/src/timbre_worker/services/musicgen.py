@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import hashlib
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -352,9 +354,6 @@ class MusicGenService:
         }
 
         generator = None
-        if seed is not None:
-            generator = torch.Generator(device=self._device).manual_seed(seed)
-
         tokens = self._seconds_to_tokens(duration_seconds, handle)
         generation_kwargs, two_step_applied = self._build_generation_kwargs(
             max_new_tokens=tokens,
@@ -364,14 +363,22 @@ class MusicGenService:
             cfg_coef=cfg_coef,
             two_step_cfg=two_step_cfg,
         )
+        supports_generator = self._model_supports_generator(handle.model)
+        if seed is not None and supports_generator:
+            generator = torch.Generator(device=self._device).manual_seed(seed)
+            generation_kwargs["generator"] = generator
 
-        with torch.no_grad():
-            audio_tokens = handle.model.generate(
-                **model_inputs,
-                **conditioning_payload,
-                generator=generator,
-                **generation_kwargs,
-            )
+        seed_context = self._seed_context(seed if not supports_generator else None)
+
+        with seed_context:
+            if seed is not None and not supports_generator:
+                self._manual_seed(seed)
+            with torch.no_grad():
+                audio_tokens = handle.model.generate(
+                    **model_inputs,
+                    **conditioning_payload,
+                    **generation_kwargs,
+                )
         decode_tokens = audio_tokens
         if hasattr(audio_tokens, "device"):
             device_type = getattr(audio_tokens.device, "type", None)
@@ -503,6 +510,33 @@ class MusicGenService:
             if torch.backends.mps.is_available():  # pragma: no cover
                 return torch.float32
         return torch.float32
+
+    def _model_supports_generator(self, model: "torch.nn.Module") -> bool:
+        if torch is None:
+            return False
+        try:
+            signature = inspect.signature(model.generate)  # type: ignore[attr-defined]
+        except (TypeError, ValueError, AttributeError):
+            return False
+        return "generator" in signature.parameters
+
+    def _seed_context(self, seed: Optional[int]):
+        if torch is None or seed is None:
+            return nullcontext()
+        if self._device == "cuda" and torch.cuda.is_available():  # pragma: no cover
+            current = torch.cuda.current_device()
+            return torch.random.fork_rng(devices=[current])
+        if self._device == "mps" and getattr(torch.backends, "mps", None):
+            if torch.backends.mps.is_available():  # pragma: no cover
+                return torch.random.fork_rng()
+        return torch.random.fork_rng()
+
+    def _manual_seed(self, seed: int) -> None:
+        if torch is None:
+            return
+        torch.manual_seed(seed)
+        if self._device == "cuda" and torch.cuda.is_available():  # pragma: no cover
+            torch.cuda.manual_seed_all(seed)
 
     def _missing_dependency_reason(self) -> str:
         if torch is None:
