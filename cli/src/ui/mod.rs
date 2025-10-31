@@ -1,7 +1,7 @@
 use crate::{
     app::{
         format_request_summary, AppCommand, AppEvent, AppState, FocusedPane, GenerationOverrides,
-        InputMode, JobEntry, SessionCliCommand,
+        InputMode, JobEntry, SessionCliCommand, SplashSelection,
     },
     session::{clip_layer_label, ClipSlotStatus, SessionScene, LAYER_ORDER},
     types::{
@@ -13,7 +13,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Wrap},
@@ -23,6 +23,18 @@ use serde::Deserialize;
 use std::time::Duration;
 use std::{collections::HashMap, time::Duration as StdDuration};
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender};
+
+const SPLASH_ASCII_ART: &str = r#"
+ _______ _           _               ___   ___ 
+|__   __| |         | |             / _ \ / _ \
+   | |  | |__   ___ | | ___  _ __  | | | | | | |
+   | |  | '_ \ / _ \| |/ _ \| '__| | | | | | | |
+   | |  | | | | (_) | | (_) | |    | |_| | |_| |
+   |_|  |_| |_|\___/|_|\___/|_|     \___/ \___/
+"#;
+
+const SPLASH_TAGLINE: &str = "A generative CLI tool for the musician";
+const SPLASH_INSTRUCTIONS: &str = "Use Up/Down to choose | Enter to continue";
 
 pub fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
@@ -57,6 +69,11 @@ fn drain_events(app: &mut AppState, event_rx: &mut UnboundedReceiver<AppEvent>) 
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
+    if app.showing_splash() {
+        render_splash(frame, app);
+        return;
+    }
+
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
@@ -90,6 +107,95 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
     render_jobs(frame, right[0], app);
     render_backend_diagnostics(frame, right[1], app);
     render_status(frame, right[2], app);
+}
+
+fn render_splash(frame: &mut ratatui::Frame, app: &AppState) {
+    let area = frame.size();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(9), Constraint::Min(5)])
+        .split(area);
+
+    let art = Paragraph::new(SPLASH_ASCII_ART.trim_matches('\n'))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title("Timbre AI"));
+    frame.render_widget(art, chunks[0]);
+
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1), Constraint::Length(2)])
+        .split(chunks[1]);
+
+    let restore_selected = app.splash_selection() == SplashSelection::Restore;
+    let restore_enabled = app.has_pending_snapshot();
+    let new_selected = app.splash_selection() == SplashSelection::StartNew;
+
+    let restore_prefix = if restore_selected { ">" } else { " " };
+    let new_prefix = if new_selected { ">" } else { " " };
+
+    let restore_label = if restore_enabled {
+        "Restore my last session"
+    } else {
+        "Restore my last session (unavailable)"
+    };
+    let new_label = "Start a new session";
+
+    let mut option_lines = Vec::new();
+    let restore_style = if restore_enabled {
+        if restore_selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let new_style = if new_selected {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    option_lines.push(Line::from(vec![
+        Span::styled(format!("{restore_prefix} "), Style::default().fg(Color::Yellow)),
+        Span::styled(restore_label, restore_style),
+    ]));
+    option_lines.push(Line::from(vec![
+        Span::styled(format!("{new_prefix} "), Style::default().fg(Color::Yellow)),
+        Span::styled(new_label, new_style),
+    ]));
+
+    let options = Paragraph::new(option_lines)
+        .alignment(Alignment::Left)
+        .block(Block::default().borders(Borders::ALL).title("Welcome to Timbre AI"));
+    frame.render_widget(options, bottom_chunks[0]);
+
+    let instructions = Paragraph::new(SPLASH_INSTRUCTIONS)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(instructions, bottom_chunks[1]);
+
+    let tagline = Paragraph::new(SPLASH_TAGLINE)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC))
+        .block(Block::default().borders(Borders::NONE));
+    frame.render_widget(tagline, bottom_chunks[2]);
+}
+
+fn request_new_session(app: &mut AppState, command_tx: &UnboundedSender<AppCommand>) {
+    app.reset_session_state();
+    if let Err(err) = crate::session_store::clear_snapshot() {
+        app.push_status_line(format!("Failed to clear session snapshot: {err}"));
+    } else {
+        app.push_status_line("Cleared saved session snapshot.".to_string());
+    }
+    let payload = SessionCreateRequest::default();
+    if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
+        let message = "Failed to request session creation; worker channel closed".to_string();
+        app.push_status_line(message);
+    } else {
+        app.push_status_line("Requesting fresh session from worker…".to_string());
+    }
 }
 
 fn render_motif(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
@@ -630,6 +736,10 @@ fn handle_key(
     command_tx: &UnboundedSender<AppCommand>,
     key: crossterm::event::KeyEvent,
 ) -> Result<bool> {
+    if app.showing_splash() {
+        return handle_splash_key(app, command_tx, key);
+    }
+
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
         KeyCode::Char('q') if matches!(app.input_mode, InputMode::Normal) => return Ok(true),
@@ -912,6 +1022,32 @@ fn handle_key(
     Ok(false)
 }
 
+fn handle_splash_key(
+    app: &mut AppState,
+    command_tx: &UnboundedSender<AppCommand>,
+    key: crossterm::event::KeyEvent,
+) -> Result<bool> {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Up => app.select_previous_splash_option(),
+        KeyCode::Down => app.select_next_splash_option(),
+        KeyCode::Enter => match app.splash_selection() {
+            SplashSelection::Restore => {
+                if !app.has_pending_snapshot() || !app.apply_pending_snapshot() {
+                    app.select_next_splash_option();
+                }
+            }
+            SplashSelection::StartNew => {
+                request_new_session(app, command_tx);
+            }
+        },
+        _ => {}
+    }
+
+    Ok(false)
+}
+
 fn dispatch_app_command(
     app: &mut AppState,
     command_tx: &UnboundedSender<AppCommand>,
@@ -999,18 +1135,7 @@ fn dispatch_app_command(
         return;
     }
     if trimmed == "/session-new" {
-        app.reset_session_state();
-        match crate::session_store::clear_snapshot() {
-            Ok(()) => app.push_status_line("Cleared saved session snapshot.".to_string()),
-            Err(err) => app.push_status_line(format!("Failed to clear session snapshot: {err}")),
-        }
-        let payload = SessionCreateRequest::default();
-        if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
-            let message = "Failed to request session creation; worker channel closed".to_string();
-            app.push_status_line(message);
-        } else {
-            app.push_status_line("Requesting fresh session from worker…".to_string());
-        }
+        request_new_session(app, command_tx);
         return;
     }
     if trimmed.starts_with("/session") {

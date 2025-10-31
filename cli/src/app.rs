@@ -1,7 +1,7 @@
 use crate::{
     config::AppConfig,
     planner::CompositionPlanner,
-    session::{clip_layer_label, ClipSlotStatus, SessionView},
+    session::{clip_layer_label, ClipSlotStatus, SessionSnapshot, SessionView},
     session_store,
     types::{
         ClipLayer, CompositionPlan, CompositionSection, GenerationArtifact, GenerationMode,
@@ -79,6 +79,12 @@ pub struct InlineCommand {
 pub enum SessionCliCommand {
     Start,
     Status,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplashSelection {
+    Restore,
+    StartNew,
 }
 
 #[derive(Debug, Clone)]
@@ -249,11 +255,16 @@ pub struct AppState {
     playback: Option<PlaybackState>,
     planner: CompositionPlanner,
     musicgen_default_model_id: Option<String>,
+    showing_splash: bool,
+    splash_selection: SplashSelection,
+    pending_snapshot: Option<SessionSnapshot>,
 }
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
         let musicgen_default_model_id = config.default_model_id().to_string();
+        let snapshot_result = session_store::load_snapshot();
+        let pending_snapshot = snapshot_result.as_ref().ok().and_then(|opt| opt.clone());
         let mut state = Self {
             input: String::new(),
             jobs: IndexMap::new(),
@@ -274,18 +285,73 @@ impl AppState {
             app_config: config,
             planner: CompositionPlanner::new(),
             musicgen_default_model_id: Some(musicgen_default_model_id),
+            showing_splash: true,
+            splash_selection: SplashSelection::StartNew,
+            pending_snapshot: pending_snapshot.clone(),
         };
 
-        if let Ok(Some(snapshot)) = session_store::load_snapshot() {
-            state.session_view.restore(&snapshot);
-            state.restored_session_id = snapshot.session_id.clone();
-            if let Some(session_id) = snapshot.session_id {
-                let label = Self::short_session_id(&session_id);
-                state.status_lines.push(format!("Restored session layout for {label} (offline)"));
-            }
+        if pending_snapshot.is_some() {
+            state.splash_selection = SplashSelection::Restore;
+        }
+
+        if let Err(err) = snapshot_result {
+            state.status_lines.push(format!("Failed to load session snapshot: {err}"));
         }
 
         state
+    }
+
+    pub fn showing_splash(&self) -> bool {
+        self.showing_splash
+    }
+
+    pub fn has_pending_snapshot(&self) -> bool {
+        self.pending_snapshot.is_some()
+    }
+
+    pub fn splash_selection(&self) -> SplashSelection {
+        self.splash_selection
+    }
+
+    pub fn select_next_splash_option(&mut self) {
+        self.splash_selection = match (self.splash_selection, self.has_pending_snapshot()) {
+            (SplashSelection::Restore, _) => SplashSelection::StartNew,
+            (SplashSelection::StartNew, true) => SplashSelection::Restore,
+            (SplashSelection::StartNew, false) => SplashSelection::StartNew,
+        };
+    }
+
+    pub fn select_previous_splash_option(&mut self) {
+        self.splash_selection = match (self.splash_selection, self.has_pending_snapshot()) {
+            (SplashSelection::StartNew, true) => SplashSelection::Restore,
+            (SplashSelection::StartNew, false) => SplashSelection::StartNew,
+            (SplashSelection::Restore, _) => SplashSelection::StartNew,
+        };
+    }
+
+    pub fn apply_pending_snapshot(&mut self) -> bool {
+        let Some(snapshot) = self.pending_snapshot.clone() else {
+            return false;
+        };
+
+        self.session_view = SessionView::new();
+        self.session_view.restore(&snapshot);
+        self.session = None;
+        self.restored_session_id = snapshot.session_id.clone();
+        self.pending_snapshot = None;
+        self.showing_splash = false;
+        if let Some(session_id) = snapshot.session_id {
+            let label = Self::short_session_id(&session_id);
+            self.push_status_line(format!("Restored session layout for {label} (offline)"));
+        } else {
+            self.push_status_line("Restored session layout (offline)".to_string());
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub fn disable_splash(&mut self) {
+        self.showing_splash = false;
     }
 
     pub fn parse_session_command(&self, command_line: &str) -> Result<SessionCliCommand, String> {
@@ -987,9 +1053,18 @@ impl AppState {
         self.jobs.clear();
         self.focused_job = None;
         self.playback = None;
+        self.pending_snapshot = None;
+        self.showing_splash = false;
+        self.splash_selection = SplashSelection::StartNew;
     }
 
     pub fn save_session_snapshot(&self) -> Result<()> {
+        if self.showing_splash {
+            if let Some(snapshot) = &self.pending_snapshot {
+                return session_store::save_snapshot(snapshot);
+            }
+            return Ok(());
+        }
         let session_id = self
             .session
             .as_ref()
@@ -1359,13 +1434,23 @@ fn clip_orchestration(layer: ClipLayer, theme: Option<&ThemeDescriptor>) -> Sect
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AppConfig;
     use crate::types::{
         ClipLayer, CompositionPlan, CompositionSection, GenerationMetadata, GenerationMode,
         SectionEnergy, SectionOrchestration, SectionRole, SessionSummary,
     };
+    use crate::{
+        config::AppConfig,
+        session::{SceneSnapshot, SessionSnapshot},
+    };
     use chrono::Utc;
     use serde_json::json;
+
+    fn app_state_without_splash() -> AppState {
+        let mut state = AppState::new(AppConfig::default());
+        state.disable_splash();
+        state.pending_snapshot = None;
+        state
+    }
 
     #[test]
     fn completion_messages_real_pipeline() {
@@ -1566,8 +1651,33 @@ mod tests {
     }
 
     #[test]
+    fn apply_pending_snapshot_restores_layout() {
+        let mut state = app_state_without_splash();
+        state.showing_splash = true;
+        state.pending_snapshot = Some(SessionSnapshot {
+            session_id: Some("session-abc123".to_string()),
+            scenes: vec![SceneSnapshot { index: 0, name: "Intro".to_string() }],
+            focused_layer: ClipLayer::Lead,
+            focused_scene: 0,
+            active_layer: Some(ClipLayer::Lead),
+            active_scene: Some(0),
+        });
+
+        state.status_lines.clear();
+        assert!(state.apply_pending_snapshot());
+        assert!(!state.showing_splash());
+        assert_eq!(state.restored_session_id, Some("session-abc123".to_string()));
+        assert_eq!(state.session_view.focused(), (ClipLayer::Lead, 0));
+        assert!(state
+            .status_lines
+            .last()
+            .expect("expected status line")
+            .contains("Restored session layout"));
+    }
+
+    #[test]
     fn reset_session_state_clears_session_context() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let plan = sample_plan();
         state.session = Some(session_summary_with_plan(Some(plan.clone())));
         state.restored_session_id = Some("session-old".to_string());
@@ -1629,11 +1739,12 @@ mod tests {
         assert!(state.focused_job.is_none());
         assert!(state.playback.is_none());
         assert_eq!(state.session_view.focused(), (ClipLayer::Rhythm, 0));
+        assert!(!state.showing_splash());
     }
 
     #[test]
     fn toggle_active_clip_target_stays_selected_once_active() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         if let Some((layer, scene)) = state.active_clip_target() {
             // Clear any persisted selection from a prior CLI snapshot on disk.
             assert!(!state.session_view.toggle_active_target(layer, scene));
@@ -1648,7 +1759,7 @@ mod tests {
 
     #[test]
     fn build_clip_payload_rejects_missing_motif() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         state.session = Some(session_summary_with_plan(None));
         let error =
             state.build_clip_payload_for(ClipLayer::Bass, 0, Some("groovy bass")).unwrap_err();
@@ -1657,7 +1768,7 @@ mod tests {
 
     #[test]
     fn build_clip_payload_targets_selected_layer() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let plan = sample_plan();
         state.session = Some(session_summary_with_plan(Some(plan.clone())));
         let (request, built_plan, used_prompt) =
@@ -1673,7 +1784,7 @@ mod tests {
 
     #[test]
     fn handle_command_updates_duration() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let result = state.handle_command("/duration 120");
         assert!(result.is_ok());
         assert_eq!(state.generation_config.duration_seconds, 120);
@@ -1681,14 +1792,14 @@ mod tests {
 
     #[test]
     fn handle_command_rejects_invalid_cfg() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let result = state.handle_command("/cfg 80");
         assert!(result.is_err());
     }
 
     #[test]
     fn build_request_reflects_generation_config() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let _ = state.handle_command("/duration 120");
         let _ = state.handle_command("/cfg 6.5");
         let _ = state.handle_command("/seed 77");
@@ -1704,7 +1815,7 @@ mod tests {
 
     #[test]
     fn build_generation_payload_supports_motif_override() {
-        let state = AppState::new(AppConfig::default());
+        let state = app_state_without_splash();
         let overrides = GenerationOverrides {
             model_id: Some("musicgen-stereo-medium".to_string()),
             duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
@@ -1722,7 +1833,7 @@ mod tests {
 
     #[test]
     fn ingest_health_payload_populates_backend_status() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let payload = json!({
             "backend_status": {
                 "musicgen": {
