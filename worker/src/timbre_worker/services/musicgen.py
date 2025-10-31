@@ -276,10 +276,10 @@ class MusicGenService:
         try:
             load_kwargs: Dict[str, Any] = {"low_cpu_mem_usage": True}
             if self._torch_dtype is not None:
-                load_kwargs["torch_dtype"] = self._torch_dtype
+                load_kwargs["dtype"] = self._torch_dtype
 
             processor = AutoProcessor.from_pretrained(resolved)
-            model = MusicgenForConditionalGeneration.from_pretrained(resolved, **load_kwargs)
+            model = self._load_musicgen_model(resolved, load_kwargs)
             if self._torch_dtype is not None:
                 model = model.to(self._device, dtype=self._torch_dtype)
             else:
@@ -302,6 +302,32 @@ class MusicGenService:
         async with self._lock:
             self._handles[model_id] = handle
         return handle, None
+
+    def _load_musicgen_model(
+        self,
+        model_id: str,
+        load_kwargs: Dict[str, Any],
+    ) -> MusicgenForConditionalGeneration:
+        """Load MusicGen model, falling back to legacy torch_dtype parameter if needed."""
+        assert MusicgenForConditionalGeneration is not None
+        try:
+            return MusicgenForConditionalGeneration.from_pretrained(model_id, **load_kwargs)
+        except TypeError as exc:
+            if (
+                self._torch_dtype is not None
+                and "unexpected keyword argument 'dtype'" in str(exc)
+                and "dtype" in load_kwargs
+            ):
+                fallback_kwargs = dict(load_kwargs)
+                fallback_kwargs.pop("dtype", None)
+                fallback_kwargs["torch_dtype"] = self._torch_dtype
+                logger.debug(
+                    "MusicGen backend falling back to torch_dtype for compatibility: {}", exc
+                )
+                return MusicgenForConditionalGeneration.from_pretrained(
+                    model_id, **fallback_kwargs
+                )
+            raise
 
     def _build_generation_kwargs(
         self,

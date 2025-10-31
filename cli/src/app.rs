@@ -13,7 +13,7 @@ use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration as StdDuration, Instant};
 
 const MAX_STATUS_LINES: usize = 8;
@@ -1469,6 +1469,7 @@ mod tests {
         config::AppConfig,
         session::{ClipSlotStatus, SceneSnapshot, SessionSnapshot},
     };
+    use std::path::Path;
     use chrono::Utc;
     use serde_json::json;
 
