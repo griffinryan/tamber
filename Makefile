@@ -1,18 +1,29 @@
 .PHONY: setup setup-musicgen worker-serve cli-run lint test fmt
 
+UV_CACHE_DIR := .uv/cache
+UV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv
+UV_RUN := $(UV) run --project worker
+
+$(UV_CACHE_DIR):
+	mkdir -p $(UV_CACHE_DIR)
+
 setup:
-	uv sync --project worker --extra dev --extra inference
+	$(MAKE) $(UV_CACHE_DIR)
+	$(UV) sync --project worker --extra dev --extra inference
 	cargo fetch
 
 setup-musicgen:
-	uv sync --project worker --extra dev --extra inference
+	$(MAKE) $(UV_CACHE_DIR)
+	$(UV) sync --project worker --extra dev --extra inference
 	cargo fetch
 
 worker-serve:
-	uv run --project worker uvicorn timbre_worker.app.main:app --port 8000
+	$(MAKE) $(UV_CACHE_DIR)
+	$(UV_RUN) uvicorn timbre_worker.app.main:app --port 8000
 
 worker-serve-reload:
-	uv run --project worker uvicorn timbre_worker.app.main:app --reload --port 8000
+	$(MAKE) $(UV_CACHE_DIR)
+	$(UV_RUN) uvicorn timbre_worker.app.main:app --reload --port 8000
 
 cli-run:
 	cargo run -p timbre-cli
@@ -23,9 +34,11 @@ fmt:
 lint:
 	cargo fmt --check
 	cargo clippy -- -D warnings
-	uv run --project worker ruff check
-	uv run --project worker mypy
+	$(MAKE) $(UV_CACHE_DIR)
+	$(UV_RUN) ruff check
+	$(UV_RUN) mypy
 
 test:
 	cargo test
-	uv run --project worker pytest
+	$(MAKE) $(UV_CACHE_DIR)
+	$(UV_RUN) pytest

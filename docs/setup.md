@@ -76,7 +76,9 @@ True
 
 If the MPS backend yields distorted or noisy audio, force the worker to fall back to CPU by exporting
 `TIMBRE_INFERENCE_DEVICE=cpu` before launching `make worker-serve`. The worker now also prefers
-float32 precision on MPS to avoid the white-noise artefacts seen with float16.
+float32 precision on MPS to avoid the white-noise artefacts seen with float16. The MusicGen backend
+honours the override during device selection, so setting `TIMBRE_INFERENCE_DEVICE=mps` on Macs keeps
+generations on the Metal backend without waiting for auto-detection.
 
 During automated testing or when you want to skip heavyweight model loads, simply omit the inference extras—the worker will emit deterministic placeholder audio while keeping the rest of the pipeline reachable. You can also force a device (`TIMBRE_INFERENCE_DEVICE=cpu|mps|cuda`) when torch auto-detection is undesirable.
 

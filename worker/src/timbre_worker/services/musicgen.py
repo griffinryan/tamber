@@ -78,6 +78,7 @@ class MusicGenService:
         self._handles: Dict[str, Optional[ModelHandle]] = {}
         self._lock = asyncio.Lock()
         self._device = self._select_device()
+        self._torch_dtype = self._select_dtype()
 
         self._top_k = settings.musicgen_top_k if settings is not None else None
         self._top_p = settings.musicgen_top_p if settings is not None else None
@@ -271,9 +272,16 @@ class MusicGenService:
             return None, reason
 
         try:
+            load_kwargs: Dict[str, Any] = {"low_cpu_mem_usage": True}
+            if self._torch_dtype is not None:
+                load_kwargs["torch_dtype"] = self._torch_dtype
+
             processor = AutoProcessor.from_pretrained(resolved)
-            model = MusicgenForConditionalGeneration.from_pretrained(resolved)
-            model = model.to(self._device)
+            model = MusicgenForConditionalGeneration.from_pretrained(resolved, **load_kwargs)
+            if self._torch_dtype is not None:
+                model = model.to(self._device, dtype=self._torch_dtype)
+            else:
+                model = model.to(self._device)
             model.eval()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load MusicGen model %s", resolved)
@@ -461,11 +469,40 @@ class MusicGenService:
     def _select_device(self) -> str:
         if torch is None:
             return "cpu"
+
+        override: Optional[str] = None
+        if self._settings is not None and self._settings.inference_device:
+            override = self._settings.inference_device.strip().lower()
+
+        if override:
+            if override == "cpu":
+                return "cpu"
+            if override == "cuda":
+                if torch.cuda.is_available():  # pragma: no branch
+                    return "cuda"
+                logger.warning("Requested CUDA device but CUDA is unavailable; falling back to auto")
+            elif override == "mps":
+                if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                    return "mps"
+                logger.warning("Requested MPS device but MPS is unavailable; falling back to auto")
+            else:
+                logger.warning("Unknown inference device override '%s'; falling back to auto", override)
+
         if torch.cuda.is_available():  # pragma: no cover
             return "cuda"
         if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             return "mps"
         return "cpu"
+
+    def _select_dtype(self) -> Optional["torch.dtype"]:
+        if torch is None:
+            return None
+        if self._device == "cuda" and torch.cuda.is_available():  # pragma: no cover
+            return torch.float16
+        if self._device == "mps" and getattr(torch.backends, "mps", None):
+            if torch.backends.mps.is_available():  # pragma: no cover
+                return torch.float32
+        return torch.float32
 
     def _missing_dependency_reason(self) -> str:
         if torch is None:
