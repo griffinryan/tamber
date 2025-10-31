@@ -13,7 +13,7 @@ use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration as StdDuration, Instant};
 
 const MAX_STATUS_LINES: usize = 8;
@@ -1472,7 +1472,7 @@ mod tests {
     };
     use crate::{
         config::AppConfig,
-        session::{SceneSnapshot, SessionSnapshot},
+        session::{ClipSlotStatus, SceneSnapshot, SessionSnapshot},
     };
     use chrono::Utc;
     use serde_json::json;
@@ -1812,6 +1812,99 @@ mod tests {
         assert_eq!(built_plan.sections.len(), 1);
         assert!(built_plan.sections[0].variation_axes.contains(&"lead".to_string()));
         assert!(plan.sections[0].variation_axes.is_empty());
+    }
+
+    #[test]
+    fn clip_job_queue_marks_slot_pending() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        let summary = session_summary_with_plan(Some(plan));
+        state.session = Some(summary.clone());
+        state.session_view.apply_summary(&summary);
+
+        let (request, built_plan, prompt) =
+            state.build_clip_payload_for(ClipLayer::Lead, 1, Some("lead layer")).unwrap();
+        let status = GenerationStatus {
+            job_id: "job-clip-1".into(),
+            state: JobState::Queued,
+            progress: 0.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        state.handle_event(AppEvent::JobQueued {
+            status: status.clone(),
+            prompt: prompt.clone(),
+            request: request.clone(),
+            plan: built_plan.clone(),
+        });
+
+        let slot = state.session_view.slot(ClipLayer::Lead, 1);
+        assert_eq!(slot.status, ClipSlotStatus::Pending);
+        assert_eq!(slot.prompt.as_deref(), Some("lead layer"));
+        assert_eq!(slot.job_id.as_deref(), Some("job-clip-1"));
+        assert_eq!(
+            state.session_view.pending_scene_for_job("job-clip-1"),
+            Some((ClipLayer::Lead, 1))
+        );
+    }
+
+    #[test]
+    fn clip_job_completion_marks_slot_ready() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        let summary = session_summary_with_plan(Some(plan.clone()));
+        state.session = Some(summary.clone());
+        state.session_view.apply_summary(&summary);
+
+        let (request, built_plan, prompt) =
+            state.build_clip_payload_for(ClipLayer::Bass, 2, Some("bass groove")).unwrap();
+        let queued_status = GenerationStatus {
+            job_id: "job-clip-2".into(),
+            state: JobState::Queued,
+            progress: 0.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+        state.handle_event(AppEvent::JobQueued {
+            status: queued_status.clone(),
+            prompt: prompt.clone(),
+            request: request.clone(),
+            plan: built_plan.clone(),
+        });
+
+        let artifact_plan =
+            CompositionPlan { sections: built_plan.sections.clone(), ..built_plan.clone() };
+        let metadata = GenerationMetadata {
+            prompt: prompt.clone(),
+            seed: Some(7),
+            model_id: request.model_id.clone(),
+            duration_seconds: 12,
+            extras: json!({ "backend": "musicgen", "placeholder": false }),
+            plan: Some(artifact_plan.clone()),
+        };
+        let artifact = LocalArtifact {
+            descriptor: GenerationArtifact {
+                job_id: "job-clip-2".into(),
+                artifact_path: "/tmp/job-clip-2.wav".into(),
+                metadata,
+            },
+            local_path: PathBuf::from("/tmp/job-clip-2/job-clip-2.wav"),
+        };
+        let completed_status =
+            GenerationStatus { state: JobState::Succeeded, progress: 1.0, ..queued_status.clone() };
+
+        state.handle_event(AppEvent::JobCompleted {
+            status: completed_status,
+            artifact: artifact.clone(),
+        });
+
+        let slot = state.session_view.slot(ClipLayer::Bass, 2);
+        assert_eq!(slot.status, ClipSlotStatus::Ready);
+        assert_eq!(slot.artifact.as_deref(), Some(Path::new("/tmp/job-clip-2/job-clip-2.wav")));
+        assert_eq!(slot.duration_seconds, Some(12.0));
+        assert_eq!(slot.bars, artifact_plan.sections.first().map(|section| section.bars as u8));
+        assert!(state.session_view.pending_scene_for_job("job-clip-2").is_none());
     }
 
     #[test]
