@@ -9,12 +9,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
 const SPLASH_TAGLINE: &str = "A generative CLI tool for the musician";
-const SPLASH_INSTRUCTIONS: &str = "Use Up/Down to choose | Enter to continue";
+const SPLASH_INSTRUCTIONS: &str = "Use Up/Down/Left/Right to choose | Enter to continue";
 
-static SPLASH_RENDERER: Lazy<SplashRenderer> = Lazy::new(SplashRenderer::new);
+static SPLASH_RENDERER: Lazy<Mutex<SplashRenderer>> =
+    Lazy::new(|| Mutex::new(SplashRenderer::new()));
 
 pub fn render(frame: &mut ratatui::Frame, app: &AppState) {
     let context = SplashContext {
@@ -22,7 +24,9 @@ pub fn render(frame: &mut ratatui::Frame, app: &AppState) {
         restore_available: app.has_pending_snapshot(),
         selection: app.splash_selection(),
     };
-    SPLASH_RENDERER.render(frame, frame.size(), context);
+    if let Ok(mut renderer) = SPLASH_RENDERER.lock() {
+        renderer.render(frame, frame.size(), context);
+    }
 }
 
 struct SplashRenderer {
@@ -40,7 +44,7 @@ impl SplashRenderer {
         Self { note: RotatingEighthNote::default() }
     }
 
-    fn render(&self, frame: &mut ratatui::Frame, area: Rect, context: SplashContext) {
+    fn render(&mut self, frame: &mut ratatui::Frame, area: Rect, context: SplashContext) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(20), Constraint::Length(6), Constraint::Length(4)])
@@ -58,7 +62,7 @@ impl SplashRenderer {
         self.render_tagline(frame, footer[1]);
     }
 
-    fn render_note(&self, frame: &mut ratatui::Frame, area: Rect, elapsed: StdDuration) {
+    fn render_note(&mut self, frame: &mut ratatui::Frame, area: Rect, elapsed: StdDuration) {
         let block = Block::default().borders(Borders::ALL).title("Timbre AI");
         let inner = block.inner(area);
         let note_lines = self.note.render(inner.width, inner.height, elapsed);

@@ -25,10 +25,6 @@ impl Vec2 {
             Self::new(self.x / len, self.y / len)
         }
     }
-
-    fn dot(self, other: Self) -> f32 {
-        self.x * other.x + self.y * other.y
-    }
 }
 
 impl std::ops::Add for Vec2 {
@@ -55,11 +51,57 @@ impl std::ops::Mul<f32> for Vec2 {
     }
 }
 
-impl std::ops::Mul<Vec2> for f32 {
-    type Output = Vec2;
+#[derive(Clone, Copy)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
 
-    fn mul(self, rhs: Vec2) -> Self::Output {
-        Vec2::new(rhs.x * self, rhs.y * self)
+impl Vec3 {
+    fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+
+    fn length(self) -> f32 {
+        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+    }
+
+    fn normalized(self) -> Self {
+        let len = self.length();
+        if len == 0.0 {
+            Self::new(0.0, 0.0, 0.0)
+        } else {
+            Self::new(self.x / len, self.y / len, self.z / len)
+        }
+    }
+
+    fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+}
+
+impl std::ops::Add for Vec3 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+    }
+}
+
+impl std::ops::Sub for Vec3 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+    }
+}
+
+impl std::ops::Mul<f32> for Vec3 {
+    type Output = Self;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self::new(self.x * rhs, self.y * rhs, self.z * rhs)
     }
 }
 
@@ -72,23 +114,28 @@ enum NoteSegment {
 
 #[derive(Clone, Copy)]
 struct NotePoint {
-    position: Vec2,
-    intensity: f32,
+    position: Vec3,
+    normal: Vec3,
+    albedo: f32,
     segment: NoteSegment,
 }
 
 impl NotePoint {
-    fn new(position: Vec2, intensity: f32, segment: NoteSegment) -> Self {
-        Self { position, intensity, segment }
+    fn new(position: Vec3, normal: Vec3, albedo: f32, segment: NoteSegment) -> Self {
+        Self { position, normal, albedo, segment }
     }
 }
 
 pub struct RotatingEighthNote {
     points: Vec<NotePoint>,
-    extent_x: f32,
-    extent_y: f32,
-    radius: f32,
-    light_dir: Vec2,
+    light_dir: Vec3,
+    projection_distance: f32,
+    scale_factor: f32,
+    spin_speed: f32,
+    tilt_speed: f32,
+    ambient: f32,
+    buffer: Vec<char>,
+    depth: Vec<f32>,
 }
 
 impl Default for RotatingEighthNote {
@@ -100,93 +147,108 @@ impl Default for RotatingEighthNote {
 impl RotatingEighthNote {
     pub fn new() -> Self {
         let mut points = build_points();
-        let bounds = recenter_points(&mut points);
-        let radius = points.iter().map(|p| p.position.length()).fold(0.0_f32, f32::max);
-        let light_dir = Vec2::new(0.35, -1.0).normalized();
+        recenter(&mut points);
+
+        let radius = points.iter().map(|p| p.position.length()).fold(0.0_f32, f32::max).max(1.0);
+        let light_dir = Vec3::new(-0.3, 0.45, 1.0).normalized();
+        let projection_distance = radius * 4.0 + 10.0;
+        let scale_factor = 0.9 / radius;
+        let spin_speed = TAU / 6.5;
+        let tilt_speed = TAU / 8.5;
+        let ambient = 0.22;
+
         Self {
             points,
-            extent_x: bounds.extent_x,
-            extent_y: bounds.extent_y,
-            radius: radius.max(1.0),
             light_dir,
+            projection_distance,
+            scale_factor,
+            spin_speed,
+            tilt_speed,
+            ambient,
+            buffer: Vec::new(),
+            depth: Vec::new(),
         }
     }
 
-    pub fn render(&self, width: u16, height: u16, elapsed: StdDuration) -> Vec<Line<'static>> {
+    pub fn render(&mut self, width: u16, height: u16, elapsed: StdDuration) -> Vec<Line<'static>> {
         let width = width as usize;
         let height = height as usize;
         if width == 0 || height == 0 {
             return Vec::new();
         }
 
-        let mut buffer = vec![vec![' '; width]; height];
-        let mut occupancy = vec![vec![0.0_f32; width]; height];
+        let t = elapsed.as_secs_f32();
+        let spin_angle = (t * self.spin_speed).rem_euclid(TAU);
+        let tilt_angle = (t * self.tilt_speed).rem_euclid(TAU);
+        let (sin_a, cos_a) = spin_angle.sin_cos();
+        let (sin_b, cos_b) = tilt_angle.sin_cos();
 
-        let angle = (elapsed.as_secs_f32() * (TAU / 14.0)).rem_euclid(TAU);
-        let sin_a = angle.sin();
-        let cos_a = angle.cos();
-
-        let width_f = width as f32;
-        let height_f = height as f32;
-        if width_f <= 1.0 || height_f <= 1.0 {
-            return buffer
-                .into_iter()
-                .map(|row| Line::from(row.into_iter().collect::<String>()))
-                .collect();
+        let buffer_len = width * height;
+        if self.buffer.len() != buffer_len {
+            self.buffer = vec![' '; buffer_len];
+        } else {
+            self.buffer.fill(' ');
+        }
+        if self.depth.len() != buffer_len {
+            self.depth = vec![f32::INFINITY; buffer_len];
+        } else {
+            self.depth.fill(f32::INFINITY);
         }
 
-        let margin = 1.08;
-        let aspect = 0.62;
-
-        let scale_x = if self.extent_x > 0.0 {
-            (width_f - 1.0) / (self.extent_x * 2.0 * margin)
-        } else {
-            1.0
-        };
-        let scale_y = if self.extent_y > 0.0 {
-            (height_f - 1.0) / (self.extent_y * 2.0 * margin * aspect)
-        } else {
-            1.0
-        };
-        let scale = scale_x.min(scale_y);
-        let center_x = (width_f - 1.0) / 2.0;
-        let center_y = (height_f - 1.0) / 2.0;
+        let center_x = (width as f32 - 1.0) / 2.0;
+        let center_y = (height as f32 - 1.0) / 2.0;
+        let scale = self.scale_factor * (width.min(height) as f32);
 
         for point in &self.points {
-            let rotated_x = point.position.x * cos_a - point.position.y * sin_a;
-            let rotated_y = point.position.x * sin_a + point.position.y * cos_a;
+            let rotated_pos = rotate(point.position, sin_a, cos_a, sin_b, cos_b);
+            let rotated_normal = rotate(point.normal, sin_a, cos_a, sin_b, cos_b).normalized();
 
-            let screen_x = rotated_x * scale + center_x;
-            let screen_y = rotated_y * scale * aspect + center_y;
+            let depth_value = rotated_pos.z + self.projection_distance;
+            if depth_value <= 1.0 {
+                continue;
+            }
 
-            let x = screen_x.round() as isize;
-            let y = screen_y.round() as isize;
+            let inv_depth = 1.0 / depth_value;
+            let projected_x = rotated_pos.x * scale * inv_depth + center_x;
+            let projected_y = -rotated_pos.y * scale * inv_depth + center_y;
+
+            let x = projected_x.round() as isize;
+            let y = projected_y.round() as isize;
             if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
                 continue;
             }
 
-            let light = (Vec2::new(rotated_x, rotated_y).dot(self.light_dir)) / self.radius;
-            let shading = (0.6 + 0.4 * light).clamp(0.2, 1.0);
-            let brightness = (point.intensity * shading).clamp(0.0, 1.0);
-            if brightness < 0.05 {
+            let diffuse = rotated_normal.dot(self.light_dir).max(0.0);
+            let brightness = (self.ambient + diffuse * point.albedo).clamp(0.0, 1.0);
+            if brightness <= 0.05 {
                 continue;
             }
 
-            let current = occupancy[y as usize][x as usize];
-            if brightness > current {
-                let glyph = glyph_for(point.segment, brightness);
-                buffer[y as usize][x as usize] = glyph;
-                occupancy[y as usize][x as usize] = brightness;
+            let idx = y as usize * width + x as usize;
+            if depth_value < self.depth[idx] {
+                self.depth[idx] = depth_value;
+                self.buffer[idx] = glyph_for(point.segment, brightness);
             }
         }
 
-        buffer.into_iter().map(|row| Line::from(row.into_iter().collect::<String>())).collect()
+        let mut lines = Vec::with_capacity(height);
+        for row in self.buffer.chunks(width) {
+            let mut line = String::with_capacity(width);
+            for ch in row {
+                line.push(*ch);
+            }
+            lines.push(Line::from(line));
+        }
+        lines
     }
 }
 
-struct Bounds {
-    extent_x: f32,
-    extent_y: f32,
+fn rotate(point: Vec3, sin_a: f32, cos_a: f32, sin_b: f32, cos_b: f32) -> Vec3 {
+    let x = point.x * cos_a - point.y * sin_a;
+    let y = point.x * sin_a + point.y * cos_a;
+    let z = point.z;
+
+    Vec3::new(x * cos_b + z * sin_b, y, -x * sin_b + z * cos_b)
 }
 
 fn build_points() -> Vec<NotePoint> {
@@ -210,13 +272,17 @@ fn build_head(points: &mut Vec<NotePoint>) {
         let y = CENTER.y + iy as f32 * STEP;
         for ix in -x_steps..=x_steps {
             let x = CENTER.x + ix as f32 * STEP;
-            let dx = (x - CENTER.x) / RADIUS_X;
-            let dy = (y - CENTER.y) / RADIUS_Y;
-            let distance = dx * dx + dy * dy;
-            if distance <= 1.0 {
-                let edge_falloff = (1.0 - distance).max(0.0).sqrt();
-                let intensity = 0.6 + 0.38 * edge_falloff;
-                points.push(NotePoint::new(Vec2::new(x, y), intensity, NoteSegment::Head));
+            let dx = x - CENTER.x;
+            let dy = y - CENTER.y;
+            let normalized = (dx * dx) / (RADIUS_X * RADIUS_X) + (dy * dy) / (RADIUS_Y * RADIUS_Y);
+            if normalized <= 1.0 {
+                let edge_falloff = (1.0 - normalized).max(0.0).sqrt();
+                let albedo = 0.65 + 0.3 * edge_falloff;
+                let mut normal =
+                    Vec3::new(dx / (RADIUS_X * RADIUS_X), dy / (RADIUS_Y * RADIUS_Y), 0.25);
+                normal = normal.normalized();
+                let position = Vec3::new(x, y, 0.0);
+                points.push(NotePoint::new(position, normal, albedo, NoteSegment::Head));
             }
         }
     }
@@ -237,8 +303,11 @@ fn build_stem(points: &mut Vec<NotePoint>) {
         for ix in 0..=x_steps {
             let x = LEFT + ix as f32 * STEP;
             let lateral = if x_steps == 0 { 0.0 } else { (ix as f32 / x_steps as f32 - 0.5).abs() };
-            let intensity = 0.55 + 0.25 * (1.0 - lateral * 1.8).clamp(0.0, 1.0);
-            points.push(NotePoint::new(Vec2::new(x, y), intensity, NoteSegment::Stem));
+            let albedo = 0.55 + 0.2 * (1.0 - lateral * 1.6).clamp(0.0, 1.0);
+            let mut normal = Vec3::new(1.0, 0.3 - lateral * 0.6, 0.3);
+            normal = normal.normalized();
+            let position = Vec3::new(x, y, 0.0);
+            points.push(NotePoint::new(position, normal, albedo, NoteSegment::Stem));
         }
     }
 }
@@ -258,20 +327,23 @@ fn build_flag(points: &mut Vec<NotePoint>) {
         if tangent.length() == 0.0 {
             continue;
         }
-        let normal = Vec2::new(-tangent.y, tangent.x);
+        let plane_normal = Vec2::new(-tangent.y, tangent.x).normalized();
 
         for layer in 0..LAYERS {
             let interp = if LAYERS == 1 { 0.0 } else { layer as f32 / (LAYERS - 1) as f32 };
             let offset = (interp - 0.5) * THICKNESS;
-            let position = center + normal * offset;
+            let position2d = center + plane_normal * offset;
             let distance = (offset / (THICKNESS / 2.0)).abs().min(1.0);
-            let intensity = 0.45 + 0.18 * (1.0 - distance);
-            points.push(NotePoint::new(position, intensity, NoteSegment::Flag));
+            let albedo = 0.5 + 0.18 * (1.0 - distance);
+            let mut normal = Vec3::new(plane_normal.x, plane_normal.y, 0.2 - distance * 0.3);
+            normal = normal.normalized();
+            let position = Vec3::new(position2d.x, position2d.y, 0.0);
+            points.push(NotePoint::new(position, normal, albedo, NoteSegment::Flag));
         }
     }
 }
 
-fn recenter_points(points: &mut [NotePoint]) -> Bounds {
+fn recenter(points: &mut [NotePoint]) {
     let mut min_x = f32::MAX;
     let mut max_x = f32::MIN;
     let mut min_y = f32::MAX;
@@ -291,22 +363,20 @@ fn recenter_points(points: &mut [NotePoint]) -> Bounds {
         point.position.x -= center_x;
         point.position.y -= center_y;
     }
-
-    Bounds { extent_x: (max_x - min_x) / 2.0, extent_y: (max_y - min_y) / 2.0 }
 }
 
 fn glyph_for(segment: NoteSegment, brightness: f32) -> char {
     match segment {
-        NoteSegment::Head => palette_char(brightness, &['@', '#', 'O', 'o', '.']),
-        NoteSegment::Stem => palette_char(brightness, &['|', '!', ':']),
-        NoteSegment::Flag => palette_char(brightness, &['~', '-', '`', '.']),
+        NoteSegment::Head => palette_char(brightness, &['@', '#', 'O', 'o', '.', ' ']),
+        NoteSegment::Stem => palette_char(brightness, &['|', '!', ':', '.']),
+        NoteSegment::Flag => palette_char(brightness, &['~', '-', '`', '.', ' ']),
     }
 }
 
 fn palette_char(brightness: f32, palette: &[char]) -> char {
     let normalized = brightness.clamp(0.0, 0.999);
     let levels = palette.len().saturating_sub(1) as f32;
-    let index = (levels - levels * normalized).round() as usize;
+    let index = (levels * (1.0 - normalized)).round() as usize;
     palette[index.min(palette.len() - 1)]
 }
 
@@ -314,16 +384,22 @@ fn cubic_point(control: [Vec2; 4], t: f32) -> Vec2 {
     let u = 1.0 - t;
     let u2 = u * u;
     let t2 = t * t;
-    u2 * u * control[0]
-        + 3.0 * u2 * t * control[1]
-        + 3.0 * u * t2 * control[2]
-        + t2 * t * control[3]
+    Vec2::new(
+        u2 * u * control[0].x
+            + 3.0 * u2 * t * control[1].x
+            + 3.0 * u * t2 * control[2].x
+            + t2 * t * control[3].x,
+        u2 * u * control[0].y
+            + 3.0 * u2 * t * control[1].y
+            + 3.0 * u * t2 * control[2].y
+            + t2 * t * control[3].y,
+    )
 }
 
 fn cubic_tangent(control: [Vec2; 4], t: f32) -> Vec2 {
     let u = 1.0 - t;
-    let a = 3.0 * (control[1] - control[0]) * u * u;
-    let b = 6.0 * (control[2] - control[1]) * u * t;
-    let c = 3.0 * (control[3] - control[2]) * t * t;
-    a + b + c
+    let a = (control[1] - control[0]) * 3.0 * u * u;
+    let b = (control[2] - control[1]) * 6.0 * u * t;
+    let c = (control[3] - control[2]) * 3.0 * t * t;
+    Vec2::new(a.x + b.x + c.x, a.y + b.y + c.y)
 }

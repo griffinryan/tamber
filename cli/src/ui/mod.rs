@@ -949,6 +949,8 @@ fn handle_splash_key(
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Up => app.select_previous_splash_option(),
         KeyCode::Down => app.select_next_splash_option(),
+        KeyCode::Left => app.select_previous_splash_option(),
+        KeyCode::Right => app.select_next_splash_option(),
         KeyCode::Enter => match app.splash_selection() {
             SplashSelection::Restore => {
                 if !app.has_pending_snapshot() || !app.apply_pending_snapshot() {
