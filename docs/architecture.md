@@ -69,6 +69,9 @@ The orchestrator coordinates renders and assembles the final mix:
    - Passes section-specific render hints (`target_seconds`, padding driven by tempo).
    - Stores render extras (backend, conditioning info, sampling params) for CLI tooling.
 3. **Motif capture**: first “motif seed” section is exported as a standalone WAV with spectral metadata.
+   - Planner marks seed sections with `motif_directive` so the orchestrator can identify them.
+   - Export path lives under `~/Music/Timbre/<job_id>_motif.wav`.
+   - Motif-first preview runs stop here: the orchestrator renders just the motif seed and records the unreduced plan in `extras.full_plan` for later expansion.
 4. **Preparation**: `_shape_to_target_length` normalises duration, trims or pads with short fades, and records per-section RMS.
 5. **Mix assembly**: sections are concatenated with either butt joins (micro fades) or longer crossfades when conditioning is missing or placeholders appear. Metadata captures duration, transition mode, and conditioning flags.
 6. **Mastering**: normalise to target RMS (0.2), apply a gentle high tilt, run a soft limiter, resample to `Settings.export_sample_rate` (default 48 kHz), and write PCM WAV (`export_bit_depth`).

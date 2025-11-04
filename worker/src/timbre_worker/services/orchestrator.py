@@ -7,6 +7,8 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import numpy as np
 from loguru import logger
 
+MOTIF_PREVIEW_MAX_SECONDS = 16.0
+
 from ..app.models import (
     ClipLayer,
     CompositionPlan,
@@ -71,16 +73,27 @@ class ComposerOrchestrator:
         if request.mode == GenerationMode.CLIP and request.plan is None:
             raise GenerationFailure("clip request missing precomputed plan")
 
-        plan = request.plan or self._planner.build_plan(request)
+        base_plan = request.plan or self._planner.build_plan(request)
+        render_plan = base_plan
+        force_motif_only = self._should_force_motif_only(request, base_plan)
+        if force_motif_only:
+            motif_plan = self._build_motif_preview_plan(base_plan)
+            if motif_plan is not None:
+                render_plan = motif_plan
+
+        if not render_plan.sections:
+            raise GenerationFailure("composition plan contains no sections to render")
+
+        motif_only = self._plan_is_motif_only(render_plan)
         clip_mode = request.mode == GenerationMode.CLIP
-        phrases = self._build_phrase_plan(plan)
+        phrases = self._build_phrase_plan(render_plan)
         await self._ensure_musicgen_ready()
 
         tracks: List[SectionTrack] = []
-        total_sections = len(plan.sections)
+        total_sections = len(render_plan.sections)
         motif_seed_render: SectionRender | None = None
         motif_seed_section: CompositionSection | None = None
-        for index, section in enumerate(plan.sections):
+        for index, section in enumerate(render_plan.sections):
             phrase = phrases[index]
             resolved_model_id = self._resolve_model_id(section.model_id or request.model_id)
             render_hint = phrase.duration_with_padding
@@ -94,15 +107,17 @@ class ComposerOrchestrator:
             render = await self._musicgen.render_section(
                 request,
                 section,
-                plan=plan,
+                plan=render_plan,
                 model_id=resolved_model_id,
                 render_seconds=render_hint,
-                theme=plan.theme,
+                theme=render_plan.theme,
                 previous_render=previous_render,
                 motif_seed=motif_seed_render,
             )
             self._ensure_section_metadata(section, render)
             self._attach_phrase_metadata(render, phrase, render_hint)
+            if motif_only:
+                self._trim_render_to_phrase_duration(render)
             if motif_seed_render is None and self._is_motif_seed_section(section):
                 motif_seed_render = render
                 motif_seed_section = section
@@ -117,16 +132,20 @@ class ComposerOrchestrator:
             )
             tracks.append(track)
             if progress_cb is not None:
-                await progress_cb(index + 1, len(plan.sections), render)
+                await progress_cb(index + 1, len(render_plan.sections), render)
 
         motif_metadata = self._finalise_motif_seed(
-            job_id, plan, motif_seed_section, motif_seed_render
+            job_id, render_plan, motif_seed_section, motif_seed_render
         )
 
-        trimmed, sample_rate, section_rms = self._prepare_section_waveforms(plan, tracks)
-        waveform, crossfades = self._combine_sections(plan, trimmed, sample_rate, tracks)
+        trimmed, sample_rate, section_rms = self._prepare_section_waveforms(
+            render_plan, tracks, motif_only=motif_only
+        )
+        waveform, crossfades = self._combine_sections(render_plan, trimmed, sample_rate, tracks)
         if clip_mode:
-            waveform = self._enforce_clip_length(waveform, sample_rate, plan.total_duration_seconds)
+            waveform = self._enforce_clip_length(
+                waveform, sample_rate, render_plan.total_duration_seconds
+            )
         waveform = normalise_loudness(waveform, target_rms=0.2)
         waveform = tilt_highs(waveform, sample_rate)
         waveform = soft_limiter(waveform, threshold=0.98)
@@ -140,6 +159,7 @@ class ComposerOrchestrator:
         if mix_cb is not None:
             await mix_cb(len(waveform) / sample_rate)
 
+        mix_duration = len(waveform) / sample_rate
         artifact_path = self._artifact_root / f"{job_id}.wav"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         write_waveform(
@@ -158,7 +178,7 @@ class ComposerOrchestrator:
             "sections": [track.render.extras for track in tracks],
             "mix": {
                 "sample_rate": sample_rate,
-                "duration_seconds": len(waveform) / sample_rate,
+                "duration_seconds": mix_duration,
                 "crossfades": crossfades,
                 "section_rms": section_rms,
                 "target_rms": 0.2,
@@ -171,8 +191,12 @@ class ComposerOrchestrator:
             extras["motif_seed"] = {"captured": False}
         extras["bit_depth"] = self._settings.export_bit_depth
         extras["format"] = self._settings.export_format
-        if plan.theme is not None:
-            extras["theme"] = plan.theme.model_dump()
+        if force_motif_only and render_plan is not base_plan:
+            extras["full_plan"] = base_plan.model_dump()
+            extras["motif_preview_plan"] = render_plan.model_dump()
+            extras["motif_preview_seconds"] = float(mix_duration)
+        if base_plan.theme is not None:
+            extras["theme"] = base_plan.theme.model_dump()
 
         if clip_mode:
             extras["clip"] = {
@@ -180,7 +204,7 @@ class ComposerOrchestrator:
                 "layer": request.clip_layer.value if isinstance(request.clip_layer, ClipLayer) else request.clip_layer,
                 "bars": request.clip_bars,
                 "scene_index": request.clip_scene_index,
-                "loop_seconds": plan.total_duration_seconds,
+                "loop_seconds": base_plan.total_duration_seconds,
                 "loop_ready": True,
             }
 
@@ -190,7 +214,7 @@ class ComposerOrchestrator:
             model_id=request.model_id,
             duration_seconds=int(round(len(waveform) / sample_rate)),
             extras=extras,
-            plan=plan,
+            plan=base_plan,
         )
 
         return GenerationArtifact(
@@ -204,6 +228,88 @@ class ComposerOrchestrator:
         if "state motif" in directive:
             return True
         return section.role == SectionRole.MOTIF
+
+    def _plan_is_motif_only(self, plan: CompositionPlan) -> bool:
+        if len(plan.sections) != 1:
+            return False
+        return self._is_motif_seed_section(plan.sections[0])
+
+    def _should_force_motif_only(
+        self,
+        request: GenerationRequest,
+        plan: CompositionPlan,
+    ) -> bool:
+        if request.mode in (GenerationMode.CLIP, GenerationMode.MOTIF):
+            return False
+        if self._plan_is_motif_only(plan):
+            return False
+        return True
+
+    def _build_motif_preview_plan(
+        self,
+        plan: CompositionPlan,
+    ) -> Optional[CompositionPlan]:
+        for section in plan.sections:
+            if self._is_motif_seed_section(section):
+                preview_section = section.model_copy(deep=True)
+                break
+        else:
+            preview_section = plan.sections[0].model_copy(deep=True) if plan.sections else None
+
+        if preview_section is None:
+            return None
+
+        preview_seconds = float(preview_section.target_seconds)
+        if preview_seconds <= 0.0:
+            preview_seconds = 4.0
+        preview_seconds = float(min(preview_seconds, MOTIF_PREVIEW_MAX_SECONDS))
+        preview_section.target_seconds = preview_seconds
+
+        suffix = "-mp"
+        max_prefix = 16 - len(suffix)
+        truncated_version = plan.version[:max_prefix] if max_prefix > 0 else plan.version[:16]
+        preview_version = f"{truncated_version}{suffix}"
+
+        preview_plan = CompositionPlan(
+            version=preview_version,
+            tempo_bpm=plan.tempo_bpm,
+            time_signature=plan.time_signature,
+            key=plan.key,
+            total_bars=preview_section.bars,
+            total_duration_seconds=preview_seconds,
+            theme=plan.theme.model_copy(deep=True) if plan.theme is not None else None,
+            sections=[preview_section],
+        )
+        return preview_plan
+
+    def _trim_render_to_phrase_duration(self, render: SectionRender) -> None:
+        extras = getattr(render, "extras", {})
+        if not isinstance(extras, dict):
+            return
+        phrase_meta = extras.get("phrase")
+        if not isinstance(phrase_meta, dict):
+            return
+        seconds = phrase_meta.get("seconds")
+        try:
+            target_seconds = float(seconds)
+        except (TypeError, ValueError):
+            return
+        if target_seconds <= 0.0 or render.sample_rate <= 0:
+            return
+
+        waveform = ensure_waveform_channels(render.waveform)
+        total_samples = waveform.shape[0]
+        target_samples = int(round(target_seconds * render.sample_rate))
+        if target_samples <= 0 or total_samples <= target_samples:
+            # Update metadata even if we leave waveform unchanged
+            extras["render_seconds"] = total_samples / float(render.sample_rate)
+            phrase_meta["trimmed_seconds"] = extras["render_seconds"]
+            return
+
+        trimmed = waveform[:target_samples].copy()
+        extras["render_seconds"] = target_samples / float(render.sample_rate)
+        phrase_meta["trimmed_seconds"] = extras["render_seconds"]
+        render.waveform = trimmed
 
     def _attach_phrase_metadata(
         self,
@@ -477,6 +583,8 @@ class ComposerOrchestrator:
         self,
         plan: CompositionPlan,
         tracks: List[SectionTrack],
+        *,
+        motif_only: bool = False,
     ) -> Tuple[List[np.ndarray], int, List[float]]:
         if not tracks:
             raise RuntimeError("composition produced no sections")
@@ -488,9 +596,13 @@ class ComposerOrchestrator:
             if render.sample_rate != sample_rate:
                 raise RuntimeError("section sample rates diverged")
             waveform = ensure_waveform_channels(render.waveform)
-            target_seconds = max(track.phrase.seconds, float(section.target_seconds))
-            target_samples = max(1, int(round(target_seconds * sample_rate)))
-            shaped = self._shape_to_target_length(waveform, target_samples, sample_rate)
+            if motif_only:
+                target_samples = max(1, waveform.shape[0])
+                shaped = self._shape_to_target_length(waveform, target_samples, sample_rate)
+            else:
+                target_seconds = max(track.phrase.seconds, float(section.target_seconds))
+                target_samples = max(1, int(round(target_seconds * sample_rate)))
+                shaped = self._shape_to_target_length(waveform, target_samples, sample_rate)
             loudness.append(rms_level(shaped))
             prepared.append(shaped)
         if len(prepared) != len(plan.sections):

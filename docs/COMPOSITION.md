@@ -66,6 +66,8 @@ All steps are declared in code (`worker/services/orchestrator.py`) and recorded 
 | `extras.sections[*].phrase.seconds` | Effective render length before mixing (includes padding). |
 | `extras.mix.crossfades[*].mode` | Either `butt` or `crossfade`. Handy for debugging mismatched transitions. |
 | `extras.motif_seed` | Contains `captured`, `path`, `spectral_centroid_hz`, `chroma_vector`, and plan references. |
+| `extras.full_plan` | Original multi-section plan persisted when a motif-only preview is rendered. |
+| `extras.motif_preview_plan` | Single-section plan used for the fast motif render (helps debug preview generation issues). |
 
 When adding new metadata, update `docs/schemas/`, the Rust `SectionExtras` struct, and this table.
 
