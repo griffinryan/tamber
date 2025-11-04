@@ -51,6 +51,38 @@ impl std::ops::Mul<f32> for Vec2 {
     }
 }
 
+const BASE_HEAD_CENTER: Vec2 = Vec2 { x: -4.0, y: -6.0 };
+const DEFAULT_HEAD_SPACING: f32 = 11.6;
+const PAIR_HEAD_SPACING: f32 = 15.2;
+const TRIPLET_HEAD_SPACING: f32 = 13.4;
+const MULTI_VERTICAL_SWAY: f32 = 0.22;
+const HEAD_STEP: f32 = 0.35;
+const HEAD_RADIUS_X: f32 = 5.8;
+const HEAD_RADIUS_Y: f32 = 3.9;
+const STEM_STEP: f32 = 0.4;
+const STEM_LEFT_OFFSET: f32 = 5.6;
+const STEM_RIGHT_OFFSET: f32 = 7.0;
+const STEM_BOTTOM_OFFSET: f32 = -0.5;
+const STEM_TOP_SINGLE: f32 = 17.5;
+const STEM_TOP_MULTI: f32 = 22.5;
+const FLAG_CONTROL_OFFSETS: [Vec2; 4] = [
+    Vec2 { x: 7.0, y: 17.5 },
+    Vec2 { x: 15.5, y: 19.5 },
+    Vec2 { x: 16.8, y: 13.0 },
+    Vec2 { x: 10.8, y: 9.2 },
+];
+const FLAG_SEGMENTS: usize = 48;
+const FLAG_THICKNESS: f32 = 2.7;
+const FLAG_LAYERS: usize = 6;
+const BEAM_STEP: f32 = 0.35;
+const BEAM_DEPTH: f32 = 2.2;
+const BEAM_BOTTOM_CLEARANCE: f32 = 4.2;
+const BEAM_TOP_CLEARANCE: f32 = 1.1;
+const DOT_STEP: f32 = 0.28;
+const DOT_RADIUS: f32 = 1.45;
+const DOT_OFFSET: Vec2 = Vec2 { x: 13.0, y: 0.8 };
+const DOT_DEPTH: f32 = 0.8;
+
 #[derive(Clone, Copy)]
 struct Vec3 {
     x: f32,
@@ -110,6 +142,8 @@ enum NoteSegment {
     Head,
     Stem,
     Flag,
+    Beam,
+    Dot,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +160,14 @@ impl NotePoint {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum NoteGlyph {
+    SingleEighth,
+    DottedEighth,
+    JoinedPair,
+    Triplet,
+}
+
 struct Bounds {
     extent_x: f32,
     extent_y: f32,
@@ -138,7 +180,7 @@ impl Bounds {
     }
 }
 
-pub struct RotatingEighthNote {
+pub struct RotatingNoteGlyph {
     points: Vec<NotePoint>,
     light_dir: Vec3,
     projection_distance: f32,
@@ -151,15 +193,9 @@ pub struct RotatingEighthNote {
     depth: Vec<f32>,
 }
 
-impl Default for RotatingEighthNote {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RotatingEighthNote {
-    pub fn new() -> Self {
-        let mut points = build_points();
+impl RotatingNoteGlyph {
+    pub fn new(variant: NoteGlyph) -> Self {
+        let mut points = build_points(variant);
         let bounds = recenter(&mut points);
         let max_extent = bounds.max_extent().max(1.0);
 
@@ -268,37 +304,82 @@ fn rotate(point: Vec3, sin_a: f32, cos_a: f32, sin_b: f32, cos_b: f32) -> Vec3 {
     Vec3::new(x * cos_b + z * sin_b, y, -x * sin_b + z * cos_b)
 }
 
-fn build_points() -> Vec<NotePoint> {
+fn build_points(variant: NoteGlyph) -> Vec<NotePoint> {
     let mut points = Vec::new();
-    build_head(&mut points);
-    build_stem(&mut points);
-    build_flag(&mut points);
+    match variant {
+        NoteGlyph::SingleEighth => build_single_eighth(&mut points),
+        NoteGlyph::DottedEighth => build_dotted_eighth(&mut points),
+        NoteGlyph::JoinedPair => build_joined_notes(&mut points, 2),
+        NoteGlyph::Triplet => build_joined_notes(&mut points, 3),
+    }
     points
 }
 
-fn build_head(points: &mut Vec<NotePoint>) {
-    const STEP: f32 = 0.35;
-    const CENTER: Vec2 = Vec2 { x: -4.0, y: -6.0 };
-    const RADIUS_X: f32 = 5.8;
-    const RADIUS_Y: f32 = 3.9;
+fn build_single_eighth(points: &mut Vec<NotePoint>) {
+    add_head(points, BASE_HEAD_CENTER);
+    add_stem(points, BASE_HEAD_CENTER, STEM_TOP_SINGLE);
+    add_flag(points, BASE_HEAD_CENTER);
+}
 
-    let x_steps = ((RADIUS_X * 2.0) / STEP).ceil() as i32;
-    let y_steps = ((RADIUS_Y * 2.0) / STEP).ceil() as i32;
+fn build_dotted_eighth(points: &mut Vec<NotePoint>) {
+    add_head(points, BASE_HEAD_CENTER);
+    add_stem(points, BASE_HEAD_CENTER, STEM_TOP_SINGLE);
+    add_flag(points, BASE_HEAD_CENTER);
+    add_dot(points, BASE_HEAD_CENTER);
+}
+
+fn build_joined_notes(points: &mut Vec<NotePoint>, count: usize) {
+    let spacing = match count {
+        2 => PAIR_HEAD_SPACING,
+        3 => TRIPLET_HEAD_SPACING,
+        _ => DEFAULT_HEAD_SPACING,
+    };
+    let centers = head_centers(count, spacing);
+    for center in &centers {
+        add_head(points, *center);
+        add_stem(points, *center, STEM_TOP_MULTI);
+    }
+    add_beam(points, &centers, STEM_TOP_MULTI);
+}
+
+fn head_centers(count: usize, spacing: f32) -> Vec<Vec2> {
+    if count == 0 {
+        return Vec::new();
+    }
+
+    let half = (count.saturating_sub(1) as f32) * 0.5;
+    let mut centers = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = i as f32 - half;
+        let x = BASE_HEAD_CENTER.x + offset * spacing;
+        let y = BASE_HEAD_CENTER.y - offset * MULTI_VERTICAL_SWAY;
+        centers.push(Vec2::new(x, y));
+    }
+    centers
+}
+
+fn add_head(points: &mut Vec<NotePoint>, center: Vec2) {
+    let x_steps = ((HEAD_RADIUS_X * 2.0) / HEAD_STEP).ceil() as i32;
+    let y_steps = ((HEAD_RADIUS_Y * 2.0) / HEAD_STEP).ceil() as i32;
 
     for iy in -y_steps..=y_steps {
-        let y = CENTER.y + iy as f32 * STEP;
+        let y = center.y + iy as f32 * HEAD_STEP;
         for ix in -x_steps..=x_steps {
-            let x = CENTER.x + ix as f32 * STEP;
-            let dx = x - CENTER.x;
-            let dy = y - CENTER.y;
-            let normalized = (dx * dx) / (RADIUS_X * RADIUS_X) + (dy * dy) / (RADIUS_Y * RADIUS_Y);
+            let x = center.x + ix as f32 * HEAD_STEP;
+            let dx = x - center.x;
+            let dy = y - center.y;
+            let normalized = (dx * dx) / (HEAD_RADIUS_X * HEAD_RADIUS_X)
+                + (dy * dy) / (HEAD_RADIUS_Y * HEAD_RADIUS_Y);
             if normalized <= 1.0 {
                 let edge = (1.0 - normalized).max(0.0);
                 let depth = edge.sqrt();
                 let z = depth.powf(0.85) * 3.2;
                 let albedo = 0.68 + 0.25 * depth;
-                let mut normal =
-                    Vec3::new(dx / (RADIUS_X * RADIUS_X), dy / (RADIUS_Y * RADIUS_Y), depth / 1.2);
+                let mut normal = Vec3::new(
+                    dx / (HEAD_RADIUS_X * HEAD_RADIUS_X),
+                    dy / (HEAD_RADIUS_Y * HEAD_RADIUS_Y),
+                    depth / 1.2,
+                );
                 normal = normal.normalized();
                 let position = Vec3::new(x, y, z);
                 points.push(NotePoint::new(position, normal, albedo, NoteSegment::Head));
@@ -307,20 +388,19 @@ fn build_head(points: &mut Vec<NotePoint>) {
     }
 }
 
-fn build_stem(points: &mut Vec<NotePoint>) {
-    const STEP: f32 = 0.4;
-    const LEFT: f32 = 1.6;
-    const RIGHT: f32 = 3.0;
-    const BOTTOM: f32 = -6.5;
-    const TOP: f32 = 11.5;
+fn add_stem(points: &mut Vec<NotePoint>, center: Vec2, top_offset: f32) {
+    let left = center.x + STEM_LEFT_OFFSET;
+    let right = center.x + STEM_RIGHT_OFFSET;
+    let bottom = center.y + STEM_BOTTOM_OFFSET;
+    let top = center.y + top_offset;
 
-    let x_steps = ((RIGHT - LEFT) / STEP).ceil() as i32;
-    let y_steps = ((TOP - BOTTOM) / STEP).ceil() as i32;
+    let x_steps = ((right - left) / STEM_STEP).ceil() as i32;
+    let y_steps = ((top - bottom) / STEM_STEP).ceil() as i32;
 
     for iy in 0..=y_steps {
-        let y = BOTTOM + iy as f32 * STEP;
+        let y = bottom + iy as f32 * STEM_STEP;
         for ix in 0..=x_steps {
-            let x = LEFT + ix as f32 * STEP;
+            let x = left + ix as f32 * STEM_STEP;
             let lateral = if x_steps == 0 { 0.0 } else { (ix as f32 / x_steps as f32 - 0.5).abs() };
             let thickness = (1.0 - lateral * 1.6).clamp(0.0, 1.0);
             let z = thickness * 2.2;
@@ -333,16 +413,19 @@ fn build_stem(points: &mut Vec<NotePoint>) {
     }
 }
 
-fn build_flag(points: &mut Vec<NotePoint>) {
-    const SEGMENTS: usize = 48;
-    const THICKNESS: f32 = 2.7;
-    const LAYERS: usize = 6;
+fn add_flag(points: &mut Vec<NotePoint>, center: Vec2) {
+    let control = [
+        Vec2::new(center.x + FLAG_CONTROL_OFFSETS[0].x, center.y + FLAG_CONTROL_OFFSETS[0].y),
+        Vec2::new(center.x + FLAG_CONTROL_OFFSETS[1].x, center.y + FLAG_CONTROL_OFFSETS[1].y),
+        Vec2::new(center.x + FLAG_CONTROL_OFFSETS[2].x, center.y + FLAG_CONTROL_OFFSETS[2].y),
+        Vec2::new(center.x + FLAG_CONTROL_OFFSETS[3].x, center.y + FLAG_CONTROL_OFFSETS[3].y),
+    ];
+    add_flag_with_control(points, control);
+}
 
-    let control =
-        [Vec2::new(3.0, 11.5), Vec2::new(11.5, 13.5), Vec2::new(12.8, 7.0), Vec2::new(6.8, 3.2)];
-
-    for i in 0..=SEGMENTS {
-        let t = i as f32 / SEGMENTS as f32;
+fn add_flag_with_control(points: &mut Vec<NotePoint>, control: [Vec2; 4]) {
+    for i in 0..=FLAG_SEGMENTS {
+        let t = i as f32 / FLAG_SEGMENTS as f32;
         let center = cubic_point(control, t);
         let tangent = cubic_tangent(control, t).normalized();
         if tangent.length() == 0.0 {
@@ -350,17 +433,109 @@ fn build_flag(points: &mut Vec<NotePoint>) {
         }
         let plane_normal = Vec2::new(-tangent.y, tangent.x).normalized();
 
-        for layer in 0..LAYERS {
-            let interp = if LAYERS == 1 { 0.0 } else { layer as f32 / (LAYERS - 1) as f32 };
-            let offset = (interp - 0.5) * THICKNESS;
+        for layer in 0..FLAG_LAYERS {
+            let interp =
+                if FLAG_LAYERS == 1 { 0.0 } else { layer as f32 / (FLAG_LAYERS - 1) as f32 };
+            let offset = (interp - 0.5) * FLAG_THICKNESS;
             let position2d = center + plane_normal * offset;
-            let distance = (offset / (THICKNESS / 2.0)).abs().min(1.0);
+            let distance = (offset / (FLAG_THICKNESS / 2.0)).abs().min(1.0);
             let albedo = 0.52 + 0.16 * (1.0 - distance);
             let z = (1.0 - distance.powi(2)) * 1.6;
             let mut normal = Vec3::new(plane_normal.x * 0.7, plane_normal.y * 0.7, 1.1 - distance);
             normal = normal.normalized();
             let position = Vec3::new(position2d.x, position2d.y, z);
             points.push(NotePoint::new(position, normal, albedo, NoteSegment::Flag));
+        }
+    }
+}
+
+fn add_beam(points: &mut Vec<NotePoint>, centers: &[Vec2], stem_top_offset: f32) {
+    if centers.is_empty() {
+        return;
+    }
+
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut avg_y = 0.0;
+    for center in centers {
+        min_x = min_x.min(center.x);
+        max_x = max_x.max(center.x);
+        avg_y += center.y;
+    }
+    avg_y /= centers.len() as f32;
+
+    let left = min_x + STEM_LEFT_OFFSET - 2.2;
+    let right = max_x + STEM_RIGHT_OFFSET + 2.6;
+    let stem_top = avg_y + stem_top_offset;
+    let bottom = stem_top - BEAM_BOTTOM_CLEARANCE;
+    let top = stem_top - BEAM_TOP_CLEARANCE;
+    let tilt = if centers.len() <= 1 {
+        0.0
+    } else {
+        let first = centers.first().unwrap();
+        let last = centers.last().unwrap();
+        (last.y - first.y) * 0.35
+    };
+
+    add_beam_rect(points, left, right, bottom, top, tilt);
+}
+
+fn add_beam_rect(
+    points: &mut Vec<NotePoint>,
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    tilt: f32,
+) {
+    if right <= left || top <= bottom {
+        return;
+    }
+
+    let x_steps = ((right - left) / BEAM_STEP).ceil() as i32;
+    let y_steps = ((top - bottom) / BEAM_STEP).ceil() as i32;
+
+    for iy in 0..=y_steps {
+        let base_y = bottom + iy as f32 * BEAM_STEP;
+        let vertical = if y_steps == 0 { 0.0 } else { (iy as f32 / y_steps as f32 - 0.5).abs() };
+        let vertical_falloff = (1.0 - vertical * 1.4).clamp(0.0, 1.0);
+        let z = (1.0 - vertical * vertical) * BEAM_DEPTH;
+        let albedo = 0.52 + 0.20 * vertical_falloff;
+
+        for ix in 0..=x_steps {
+            let ratio = if x_steps == 0 { 0.0 } else { ix as f32 / x_steps as f32 };
+            let x = left + ix as f32 * BEAM_STEP;
+            let y = base_y + tilt * (ratio - 0.5);
+            let lateral = (ratio - 0.5).abs();
+            let depth = z * (1.0 - lateral * 0.3) * vertical_falloff;
+            let mut normal = Vec3::new(0.15 - lateral * 0.12, 0.35 - vertical * 0.15, 1.25);
+            normal = normal.normalized();
+            let position = Vec3::new(x, y, depth);
+            points.push(NotePoint::new(position, normal, albedo, NoteSegment::Beam));
+        }
+    }
+}
+
+fn add_dot(points: &mut Vec<NotePoint>, base: Vec2) {
+    let center = Vec2::new(base.x + DOT_OFFSET.x, base.y + DOT_OFFSET.y);
+    let steps = ((DOT_RADIUS * 2.0) / DOT_STEP).ceil() as i32;
+
+    for iy in -steps..=steps {
+        let y = center.y + iy as f32 * DOT_STEP;
+        for ix in -steps..=steps {
+            let x = center.x + ix as f32 * DOT_STEP;
+            let dx = x - center.x;
+            let dy = y - center.y;
+            let distance_sq = dx * dx + dy * dy;
+            if distance_sq <= DOT_RADIUS * DOT_RADIUS {
+                let normalized = (distance_sq / (DOT_RADIUS * DOT_RADIUS)).min(1.0);
+                let depth = (1.0 - normalized).max(0.0);
+                let z = depth.sqrt() * (DOT_RADIUS * 0.9) + DOT_DEPTH;
+                let albedo = 0.62 + 0.22 * depth;
+                let normal = Vec3::new(dx, dy, DOT_RADIUS).normalized();
+                let position = Vec3::new(x, y, z);
+                points.push(NotePoint::new(position, normal, albedo, NoteSegment::Dot));
+            }
         }
     }
 }
@@ -408,6 +583,8 @@ fn glyph_for(segment: NoteSegment, brightness: f32) -> char {
         NoteSegment::Head => palette_char(brightness, &['@', '#', 'O', 'o', '.', ' ']),
         NoteSegment::Stem => palette_char(brightness, &['|', '!', ':', '.', ' ']),
         NoteSegment::Flag => palette_char(brightness, &['~', '-', '`', '.', ' ']),
+        NoteSegment::Beam => palette_char(brightness, &['=', '-', ':', '.', ' ']),
+        NoteSegment::Dot => palette_char(brightness, &['*', '+', '.', ' ']),
     }
 }
 

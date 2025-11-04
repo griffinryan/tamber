@@ -1469,9 +1469,9 @@ mod tests {
         config::AppConfig,
         session::{ClipSlotStatus, SceneSnapshot, SessionSnapshot},
     };
-    use std::path::Path;
     use chrono::Utc;
     use serde_json::json;
+    use std::path::Path;
 
     fn app_state_without_splash() -> AppState {
         let mut state = AppState::new(AppConfig::default());

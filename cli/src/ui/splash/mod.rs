@@ -1,8 +1,9 @@
 mod note;
 
 use crate::app::{AppState, SplashSelection};
-use note::RotatingEighthNote;
+use note::{NoteGlyph, RotatingNoteGlyph};
 use once_cell::sync::Lazy;
+use rand::{seq::SliceRandom, thread_rng};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -30,7 +31,7 @@ pub fn render(frame: &mut ratatui::Frame, app: &AppState) {
 }
 
 struct SplashRenderer {
-    note: RotatingEighthNote,
+    note: RotatingNoteGlyph,
 }
 
 struct SplashContext {
@@ -41,7 +42,15 @@ struct SplashContext {
 
 impl SplashRenderer {
     fn new() -> Self {
-        Self { note: RotatingEighthNote::default() }
+        let mut rng = thread_rng();
+        let variants = [
+            NoteGlyph::SingleEighth,
+            NoteGlyph::DottedEighth,
+            NoteGlyph::JoinedPair,
+            NoteGlyph::Triplet,
+        ];
+        let variant = *variants.choose(&mut rng).unwrap_or(&NoteGlyph::SingleEighth);
+        Self { note: RotatingNoteGlyph::new(variant) }
     }
 
     fn render(&mut self, frame: &mut ratatui::Frame, area: Rect, context: SplashContext) {
