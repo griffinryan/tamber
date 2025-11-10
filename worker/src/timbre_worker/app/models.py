@@ -180,3 +180,4 @@ class SessionClipRequest(BaseModel):
     prompt: Optional[str] = Field(default=None, max_length=512)
     bars: Optional[int] = Field(default=None, ge=1, le=64)
     scene_index: Optional[int] = Field(default=None, ge=0, le=2)
+    generation: Optional[GenerationRequest] = Field(default=None)

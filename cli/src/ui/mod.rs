@@ -112,7 +112,9 @@ fn request_new_session(app: &mut AppState, command_tx: &UnboundedSender<AppComma
         app.push_status_line("Cleared saved session snapshot.".to_string());
     }
     let payload = SessionCreateRequest::default();
+    app.mark_session_request_pending();
     if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
+        app.clear_session_request_pending();
         let message = "Failed to request session creation; worker channel closed".to_string();
         app.push_status_line(message);
     } else {
@@ -851,19 +853,18 @@ fn handle_key(
 
             let prompt = prompt_text;
             let overrides_ref = inline_overrides.as_ref();
+            let override_mode = overrides_ref.and_then(|opts| opts.mode);
 
-            if let Some(overrides) = overrides_ref {
-                let (request, plan) =
-                    app.build_generation_payload_with_overrides(&prompt, overrides_ref);
-                if matches!(overrides.mode, Some(GenerationMode::Motif)) {
-                    app.push_status_line("Queued motif preview (~16s)".to_string());
-                }
-                if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {
-                    app.push_status_line("Failed to submit prompt; worker channel closed".into());
-                }
-            } else if app.session.is_some() {
+            if app.session_request_pending() {
+                app.push_status_line(
+                    "Session is provisioning; wait for it to finish before submitting prompts."
+                        .into(),
+                );
+            } else if app.session.is_some()
+                && !matches!(override_mode, Some(GenerationMode::Motif | GenerationMode::FullTrack))
+            {
                 if !app.motif_ready() {
-                    match app.build_motif_payload(&prompt) {
+                    match app.build_motif_payload_with_overrides(&prompt, overrides_ref) {
                         Ok((request, plan)) => {
                             app.push_status_line("Queued motif seed (~16s)".to_string());
                             if command_tx
@@ -877,8 +878,15 @@ fn handle_key(
                         }
                         Err(err) => app.push_status_line(err),
                     }
-                } else if let Some((layer, scene_index)) = app.active_clip_target() {
-                    match app.build_clip_payload_for(layer, scene_index, Some(prompt.as_str())) {
+                } else {
+                    let (layer, scene_index) =
+                        app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
+                    match app.build_clip_payload_for(
+                        layer,
+                        scene_index,
+                        Some(prompt.as_str()),
+                        overrides_ref,
+                    ) {
                         Ok((request, plan, clip_prompt)) => {
                             let label = clip_layer_label(layer);
                             let scene_name = app.session_view.scene_name(scene_index);
@@ -889,26 +897,24 @@ fn handle_key(
                                     request,
                                     plan,
                                 })
-                                .is_err()
+                                .is_ok()
                             {
+                                app.push_status_line(format!("Queued {label} clip · {scene_name}"));
+                            } else {
                                 app.push_status_line(
                                     "Failed to submit clip; worker channel closed".into(),
                                 );
-                            } else {
-                                app.push_status_line(format!("Queued {label} clip · {scene_name}"));
                             }
                         }
                         Err(err) => app.push_status_line(err),
                     }
-                } else {
-                    app.push_status_line(
-                        "Select a session layer (Insert → Enter) before submitting a clip prompt."
-                            .to_string(),
-                    );
                 }
             } else {
                 let (request, plan) =
                     app.build_generation_payload_with_overrides(&prompt, overrides_ref);
+                if matches!(override_mode, Some(GenerationMode::Motif)) {
+                    app.push_status_line("Queued motif preview (~16s)".to_string());
+                }
                 if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {
                     app.push_status_line("Failed to submit prompt; worker channel closed".into());
                 }
@@ -999,7 +1005,7 @@ fn dispatch_app_command(
         let prompt_override = if prompt_tail.is_empty() { None } else { Some(prompt_tail) };
         let (_, scene_index) =
             app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
-        match app.build_clip_payload_for(layer, scene_index, prompt_override.as_deref()) {
+        match app.build_clip_payload_for(layer, scene_index, prompt_override.as_deref(), None) {
             Ok((request, plan, prompt_text)) => {
                 let label = clip_layer_label(layer);
                 if command_tx
@@ -1072,7 +1078,9 @@ fn dispatch_app_command(
         match app.parse_session_command(command_line) {
             Ok(SessionCliCommand::Start) => {
                 let payload = SessionCreateRequest::default();
+                app.mark_session_request_pending();
                 if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
+                    app.clear_session_request_pending();
                     let message =
                         "Failed to request session creation; worker channel closed".to_string();
                     app.push_status_line(message);

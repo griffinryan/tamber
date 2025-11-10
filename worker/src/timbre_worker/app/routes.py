@@ -129,19 +129,31 @@ async def create_session_clip(
         raise HTTPException(status_code=409, detail="session seed plan not available")
 
     settings = cast(Settings, request.app.state.settings)
-    clip_prompt = payload.prompt or summary.seed_prompt or summary.theme.motif or "Session clip"
+    theme_motif = summary.theme.motif if summary.theme is not None else None
+    clip_prompt = payload.prompt or summary.seed_prompt or theme_motif or "Session clip"
     clip_bars = payload.bars
 
-    generation_request = GenerationRequest(
-        prompt=clip_prompt,
-        duration_seconds=int(max(1, round(summary.seed_plan.total_duration_seconds))),
-        model_id=settings.default_model_id,
-        session_id=session_id,
-        mode=GenerationMode.CLIP,
-        clip_layer=payload.layer,
-        clip_scene_index=payload.scene_index,
-        clip_bars=clip_bars,
-    )
+    if payload.generation is not None:
+        generation_request = payload.generation.model_copy(deep=True)
+        generation_request.session_id = session_id
+        generation_request.mode = GenerationMode.CLIP
+        generation_request.clip_layer = payload.layer
+        generation_request.clip_scene_index = payload.scene_index
+        generation_request.clip_bars = clip_bars or generation_request.clip_bars
+        generation_request.prompt = clip_prompt
+        if generation_request.model_id is None:
+            generation_request.model_id = settings.default_model_id
+    else:
+        generation_request = GenerationRequest(
+            prompt=clip_prompt,
+            duration_seconds=int(max(1, round(summary.seed_plan.total_duration_seconds))),
+            model_id=settings.default_model_id,
+            session_id=session_id,
+            mode=GenerationMode.CLIP,
+            clip_layer=payload.layer,
+            clip_scene_index=payload.scene_index,
+            clip_bars=clip_bars,
+        )
 
     try:
         status = await manager.enqueue(generation_request)

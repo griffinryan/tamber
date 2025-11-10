@@ -237,6 +237,8 @@ pub struct SessionClipRequest {
     pub bars: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_index: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<GenerationRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

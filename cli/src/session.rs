@@ -357,6 +357,18 @@ impl SessionView {
         self.active
     }
 
+    pub fn has_active_target(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub fn set_active_target(&mut self, layer: ClipLayer, scene_index: usize) {
+        if scene_index >= MAX_SCENES {
+            return;
+        }
+        self.ensure_scene(scene_index);
+        self.active = Some((layer, scene_index));
+    }
+
     pub fn toggle_active_target(&mut self, layer: ClipLayer, scene_index: usize) -> bool {
         if scene_index >= MAX_SCENES {
             return false;

@@ -280,6 +280,8 @@ pub struct AppState {
     splash_selection: SplashSelection,
     pending_snapshot: Option<SessionSnapshot>,
     splash_animation: SplashAnimationState,
+    session_request_in_flight: bool,
+    clip_target_initialized: bool,
 }
 
 impl AppState {
@@ -311,6 +313,8 @@ impl AppState {
             splash_selection: SplashSelection::StartNew,
             pending_snapshot: pending_snapshot.clone(),
             splash_animation: SplashAnimationState::default(),
+            session_request_in_flight: false,
+            clip_target_initialized: false,
         };
 
         if pending_snapshot.is_some() {
@@ -326,6 +330,18 @@ impl AppState {
 
     pub fn showing_splash(&self) -> bool {
         self.showing_splash
+    }
+
+    pub fn session_request_pending(&self) -> bool {
+        self.session_request_in_flight
+    }
+
+    pub fn mark_session_request_pending(&mut self) {
+        self.session_request_in_flight = true;
+    }
+
+    pub fn clear_session_request_pending(&mut self) {
+        self.session_request_in_flight = false;
     }
 
     pub fn has_pending_snapshot(&self) -> bool {
@@ -367,6 +383,8 @@ impl AppState {
         self.restored_session_id = snapshot.session_id.clone();
         self.pending_snapshot = None;
         self.showing_splash = false;
+        self.clip_target_initialized = false;
+        self.ensure_clip_target_selected();
         if let Some(session_id) = snapshot.session_id {
             let label = Self::short_session_id(&session_id);
             self.push_status_line(format!("Restored session layout for {label} (offline)"));
@@ -374,6 +392,15 @@ impl AppState {
             self.push_status_line("Restored session layout (offline)".to_string());
         }
         true
+    }
+
+    pub fn ensure_clip_target_selected(&mut self) {
+        if self.clip_target_initialized || self.session_view.has_active_target() {
+            return;
+        }
+        let (layer, scene) = self.session_view.focused();
+        self.session_view.set_active_target(layer, scene);
+        self.clip_target_initialized = true;
     }
 
     #[cfg(test)]
@@ -542,6 +569,9 @@ impl AppState {
                 self.session_view = SessionView::new();
                 self.session_view.apply_summary(&summary);
                 self.restored_session_id = Some(summary.session_id.clone());
+                self.clear_session_request_pending();
+                self.clip_target_initialized = false;
+                self.ensure_clip_target_selected();
                 self.push_status_line(format!("Session {label} created ({tempo})"));
             }
             AppEvent::SessionUpdated { summary } => {
@@ -550,14 +580,21 @@ impl AppState {
                     != Some(summary.session_id.clone())
                 {
                     self.session_view = SessionView::new();
+                    self.clip_target_initialized = false;
                 }
                 self.session_view.apply_summary(&summary);
                 self.session = Some(summary.clone());
                 self.restored_session_id = Some(summary.session_id.clone());
+                self.clear_session_request_pending();
+                self.ensure_clip_target_selected();
                 self.push_status_line(format!(
                     "Session {label} updated ({} clips)",
                     summary.clip_count
                 ));
+            }
+            AppEvent::SessionRequestFailed { message } => {
+                self.clear_session_request_pending();
+                self.push_status_line(message);
             }
             AppEvent::ClipPlaying { layer, scene_index } => {
                 self.session_view.set_playing(layer, scene_index);
@@ -754,6 +791,13 @@ impl AppState {
         self.build_generation_payload_with_overrides(prompt, None)
     }
 
+    fn effective_model_id(&self, overrides: Option<&GenerationOverrides>) -> String {
+        overrides
+            .and_then(|opts| opts.model_id.as_ref())
+            .cloned()
+            .unwrap_or_else(|| self.generation_config.model_id.clone())
+    }
+
     pub fn build_generation_payload_with_overrides(
         &self,
         prompt: &str,
@@ -762,10 +806,7 @@ impl AppState {
         let duration_seconds = overrides
             .and_then(|opts| opts.duration_seconds)
             .unwrap_or(self.generation_config.duration_seconds);
-        let model_id = overrides
-            .and_then(|opts| opts.model_id.as_ref())
-            .cloned()
-            .unwrap_or_else(|| self.generation_config.model_id.clone());
+        let model_id = self.effective_model_id(overrides);
         let mode = overrides.and_then(|opts| opts.mode).unwrap_or(self.generation_config.mode);
 
         let plan =
@@ -800,6 +841,7 @@ impl AppState {
         layer: ClipLayer,
         scene_index: usize,
         prompt_override: Option<&str>,
+        overrides: Option<&GenerationOverrides>,
     ) -> Result<(GenerationRequest, CompositionPlan, String), String> {
         let session = self
             .session
@@ -877,12 +919,15 @@ impl AppState {
             sections: vec![section],
         };
 
-        let duration_seconds = total_seconds.round().clamp(1.0, MAX_DURATION_SECONDS as f32) as u8;
+        let duration_seconds = overrides
+            .and_then(|opts| opts.duration_seconds)
+            .unwrap_or_else(|| total_seconds.round().clamp(1.0, MAX_DURATION_SECONDS as f32) as u8);
+        let model_id = self.effective_model_id(overrides);
         let request = GenerationRequest {
             prompt: clip_prompt.clone(),
             seed: self.generation_config.seed,
             duration_seconds,
-            model_id: self.generation_config.model_id.clone(),
+            model_id,
             session_id: self.current_session_id(),
             clip_layer: Some(layer),
             clip_scene_index: Some(scene_index as u16),
@@ -908,18 +953,24 @@ impl AppState {
         &self,
         prompt: &str,
     ) -> Result<(GenerationRequest, CompositionPlan), String> {
+        self.build_motif_payload_with_overrides(prompt, None)
+    }
+
+    pub fn build_motif_payload_with_overrides(
+        &self,
+        prompt: &str,
+        overrides: Option<&GenerationOverrides>,
+    ) -> Result<(GenerationRequest, CompositionPlan), String> {
         if prompt.trim().is_empty() {
             return Err("Motif prompt cannot be empty.".to_string());
         }
         if self.session.is_none() {
             return Err("No active session. Use /session start first.".to_string());
         }
-        let overrides = GenerationOverrides {
-            duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
-            mode: Some(GenerationMode::Motif),
-            ..GenerationOverrides::default()
-        };
-        Ok(self.build_generation_payload_with_overrides(prompt, Some(&overrides)))
+        let mut merged = overrides.cloned().unwrap_or_default();
+        merged.duration_seconds = Some(MOTIF_PRESET_DURATION_SECONDS);
+        merged.mode = Some(GenerationMode::Motif);
+        Ok(self.build_generation_payload_with_overrides(prompt, Some(&merged)))
     }
 
     pub fn handle_command(&mut self, input: &str) -> Result<String, String> {
@@ -1083,6 +1134,8 @@ impl AppState {
         self.pending_snapshot = None;
         self.showing_splash = false;
         self.splash_selection = SplashSelection::StartNew;
+        self.session_request_in_flight = false;
+        self.clip_target_initialized = false;
     }
 
     pub fn save_session_snapshot(&self) -> Result<()> {
@@ -1194,6 +1247,9 @@ pub enum AppEvent {
     },
     SessionUpdated {
         summary: SessionSummary,
+    },
+    SessionRequestFailed {
+        message: String,
     },
     ClipPlaying {
         layer: ClipLayer,
@@ -1786,11 +1842,27 @@ mod tests {
     }
 
     #[test]
+    fn session_start_auto_selects_clip_target_once() {
+        let mut state = app_state_without_splash();
+        let summary = session_summary_with_plan(Some(sample_plan()));
+        state.handle_event(AppEvent::SessionStarted { summary: summary.clone() });
+        let initial_target = state.active_clip_target().expect("target should be auto selected");
+        assert_eq!(initial_target, state.session_view.focused());
+
+        assert!(!state.session_view.toggle_active_target(initial_target.0, initial_target.1));
+        assert!(state.active_clip_target().is_none());
+
+        state.handle_event(AppEvent::SessionUpdated { summary });
+        assert!(state.active_clip_target().is_none());
+    }
+
+    #[test]
     fn build_clip_payload_rejects_missing_motif() {
         let mut state = app_state_without_splash();
         state.session = Some(session_summary_with_plan(None));
-        let error =
-            state.build_clip_payload_for(ClipLayer::Bass, 0, Some("groovy bass")).unwrap_err();
+        let error = state
+            .build_clip_payload_for(ClipLayer::Bass, 0, Some("groovy bass"), None)
+            .unwrap_err();
         assert!(error.contains("Motif not ready"), "expected motif readiness error, got {error}");
     }
 
@@ -1799,8 +1871,13 @@ mod tests {
         let mut state = app_state_without_splash();
         let plan = sample_plan();
         state.session = Some(session_summary_with_plan(Some(plan.clone())));
-        let (request, built_plan, used_prompt) =
-            state.build_clip_payload_for(ClipLayer::Lead, 0, Some("lead line")).unwrap();
+        let overrides = GenerationOverrides {
+            model_id: Some("musicgen-stereo-small".to_string()),
+            ..GenerationOverrides::default()
+        };
+        let (request, built_plan, used_prompt) = state
+            .build_clip_payload_for(ClipLayer::Lead, 0, Some("lead line"), Some(&overrides))
+            .unwrap();
         assert_eq!(request.clip_layer, Some(ClipLayer::Lead));
         assert_eq!(request.clip_scene_index, Some(0));
         assert_eq!(request.mode, Some(GenerationMode::Clip));
@@ -1808,6 +1885,23 @@ mod tests {
         assert_eq!(built_plan.sections.len(), 1);
         assert!(built_plan.sections[0].variation_axes.contains(&"lead".to_string()));
         assert!(plan.sections[0].variation_axes.is_empty());
+        assert_eq!(request.model_id, "musicgen-stereo-small");
+    }
+
+    #[test]
+    fn motif_payload_respects_model_overrides() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        state.session = Some(session_summary_with_plan(Some(plan)));
+        let overrides = GenerationOverrides {
+            model_id: Some("musicgen-stereo-small".to_string()),
+            ..GenerationOverrides::default()
+        };
+        let (request, built_plan) =
+            state.build_motif_payload_with_overrides("motif focus", Some(&overrides)).unwrap();
+        assert_eq!(request.mode, Some(GenerationMode::Motif));
+        assert_eq!(request.model_id, "musicgen-stereo-small");
+        assert_eq!(built_plan.sections.len(), 1);
     }
 
     #[test]
@@ -1819,7 +1913,7 @@ mod tests {
         state.session_view.apply_summary(&summary);
 
         let (request, built_plan, prompt) =
-            state.build_clip_payload_for(ClipLayer::Lead, 1, Some("lead layer")).unwrap();
+            state.build_clip_payload_for(ClipLayer::Lead, 1, Some("lead layer"), None).unwrap();
         let status = GenerationStatus {
             job_id: "job-clip-1".into(),
             state: JobState::Queued,
@@ -1854,7 +1948,7 @@ mod tests {
         state.session_view.apply_summary(&summary);
 
         let (request, built_plan, prompt) =
-            state.build_clip_payload_for(ClipLayer::Bass, 2, Some("bass groove")).unwrap();
+            state.build_clip_payload_for(ClipLayer::Bass, 2, Some("bass groove"), None).unwrap();
         let queued_status = GenerationStatus {
             job_id: "job-clip-2".into(),
             state: JobState::Queued,

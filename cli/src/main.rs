@@ -340,6 +340,7 @@ impl Controller {
             prompt: Some(prompt.clone()),
             bars: request.clip_bars,
             scene_index: request.clip_scene_index,
+            generation: Some(request.clone()),
         };
 
         let status = inner
@@ -379,8 +380,14 @@ impl Controller {
         inner: Arc<ControllerInner>,
         payload: SessionCreateRequest,
     ) -> Result<()> {
-        let summary =
-            inner.client.create_session(&payload).await.context("failed to create session")?;
+        let summary = match inner.client.create_session(&payload).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                let message = format!("Failed to create session: {err}");
+                let _ = inner.event_tx.send(AppEvent::SessionRequestFailed { message });
+                return Err(err);
+            }
+        };
         let _ = inner.event_tx.send(AppEvent::SessionStarted { summary });
         Ok(())
     }

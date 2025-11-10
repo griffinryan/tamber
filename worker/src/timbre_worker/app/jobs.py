@@ -88,18 +88,20 @@ class JobManager:
         prompt = request.prompt or summary.seed_prompt or "Session clip"
         request.prompt = prompt
 
-        plan = self._planner.build_clip_plan(
-            seed_plan=seed_plan,
-            session_theme=summary.theme or seed_plan.theme,
-            clip_prompt=prompt,
-            layer=clip_layer,
-            bars=bars,
-        )
+        plan = request.plan
+        if plan is None:
+            plan = self._planner.build_clip_plan(
+                seed_plan=seed_plan,
+                session_theme=summary.theme or seed_plan.theme,
+                clip_prompt=prompt,
+                layer=clip_layer,
+                bars=bars,
+            )
+            request.plan = plan
 
-        request.plan = plan
         request.mode = GenerationMode.CLIP
         request.clip_layer = clip_layer
-        request.clip_bars = bars
+        request.clip_bars = request.clip_bars or min(int(plan.total_bars), 64)
 
         loop_seconds = max(1.0, float(plan.total_duration_seconds))
         request.duration_seconds = max(1, int(round(loop_seconds)))
