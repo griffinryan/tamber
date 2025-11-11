@@ -949,13 +949,6 @@ impl AppState {
         Ok((request, plan, clip_prompt))
     }
 
-    pub fn build_motif_payload(
-        &self,
-        prompt: &str,
-    ) -> Result<(GenerationRequest, CompositionPlan), String> {
-        self.build_motif_payload_with_overrides(prompt, None)
-    }
-
     pub fn build_motif_payload_with_overrides(
         &self,
         prompt: &str,
