@@ -100,6 +100,46 @@ pub struct GenerationArtifact {
     pub metadata: GenerationMetadata,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MotifReference {
+    #[serde(default)]
+    pub captured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_bpm: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bars: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motif_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motif_rhythm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spectral_centroid_hz: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chroma_vector: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_pitch_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_key_alignment: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_role: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SectionRole {
@@ -262,6 +302,8 @@ pub struct SessionSummary {
     pub seed_plan: Option<CompositionPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motif: Option<MotifReference>,
     pub clip_count: usize,
     #[serde(default)]
     pub clips: Vec<SessionClipSummary>,

@@ -271,8 +271,8 @@ impl Controller {
             AppCommand::StopPlayback => {
                 Controller::stop_playback(inner).await?;
             }
-            AppCommand::CreateSession { payload } => {
-                Controller::create_session(inner, payload).await?;
+            AppCommand::CreateSession { payload, seed_prompt, seed_request } => {
+                Controller::create_session(inner, payload, seed_prompt, seed_request).await?;
             }
             AppCommand::FetchSession { session_id } => {
                 Controller::refresh_session(inner, session_id).await?;
@@ -379,6 +379,8 @@ impl Controller {
     async fn create_session(
         inner: Arc<ControllerInner>,
         payload: SessionCreateRequest,
+        seed_prompt: Option<String>,
+        seed_request: Option<(GenerationRequest, CompositionPlan)>,
     ) -> Result<()> {
         let summary = match inner.client.create_session(&payload).await {
             Ok(summary) => summary,
@@ -388,7 +390,12 @@ impl Controller {
                 return Err(err);
             }
         };
-        let _ = inner.event_tx.send(AppEvent::SessionStarted { summary });
+        let _ = inner.event_tx.send(AppEvent::SessionStarted { summary: summary.clone() });
+        if let Some((mut request, plan)) = seed_request {
+            request.session_id = Some(summary.session_id.clone());
+            let prompt = seed_prompt.clone().unwrap_or_else(|| request.prompt.clone());
+            Controller::submit_prompt(inner.clone(), prompt, request, plan).await?;
+        }
         Ok(())
     }
 
@@ -682,6 +689,19 @@ async fn persist_artifact(
         descriptor.artifact_path = target_path.to_string_lossy().to_string();
 
         let mut extras_map = descriptor.metadata.extras.as_object().cloned().unwrap_or_default();
+        if let Some(Value::Object(motif_obj)) = extras_map.get_mut("motif_seed") {
+            let motif_path = motif_obj.get("path").and_then(Value::as_str).map(PathBuf::from);
+            if let Some(path) = motif_path {
+                if path.exists() {
+                    let target = job_dir.join("motif.wav");
+                    if path != target {
+                        let _ = fs::copy(&path, &target);
+                    }
+                    motif_obj
+                        .insert("local_path".to_string(), Value::String(target.to_string_lossy().to_string()));
+                }
+            }
+        }
         extras_map
             .insert("local_path".to_string(), Value::String(descriptor.artifact_path.clone()));
         descriptor.metadata.extras = Value::Object(extras_map);

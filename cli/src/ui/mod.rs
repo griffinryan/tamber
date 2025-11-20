@@ -3,7 +3,7 @@ mod splash;
 use crate::{
     app::{
         format_request_summary, AppCommand, AppEvent, AppState, FocusedPane, GenerationOverrides,
-        InputMode, JobEntry, SessionCliCommand, SplashSelection,
+        InputMode, JobEntry, SplashSelection,
     },
     session::{clip_layer_label, ClipSlotStatus, SessionScene, LAYER_ORDER, MAX_SCENES},
     types::{
@@ -104,16 +104,31 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
     render_status(frame, right[2], app);
 }
 
-fn request_new_session(app: &mut AppState, command_tx: &UnboundedSender<AppCommand>) {
+fn request_new_session(
+    app: &mut AppState,
+    command_tx: &UnboundedSender<AppCommand>,
+    prompt: Option<String>,
+) {
     app.reset_session_state();
     if let Err(err) = crate::session_store::clear_snapshot() {
         app.push_status_line(format!("Failed to clear session snapshot: {err}"));
     } else {
         app.push_status_line("Cleared saved session snapshot.".to_string());
     }
-    let payload = SessionCreateRequest::default();
+    let payload = SessionCreateRequest { prompt: prompt.clone(), ..SessionCreateRequest::default() };
+    let seed_request = prompt
+        .as_ref()
+        .and_then(|text| app.build_session_seed_payload(text).ok());
+    app.pending_session_seed_prompt = prompt.clone();
     app.mark_session_request_pending();
-    if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
+    if command_tx
+        .send(AppCommand::CreateSession {
+            payload,
+            seed_prompt: prompt,
+            seed_request,
+        })
+        .is_err()
+    {
         app.clear_session_request_pending();
         let message = "Failed to request session creation; worker channel closed".to_string();
         app.push_status_line(message);
@@ -132,7 +147,7 @@ fn render_motif(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     match &app.session {
         None => {
             lines.push(Line::from(vec![Span::styled(
-                "No active session — run /session start to begin.",
+                "No active session — run /session <prompt> to begin.",
                 Style::default().fg(Color::DarkGray),
             )]));
         }
@@ -969,7 +984,7 @@ fn handle_splash_key(
                 }
             }
             SplashSelection::StartNew => {
-                request_new_session(app, command_tx);
+                request_new_session(app, command_tx, None);
             }
         },
         _ => {}
@@ -984,6 +999,49 @@ fn dispatch_app_command(
     command_line: &str,
 ) {
     let trimmed = command_line.trim();
+    if trimmed.starts_with('/') {
+        let mut tokens = trimmed.trim_start_matches('/').split_whitespace();
+        if let Some(first) = tokens.next() {
+            if let Some(layer) = parse_clip_layer(first) {
+                app.session_view.focus_layer(layer);
+                let prompt_tail = tokens.collect::<Vec<_>>().join(" ");
+                let prompt_override =
+                    if prompt_tail.is_empty() { None } else { Some(prompt_tail) };
+                let (_, scene_index) =
+                    app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
+                match app.build_clip_payload_for(
+                    layer,
+                    scene_index,
+                    prompt_override.as_deref(),
+                    None,
+                ) {
+                    Ok((request, plan, prompt_text)) => {
+                        let label = clip_layer_label(layer);
+                        if command_tx
+                            .send(AppCommand::SubmitClip {
+                                prompt: prompt_text,
+                                layer,
+                                request,
+                                plan,
+                            })
+                            .is_err()
+                        {
+                            let message =
+                                "Failed to submit clip request; worker channel closed".to_string();
+                            app.push_status_line(message);
+                        } else {
+                            let scene_name = app.session_view.scene_name(scene_index);
+                            app.push_status_line(format!("Queued clip for {label} · {scene_name}"));
+                        }
+                    }
+                    Err(err) => {
+                        app.push_status_line(err);
+                    }
+                }
+                return;
+            }
+        }
+    }
     if trimmed.starts_with("/clip") {
         let mut parts = trimmed.split_whitespace();
         let _ = parts.next();
@@ -1071,48 +1129,30 @@ fn dispatch_app_command(
         return;
     }
     if trimmed == "/session-new" {
-        request_new_session(app, command_tx);
+        request_new_session(app, command_tx, None);
         return;
     }
     if trimmed.starts_with("/session") {
-        match app.parse_session_command(command_line) {
-            Ok(SessionCliCommand::Start) => {
-                let payload = SessionCreateRequest::default();
-                app.mark_session_request_pending();
-                if command_tx.send(AppCommand::CreateSession { payload }).is_err() {
-                    app.clear_session_request_pending();
+        let rest = trimmed.trim_start_matches("/session").trim();
+        if rest.eq_ignore_ascii_case("status") {
+            if let Some(session_id) = app.current_session_id() {
+                if command_tx
+                    .send(AppCommand::FetchSession { session_id: session_id.clone() })
+                    .is_err()
+                {
                     let message =
-                        "Failed to request session creation; worker channel closed".to_string();
+                        "Failed to refresh session status; worker channel closed".to_string();
                     app.push_status_line(message);
                 } else {
-                    let message = "Requesting new session from worker…".to_string();
-                    app.push_status_line(message);
+                    app.push_status_line("Refreshing session status…".to_string());
                 }
+            } else {
+                let message = "No active session. Use /session <prompt> to start.".to_string();
+                app.push_status_line(message);
             }
-            Ok(SessionCliCommand::Status) => {
-                if let Some(session_id) = app.current_session_id() {
-                    if command_tx
-                        .send(AppCommand::FetchSession { session_id: session_id.clone() })
-                        .is_err()
-                    {
-                        let message =
-                            "Failed to refresh session status; worker channel closed".to_string();
-                        app.push_status_line(message);
-                    } else {
-                        app.push_status_line("Refreshing session status…".to_string());
-                    }
-                } else {
-                    let message = "No active session. Use /session start before requesting status."
-                        .to_string();
-                    app.push_status_line(message);
-                }
-            }
-            Err(error) => {
-                if error != "not a session command" {
-                    let message = format!("Session command error: {error}");
-                    app.push_status_line(message);
-                }
-            }
+        } else {
+            let prompt = if rest.is_empty() { None } else { Some(rest.to_string()) };
+            request_new_session(app, command_tx, prompt);
         }
         return;
     }

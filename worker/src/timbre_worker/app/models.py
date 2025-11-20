@@ -140,6 +140,29 @@ class GenerationArtifact(BaseModel):
     metadata: GenerationMetadata
 
 
+class MotifReference(BaseModel):
+    """Describes a captured motif seed for reuse by session clips."""
+
+    captured: bool = True
+    path: Optional[str] = Field(default=None, max_length=512)
+    local_path: Optional[str] = Field(default=None, max_length=512)
+    duration_seconds: Optional[float] = None
+    sample_rate: Optional[int] = None
+    tempo_bpm: Optional[int] = None
+    time_signature: Optional[str] = Field(default=None, max_length=16)
+    bars: Optional[int] = None
+    seed: Optional[int] = None
+    motif_text: Optional[str] = Field(default=None, max_length=256)
+    motif_rhythm: Optional[str] = Field(default=None, max_length=256)
+    spectral_centroid_hz: Optional[float] = None
+    chroma_vector: Optional[list[float]] = None
+    dominant_pitch_class: Optional[str] = Field(default=None, max_length=8)
+    plan_key_alignment: Optional[float] = None
+    section_id: Optional[str] = Field(default=None, max_length=32)
+    section_label: Optional[str] = Field(default=None, max_length=64)
+    section_role: Optional[str] = Field(default=None, max_length=64)
+
+
 class SessionClipSummary(BaseModel):
     job_id: str
     prompt: str
@@ -163,6 +186,7 @@ class SessionSummary(BaseModel):
     seed_prompt: Optional[str] = None
     seed_plan: Optional[CompositionPlan] = None
     theme: Optional[ThemeDescriptor] = None
+    motif: Optional[MotifReference] = None
     clip_count: int = 0
     clips: list[SessionClipSummary] = Field(default_factory=list)
 

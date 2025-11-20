@@ -135,7 +135,7 @@ class ComposerOrchestrator:
                 await progress_cb(index + 1, len(render_plan.sections), render)
 
         motif_metadata = self._finalise_motif_seed(
-            job_id, render_plan, motif_seed_section, motif_seed_render
+            job_id, render_plan, motif_seed_section, motif_seed_render, request
         )
 
         trimmed, sample_rate, section_rms = self._prepare_section_waveforms(
@@ -199,6 +199,7 @@ class ComposerOrchestrator:
             extras["theme"] = base_plan.theme.model_dump()
 
         if clip_mode:
+            beats_per_bar = self._beats_per_bar(render_plan.time_signature)
             extras["clip"] = {
                 "session_id": request.session_id,
                 "layer": request.clip_layer.value if isinstance(request.clip_layer, ClipLayer) else request.clip_layer,
@@ -206,6 +207,9 @@ class ComposerOrchestrator:
                 "scene_index": request.clip_scene_index,
                 "loop_seconds": base_plan.total_duration_seconds,
                 "loop_ready": True,
+                "tempo_bpm": render_plan.tempo_bpm,
+                "time_signature": render_plan.time_signature,
+                "beats_per_bar": beats_per_bar,
             }
 
         metadata = GenerationMetadata(
@@ -453,6 +457,7 @@ class ComposerOrchestrator:
         plan: CompositionPlan,
         section: CompositionSection | None,
         render: SectionRender | None,
+        request: GenerationRequest,
     ) -> Dict[str, object] | None:
         if section is None or render is None:
             return None
@@ -476,6 +481,10 @@ class ComposerOrchestrator:
                 "section_label": section.label,
                 "section_role": section.role.value,
                 "sample_rate": render.sample_rate,
+                "tempo_bpm": plan.tempo_bpm,
+                "time_signature": plan.time_signature,
+                "bars": section.bars,
+                "seed": request.seed,
             }
             payload.update(features)
             if plan.theme is not None:

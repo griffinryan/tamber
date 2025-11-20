@@ -76,12 +76,6 @@ pub struct InlineCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionCliCommand {
-    Start,
-    Status,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplashSelection {
     Restore,
     StartNew,
@@ -282,6 +276,7 @@ pub struct AppState {
     splash_animation: SplashAnimationState,
     session_request_in_flight: bool,
     clip_target_initialized: bool,
+    pub pending_session_seed_prompt: Option<String>,
 }
 
 impl AppState {
@@ -315,6 +310,7 @@ impl AppState {
             splash_animation: SplashAnimationState::default(),
             session_request_in_flight: false,
             clip_target_initialized: false,
+            pending_session_seed_prompt: None,
         };
 
         if pending_snapshot.is_some() {
@@ -406,31 +402,6 @@ impl AppState {
     #[cfg(test)]
     pub fn disable_splash(&mut self) {
         self.showing_splash = false;
-    }
-
-    pub fn parse_session_command(&self, command_line: &str) -> Result<SessionCliCommand, String> {
-        let trimmed = command_line.trim_start_matches('/').trim();
-        let mut parts = trimmed.split_whitespace();
-        let Some(keyword) = parts.next() else {
-            return Err("Usage: /session <start|status>".to_string());
-        };
-        if keyword != "session" {
-            return Err("not a session command".to_string());
-        }
-        let Some(action) = parts.next() else {
-            return Err("Usage: /session <start|status>".to_string());
-        };
-        match action {
-            "start" => Ok(SessionCliCommand::Start),
-            "status" => {
-                if self.session.is_none() {
-                    Err("No active session. Use /session start first.".to_string())
-                } else {
-                    Ok(SessionCliCommand::Status)
-                }
-            }
-            other => Err(format!("Unknown session command `{other}`")),
-        }
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -570,6 +541,7 @@ impl AppState {
                 self.session_view.apply_summary(&summary);
                 self.restored_session_id = Some(summary.session_id.clone());
                 self.clear_session_request_pending();
+                self.pending_session_seed_prompt = None;
                 self.clip_target_initialized = false;
                 self.ensure_clip_target_selected();
                 self.push_status_line(format!("Session {label} created ({tempo})"));
@@ -586,6 +558,7 @@ impl AppState {
                 self.session = Some(summary.clone());
                 self.restored_session_id = Some(summary.session_id.clone());
                 self.clear_session_request_pending();
+                self.pending_session_seed_prompt = None;
                 self.ensure_clip_target_selected();
                 self.push_status_line(format!(
                     "Session {label} updated ({} clips)",
@@ -594,6 +567,7 @@ impl AppState {
             }
             AppEvent::SessionRequestFailed { message } => {
                 self.clear_session_request_pending();
+                self.pending_session_seed_prompt = None;
                 self.push_status_line(message);
             }
             AppEvent::ClipPlaying { layer, scene_index } => {
@@ -789,6 +763,19 @@ impl AppState {
     #[allow(dead_code)]
     pub fn build_generation_payload(&self, prompt: &str) -> (GenerationRequest, CompositionPlan) {
         self.build_generation_payload_with_overrides(prompt, None)
+    }
+
+    pub fn build_session_seed_payload(
+        &self,
+        prompt: &str,
+    ) -> Result<(GenerationRequest, CompositionPlan), String> {
+        if prompt.trim().is_empty() {
+            return Err("Session prompt cannot be empty.".to_string());
+        }
+        let mut overrides = GenerationOverrides::default();
+        overrides.duration_seconds = Some(MOTIF_PRESET_DURATION_SECONDS);
+        overrides.mode = Some(GenerationMode::Motif);
+        Ok(self.build_generation_payload_with_overrides(prompt, Some(&overrides)))
     }
 
     fn effective_model_id(&self, overrides: Option<&GenerationOverrides>) -> String {
@@ -1046,7 +1033,7 @@ impl AppState {
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
                 format!(
-                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /cfg <scale|off>, /seed <value|off>, /clip <layer> [prompt], /show, /reset · inline prompts: /motif <prompt>, /small|/medium|/large <prompt>"
+                    "Commands: /session <prompt>, /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /cfg <scale|off>, /seed <value|off>, /clip <layer> [prompt], /rhythm|/bass|/harmony|/lead|/textures|/vocals [prompt], /show, /reset · inline prompts: /motif <prompt>, /small|/medium|/large <prompt>"
                 ),
             ),
             other => Err(format!("Unknown command `{other}`")),
@@ -1129,6 +1116,7 @@ impl AppState {
         self.splash_selection = SplashSelection::StartNew;
         self.session_request_in_flight = false;
         self.clip_target_initialized = false;
+        self.pending_session_seed_prompt = None;
     }
 
     pub fn save_session_snapshot(&self) -> Result<()> {
@@ -1283,6 +1271,8 @@ pub enum AppCommand {
     StopAllClips,
     CreateSession {
         payload: SessionCreateRequest,
+        seed_prompt: Option<String>,
+        seed_request: Option<(GenerationRequest, CompositionPlan)>,
     },
     FetchSession {
         session_id: String,
@@ -1722,6 +1712,7 @@ mod tests {
             seed_prompt: Some("motif seed".to_string()),
             seed_plan: plan,
             theme: None,
+            motif: None,
             clip_count: 0,
             clips: Vec::new(),
         }

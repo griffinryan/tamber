@@ -11,6 +11,7 @@ from .models import (
     CompositionPlan,
     GenerationArtifact,
     JobState,
+    MotifReference,
     SessionClipSummary,
     SessionCreateRequest,
     SessionSummary,
@@ -64,6 +65,7 @@ class SessionRecord:
     tempo_bpm: Optional[int] = None
     key: Optional[str] = None
     time_signature: Optional[str] = None
+    motif: Optional[MotifReference] = None
     clips: Dict[str, SessionClip] = field(default_factory=dict)
 
     def clip_count(self) -> int:
@@ -172,6 +174,14 @@ class SessionManager:
                 session.time_signature = plan.time_signature
             if plan is not None and plan.theme is not None and session.theme is None:
                 session.theme = plan.theme
+            motif_seed = artifact.metadata.extras.get("motif_seed") if artifact.metadata.extras else None
+            if motif_seed is not None:
+                try:
+                    motif_ref = MotifReference.model_validate(motif_seed)
+                except Exception:
+                    motif_ref = None
+                if motif_ref is not None:
+                    session.motif = motif_ref
 
     async def get_summary(self, session_id: str) -> Optional[SessionSummary]:
         async with self._lock:
@@ -191,6 +201,7 @@ class SessionManager:
         seed_plan_copy = (
             record.seed_plan.model_copy(deep=True) if record.seed_plan is not None else None
         )
+        motif_copy = record.motif.model_copy(deep=True) if record.motif is not None else None
         return SessionSummary(
             session_id=record.session_id,
             created_at=record.created_at,
@@ -203,6 +214,7 @@ class SessionManager:
             seed_prompt=record.seed_prompt,
             seed_plan=seed_plan_copy,
             theme=theme_copy,
+            motif=motif_copy,
             clip_count=record.clip_count(),
             clips=clips,
         )
