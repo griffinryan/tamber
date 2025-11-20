@@ -657,6 +657,51 @@ fn audio_duration(path: &Path) -> Result<StdDuration> {
         .ok_or_else(|| anyhow!("unable to determine duration for {}", path.display()))
 }
 
+fn slugify_fragment(input: &str) -> Option<String> {
+    let slug: String = input
+        .trim()
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                Some(ch.to_ascii_lowercase())
+            } else if ch == '-' || ch == '_' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn clip_destination_hint(
+    artifact_dir: &Path,
+    artifact: &GenerationArtifact,
+) -> Option<(PathBuf, String)> {
+    let extras = artifact.metadata.extras.as_object()?;
+    let clip = extras.get("clip")?.as_object()?;
+    let session_raw = clip.get("session_id").and_then(Value::as_str)?;
+    let layer_raw = clip.get("layer").and_then(Value::as_str).unwrap_or("clip");
+
+    let session_slug = slugify_fragment(session_raw.trim_start_matches("session-"))
+        .or_else(|| slugify_fragment(session_raw))
+        .unwrap_or_else(|| artifact.job_id.clone());
+    let layer_slug = slugify_fragment(layer_raw).unwrap_or_else(|| "clip".to_string());
+    let extension = Path::new(&artifact.artifact_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("wav");
+
+    let file_name = format!("{session_slug}-{layer_slug}.{extension}");
+    let target_dir = artifact_dir.join(session_slug);
+    Some((target_dir, file_name))
+}
+
 async fn persist_artifact(
     config: &AppConfig,
     artifact: GenerationArtifact,
@@ -670,15 +715,33 @@ async fn persist_artifact(
 
         fs::create_dir_all(&artifact_dir)
             .with_context(|| format!("failed to create artifact dir {}", artifact_dir.display()))?;
-        let job_dir = artifact_dir.join(&artifact.job_id);
+
+        let extension =
+            source_path.extension().and_then(|ext| ext.to_str()).unwrap_or("wav").to_string();
+
+        let (job_dir, mut file_name) = clip_destination_hint(&artifact_dir, &artifact)
+            .unwrap_or_else(|| {
+                let fallback_name = source_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("{}.{}", artifact.job_id, extension));
+                (artifact_dir.join(&artifact.job_id), fallback_name)
+            });
+
         fs::create_dir_all(&job_dir)
             .with_context(|| format!("failed to create job dir {}", job_dir.display()))?;
 
-        let file_name = source_path
-            .file_name()
-            .map(|name| name.to_owned())
-            .unwrap_or_else(|| format!("{}.wav", artifact.job_id).into());
-        let target_path = job_dir.join(file_name);
+        let mut target_path = job_dir.join(&file_name);
+        if target_path.exists() {
+            let stem = Path::new(&file_name)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("clip");
+            let dedup_suffix: String =
+                artifact.job_id.chars().filter(|ch| ch.is_ascii_alphanumeric()).take(6).collect();
+            file_name = format!("{stem}-{dedup_suffix}.{extension}");
+            target_path = job_dir.join(&file_name);
+        }
 
         if source_path != target_path {
             fs::copy(&source_path, &target_path)
@@ -697,10 +760,19 @@ async fn persist_artifact(
                     if path != target {
                         let _ = fs::copy(&path, &target);
                     }
-                    motif_obj
-                        .insert("local_path".to_string(), Value::String(target.to_string_lossy().to_string()));
+                    motif_obj.insert(
+                        "local_path".to_string(),
+                        Value::String(target.to_string_lossy().to_string()),
+                    );
                 }
             }
+        }
+        if let Some(Value::Object(clip_obj)) = extras_map.get_mut("clip") {
+            clip_obj.insert("file_name".to_string(), Value::String(file_name.clone()));
+            clip_obj.insert(
+                "local_path".to_string(),
+                Value::String(target_path.to_string_lossy().to_string()),
+            );
         }
         extras_map
             .insert("local_path".to_string(), Value::String(descriptor.artifact_path.clone()));

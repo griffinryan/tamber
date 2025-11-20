@@ -115,18 +115,13 @@ fn request_new_session(
     } else {
         app.push_status_line("Cleared saved session snapshot.".to_string());
     }
-    let payload = SessionCreateRequest { prompt: prompt.clone(), ..SessionCreateRequest::default() };
-    let seed_request = prompt
-        .as_ref()
-        .and_then(|text| app.build_session_seed_payload(text).ok());
+    let payload =
+        SessionCreateRequest { prompt: prompt.clone(), ..SessionCreateRequest::default() };
+    let seed_request = prompt.as_ref().and_then(|text| app.build_session_seed_payload(text).ok());
     app.pending_session_seed_prompt = prompt.clone();
     app.mark_session_request_pending();
     if command_tx
-        .send(AppCommand::CreateSession {
-            payload,
-            seed_prompt: prompt,
-            seed_request,
-        })
+        .send(AppCommand::CreateSession { payload, seed_prompt: prompt, seed_request })
         .is_err()
     {
         app.clear_session_request_pending();
@@ -1005,8 +1000,7 @@ fn dispatch_app_command(
             if let Some(layer) = parse_clip_layer(first) {
                 app.session_view.focus_layer(layer);
                 let prompt_tail = tokens.collect::<Vec<_>>().join(" ");
-                let prompt_override =
-                    if prompt_tail.is_empty() { None } else { Some(prompt_tail) };
+                let prompt_override = if prompt_tail.is_empty() { None } else { Some(prompt_tail) };
                 let (_, scene_index) =
                     app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
                 match app.build_clip_payload_for(

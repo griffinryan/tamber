@@ -324,6 +324,22 @@ impl AppState {
         state
     }
 
+    fn rehydrate_clip_artifacts(&mut self, summary: &SessionSummary) {
+        for clip in &summary.clips {
+            let Some(layer) = clip.layer else { continue };
+            let scene_index = clip.scene_index.unwrap_or(0) as usize;
+            let local_path = self
+                .jobs
+                .get(&clip.job_id)
+                .and_then(|job| job.artifact.as_ref().map(|artifact| artifact.local_path.clone()))
+                .or_else(|| clip.artifact_path.as_ref().map(PathBuf::from));
+            if let Some(path) = local_path {
+                let slot = self.session_view.slot_mut(layer, scene_index);
+                slot.artifact = Some(path);
+            }
+        }
+    }
+
     pub fn showing_splash(&self) -> bool {
         self.showing_splash
     }
@@ -539,6 +555,7 @@ impl AppState {
                 self.session = Some(summary.clone());
                 self.session_view = SessionView::new();
                 self.session_view.apply_summary(&summary);
+                self.rehydrate_clip_artifacts(&summary);
                 self.restored_session_id = Some(summary.session_id.clone());
                 self.clear_session_request_pending();
                 self.pending_session_seed_prompt = None;
@@ -555,6 +572,7 @@ impl AppState {
                     self.clip_target_initialized = false;
                 }
                 self.session_view.apply_summary(&summary);
+                self.rehydrate_clip_artifacts(&summary);
                 self.session = Some(summary.clone());
                 self.restored_session_id = Some(summary.session_id.clone());
                 self.clear_session_request_pending();
@@ -1502,7 +1520,7 @@ mod tests {
     use super::*;
     use crate::types::{
         ClipLayer, CompositionPlan, CompositionSection, GenerationMetadata, GenerationMode,
-        SectionEnergy, SectionOrchestration, SectionRole, SessionSummary,
+        SectionEnergy, SectionOrchestration, SectionRole, SessionClipSummary, SessionSummary,
     };
     use crate::{
         config::AppConfig,
@@ -1979,6 +1997,64 @@ mod tests {
         assert_eq!(slot.duration_seconds, Some(12.0));
         assert_eq!(slot.bars, artifact_plan.sections.first().map(|section| section.bars as u8));
         assert!(state.session_view.pending_scene_for_job("job-clip-2").is_none());
+    }
+
+    #[test]
+    fn session_updates_prefer_local_clip_paths() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        let mut summary = session_summary_with_plan(Some(plan.clone()));
+        summary.clips.push(SessionClipSummary {
+            job_id: "job-clip-local".to_string(),
+            prompt: "acid bass".to_string(),
+            state: JobState::Succeeded,
+            duration_seconds: Some(8.0),
+            artifact_path: Some("/remote/session-clip.wav".to_string()),
+            layer: Some(ClipLayer::Bass),
+            scene_index: Some(0),
+            bars: Some(4),
+        });
+        summary.clip_count = summary.clips.len();
+        state.session = Some(summary.clone());
+        state.session_view.apply_summary(&summary);
+
+        let (request, built_plan, prompt) =
+            state.build_clip_payload_for(ClipLayer::Bass, 0, Some("acid bass"), None).unwrap();
+        let status = GenerationStatus {
+            job_id: "job-clip-local".into(),
+            state: JobState::Succeeded,
+            progress: 1.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        let metadata = GenerationMetadata {
+            prompt: prompt.clone(),
+            seed: request.seed,
+            model_id: request.model_id.clone(),
+            duration_seconds: request.duration_seconds,
+            extras: json!({ "clip": { "session_id": "session-test", "layer": "bass" } }),
+            plan: Some(built_plan.clone()),
+        };
+
+        let artifact = LocalArtifact {
+            descriptor: GenerationArtifact {
+                job_id: "job-clip-local".into(),
+                artifact_path: "/remote/session-clip.wav".into(),
+                metadata,
+            },
+            local_path: PathBuf::from("/local/session-clip.wav"),
+        };
+
+        state.jobs.insert(
+            "job-clip-local".into(),
+            JobEntry { prompt, request, status, plan: built_plan, artifact: Some(artifact) },
+        );
+
+        state.handle_event(AppEvent::SessionUpdated { summary: summary.clone() });
+
+        let slot = state.session_view.slot(ClipLayer::Bass, 0);
+        assert_eq!(slot.artifact.as_deref(), Some(Path::new("/local/session-clip.wav")));
     }
 
     #[test]
