@@ -30,6 +30,21 @@ class SectionEnergy(str, Enum):
     HIGH = "high"
 
 
+class GenerationMode(str, Enum):
+    FULL_TRACK = "full_track"
+    MOTIF = "motif"
+    CLIP = "clip"
+
+
+class ClipLayer(str, Enum):
+    RHYTHM = "rhythm"
+    BASS = "bass"
+    HARMONY = "harmony"
+    LEAD = "lead"
+    TEXTURES = "textures"
+    VOCALS = "vocals"
+
+
 class ThemeDescriptor(BaseModel):
     motif: str = Field(..., min_length=1, max_length=128)
     instrumentation: list[str] = Field(default_factory=list)
@@ -80,11 +95,13 @@ class GenerationRequest(BaseModel):
     seed: Optional[int] = Field(default=None, ge=0)
     duration_seconds: int = Field(default=120, ge=1, le=300)
     model_id: str = Field(default="musicgen-stereo-medium")
+    session_id: Optional[str] = Field(default=None, min_length=8, max_length=64)
+    mode: GenerationMode = Field(default=GenerationMode.FULL_TRACK)
+    clip_layer: Optional[ClipLayer] = Field(default=None)
+    clip_scene_index: Optional[int] = Field(default=None, ge=0, le=2)
+    clip_bars: Optional[int] = Field(default=None, ge=1, le=64)
     cfg_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
     scheduler: Optional[str] = Field(default=None, max_length=64)
-    riffusion_num_inference_steps: Optional[int] = Field(default=None, ge=1, le=200)
-    riffusion_guidance_scale: Optional[float] = Field(default=None, ge=0.0, le=20.0)
-    riffusion_scheduler: Optional[str] = Field(default=None, max_length=64)
     musicgen_top_k: Optional[int] = Field(default=None, ge=0, le=2048)
     musicgen_top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     musicgen_temperature: Optional[float] = Field(default=None, ge=0.0, le=4.0)
@@ -121,3 +138,70 @@ class GenerationArtifact(BaseModel):
     job_id: str
     artifact_path: str
     metadata: GenerationMetadata
+
+
+class MotifReference(BaseModel):
+    """Describes a captured motif seed for reuse by session clips."""
+
+    captured: bool = True
+    path: Optional[str] = Field(default=None, max_length=512)
+    local_path: Optional[str] = Field(default=None, max_length=512)
+    duration_seconds: Optional[float] = None
+    sample_rate: Optional[int] = None
+    tempo_bpm: Optional[int] = None
+    time_signature: Optional[str] = Field(default=None, max_length=16)
+    bars: Optional[int] = None
+    seed: Optional[int] = None
+    motif_text: Optional[str] = Field(default=None, max_length=256)
+    motif_rhythm: Optional[str] = Field(default=None, max_length=256)
+    spectral_centroid_hz: Optional[float] = None
+    chroma_vector: Optional[list[float]] = None
+    dominant_pitch_class: Optional[str] = Field(default=None, max_length=8)
+    plan_key_alignment: Optional[float] = None
+    section_id: Optional[str] = Field(default=None, max_length=32)
+    section_label: Optional[str] = Field(default=None, max_length=64)
+    section_role: Optional[str] = Field(default=None, max_length=64)
+
+
+class SessionClipSummary(BaseModel):
+    job_id: str
+    prompt: str
+    state: JobState
+    duration_seconds: Optional[float] = None
+    artifact_path: Optional[str] = None
+    layer: Optional[ClipLayer] = None
+    scene_index: Optional[int] = None
+    bars: Optional[int] = None
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
+    name: Optional[str] = None
+    tempo_bpm: Optional[int] = None
+    key: Optional[str] = None
+    time_signature: Optional[str] = None
+    seed_job_id: Optional[str] = None
+    seed_prompt: Optional[str] = None
+    seed_plan: Optional[CompositionPlan] = None
+    theme: Optional[ThemeDescriptor] = None
+    motif: Optional[MotifReference] = None
+    clip_count: int = 0
+    clips: list[SessionClipSummary] = Field(default_factory=list)
+
+
+class SessionCreateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=64)
+    prompt: Optional[str] = Field(default=None, max_length=512)
+    tempo_bpm: Optional[int] = Field(default=None, ge=40, le=300)
+    key: Optional[str] = Field(default=None, max_length=32)
+    time_signature: Optional[str] = Field(default=None, max_length=8)
+
+
+class SessionClipRequest(BaseModel):
+    layer: ClipLayer
+    prompt: Optional[str] = Field(default=None, max_length=512)
+    bars: Optional[int] = Field(default=None, ge=1, le=64)
+    scene_index: Optional[int] = Field(default=None, ge=0, le=2)
+    generation: Optional[GenerationRequest] = Field(default=None)

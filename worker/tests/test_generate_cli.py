@@ -16,12 +16,19 @@ async def test_generate_cli_placeholder(
     artifact_dir = tmp_path / "artifacts"
     config_dir = tmp_path / "config"
 
-    monkeypatch.setenv("TIMBRE_RIFFUSION_ALLOW_INFERENCE", "0")
+    async def _fake_ensure_model(self, model_id: str):
+        return None, "forced_placeholder"
+
+    monkeypatch.setattr(
+        "timbre_worker.services.musicgen.MusicGenService._ensure_model",
+        _fake_ensure_model,
+        raising=False,
+    )
 
     await _run(
         "calm modular arpeggios",
         duration=2,
-        model_id="riffusion-v1",
+        model_id="musicgen-stereo-medium",
         artifact_dir=artifact_dir,
         config_dir=config_dir,
     )

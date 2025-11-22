@@ -36,8 +36,23 @@ While the CLI is running type `/command value` in the prompt area:
 | `/cfg 6.5` / `/cfg off` | Adjust classifier-free guidance. |
 | `/seed 42` / `/seed off` | Lock or release deterministic seeds. |
 | `/reset` | Restore defaults from config/env. |
+| `/motif <prompt>` | Queue a motif-only preview (~16 s) on MusicGen stereo medium. |
+| `/small <prompt>` / `/medium <prompt>` / `/large <prompt>` | One-off generation using a specific MusicGen size. |
+| `/session start` | Create a new worker-owned session (clears previous tempo/key and clips). |
+| `/session status` | Refresh session metadata (tempo, key, clips) from the worker. |
+| `/clip <layer> [prompt]` | Queue a loopable clip for the focused scene/layer (`layer` = rhythm, bass, harmony, lead, textures, vocals). |
+| `/scene rename <name>` | Rename the focused scene (Session View exposes three fixed scene columns for clip options). |
 
-The status sidebar mirrors the worker’s `CompositionPlan`: section roles, bars, target seconds, orchestration highlights, backend, conditioning flags, and active section indicator (`▶`).
+### Session View shortcuts
+
+- Press `i` to enter Insert mode; only then do arrow keys navigate layers/scenes.
+- `Enter` in Insert mode toggles the active layer (adds an ASCII `[x]`) for clip generation.
+- `Esc` returns to Normal mode so you can tab to the prompt; `Enter` there launches playback.
+- `Space` stops playback for the focused layer; `x` stops every clip; `Ctrl+P` reprints the artifact path.
+
+The left rail now includes a Motif pane that tracks session seeding. The first prompt you submit against an active session captures a ~16 s motif; subsequent prompts require an `[x]`-selected layer and render a Scene 1 clip aligned to the motif’s tempo, key, and feel.
+
+The Session grid mirrors the worker-backed session: tracks (layers) down the side, three scene columns across (mirroring Ableton Live’s Session View), per-clip status metadata inside each cell, and the active section indicator (`▶`). The status sidebar continues to surface section roles, bars, durations, orchestration highlights, backend, conditioning flags, and any worker nudges.
 
 ---
 
@@ -48,7 +63,7 @@ cli/
 ├─ src/
 │  ├─ app.rs          # AppState, HTTP client, slash command handling
 │  ├─ planner.rs      # Rust mirror of CompositionPlanner v3
-│  ├─ ui/mod.rs       # Ratatui widgets (chat, jobs, status, logs)
+│  ├─ ui/mod.rs       # Ratatui widgets (session grid, jobs, status, logs)
 │  ├─ config.rs       # Config loading (env + TOML)
 │  └─ types.rs        # Serde models mirroring worker schemas
 └─ Cargo.toml

@@ -8,7 +8,7 @@ This document describes how the current Timbre stack fits together: the Ratatui 
 
 1. Provide a terminal-first workflow for exploring prompt → music ideas in seconds.
 2. Keep planning, rendering, and asset management deterministic so sessions are reproducible.
-3. Support “light” operation (placeholder audio, no GPU) as well as full inference pipelines (MusicGen, Riffusion) on Apple Silicon.
+3. Support “light” operation (placeholder audio, no GPU) as well as full MusicGen inference on Apple Silicon.
 4. Leave space for future clients (desktop UI, web) by keeping the API boundary clean.
 
 ---
@@ -21,8 +21,8 @@ This document describes how the current Timbre stack fits together: the Ratatui 
 │ ──────────────────────── │                                   │ ──────────────────────── │
 │ tokio + reqwest client   │ Submit GenerationRequest          │ FastAPI/uvicorn          │
 │ planner mirror (Rust)    │ Poll GenerationStatus             │ Composition planner v3   │
-│ status + chat UI         │ Download GenerationArtifact       │ Composer orchestrator    │
-│ rodio playback           │                                   │ MusicGen + Riffusion     │
+│ session view + status UI │ Download GenerationArtifact       │ Composer orchestrator    │
+│ rodio playback           │                                   │ MusicGen backend         │
 └──────────────────────────┘                                   └──────────────────────────┘
              │                                                             │
              │ Local filesystem copies                                     │
@@ -52,7 +52,8 @@ Common behaviour:
 - **ThemeDescriptor**: motif phrase, instrumentation keywords, rhythm tag, texture, dynamic curve. Derived from prompt tokens and template energies.
 - **Orchestration layers**: per-section lists for rhythm, bass, harmony, lead, textures, vocals. These inform MusicGen prompts and show up in CLI UI extras.
 - **Seed strategy**: base seed derived from prompt hash unless explicitly provided. Section offsets are deterministic (motif seed = base, chorus = base+1, etc.).
-- **Plan versioning**: `CompositionPlan.version = "v3"`. Downstream consumers should guard on this before assuming certain fields exist.
+- **Plan versioning**: Long-form/short-form tracks remain `"v3"`. Clip-oriented requests (via `/clip` or session APIs) emit `"v4"` single-section plans tuned for loop playback.
+- **Clip planning**: `CompositionPlanner.build_clip_plan` constrains tempo/key to the session seed, focuses orchestration on the requested layer, and emits bar-perfect loop durations for the CLI Session View.
 
 Outputs feed both the worker orchestrator and the CLI status view through `plan.sections[*]`.
 
@@ -62,15 +63,19 @@ Outputs feed both the worker orchestrator and the CLI status view through `plan.
 
 The orchestrator coordinates renders and assembles the final mix:
 
-1. **Warmup**: inspects plan sections to decide which backends to load (`musicgen`, `riffusion`). Missing backends annotate status but don’t abort.
+1. **Warmup**: primes the MusicGen backend based on the plan/model hint so renders can start without on-demand weight loads.
 2. **Section rendering**: for each section
-   - Builds MusicGen/Riffusion prompts using the planner data and previous motif tail.
+   - Builds MusicGen prompts using the planner data and previous motif tail.
    - Passes section-specific render hints (`target_seconds`, padding driven by tempo).
    - Stores render extras (backend, conditioning info, sampling params) for CLI tooling.
 3. **Motif capture**: first “motif seed” section is exported as a standalone WAV with spectral metadata.
+   - Planner marks seed sections with `motif_directive` so the orchestrator can identify them.
+   - Export path lives under `~/Music/Timbre/<job_id>_motif.wav`.
+   - Motif-first preview runs stop here: the orchestrator renders just the motif seed and records the unreduced plan in `extras.full_plan` for later expansion.
 4. **Preparation**: `_shape_to_target_length` normalises duration, trims or pads with short fades, and records per-section RMS.
 5. **Mix assembly**: sections are concatenated with either butt joins (micro fades) or longer crossfades when conditioning is missing or placeholders appear. Metadata captures duration, transition mode, and conditioning flags.
 6. **Mastering**: normalise to target RMS (0.2), apply a gentle high tilt, run a soft limiter, resample to `Settings.export_sample_rate` (default 48 kHz), and write PCM WAV (`export_bit_depth`).
+7. **Clip loops**: when handling `GenerationMode::CLIP`, the orchestrator trims/fades the render to an exact bar length and tags `extras.clip` with loop metadata for the Session View.
 
 Artifacts land in `Settings.artifact_root` (defaults to `~/Music/Timbre`). Metadata extras include:
 
@@ -90,20 +95,12 @@ Artifacts land in `Settings.artifact_root` (defaults to `~/Music/Timbre`). Metad
 - Extras include sampling hyperparameters (`top_k`, `top_p`, `temperature`, `cfg_coef`, `two_step_cfg`), arrangement text, orchestration payload, and conditioning info.
 - When dependencies are missing a deterministic sine/noise placeholder is produced with matching metadata.
 
-### Riffusion (`worker/services/riffusion.py`)
-
-- Loads the spectrogram diffusion pipeline when allowed, otherwise returns placeholders.
-- `_fallback_plan` still emits a single-section motif plan so metadata remains consistent.
-- Spectrogram decoder prefers stereo and float32 on MPS to avoid artefacts.
-
----
-
 ## 6. CLI (Rust `cli/`)
 
-- `AppState` holds config (`cli/src/config.rs`), active jobs, and planner previews.
-- Slash commands modify `GenerationConfig` and are applied to subsequent jobs.
-- Planner mirror (`cli/src/planner.rs`) mirrors Python logic so previews match worker output.
-- `cli/src/ui/mod.rs` renders chat history, job list, and per-section status. Section extras from metadata (“MusicGen · render 42.1s · arrangement …”) are displayed once a job finishes.
+- `AppState` holds config (`cli/src/config.rs`), active jobs, planner previews, and the Session View grid. Session layouts are snapshotted to `~/.config/timbre/session.json` on exit and restored at start-up.
+- Slash commands modify `GenerationConfig` and session state. In addition to `/duration`, `/model`, `/cfg`, `/seed`, the CLI exposes `/session start`, `/session status`, `/clip <layer> [prompt]`, and `/scene rename` for Ableton-style clip launching across three fixed scene columns.
+- Planner mirror (`cli/src/planner.rs`) mirrors Python logic so previews match worker output (long-form v3 plans for full tracks, `build_clip_plan` v4 for session clips).
+- `cli/src/ui/mod.rs` renders the Session View grid, job list, and status sidebar. Clip cells reflect layer/scene status (queued, rendering, ready, failed) and playback state; section extras from metadata populate the status panel once a job finishes.
 - Artifacts are copied into the user artifact directory and enriched with CLI-only extras (`local_path`).
 
 Error handling:
@@ -139,7 +136,6 @@ See also `docs/setup.md`.
 | --- | --- | --- |
 | `Settings.default_duration_seconds` | Worker `app/settings.py` | Defaults to 120 but clamps between 90–180 for long-form; short-form requests allowed via API. |
 | `TIMBRE_DEFAULT_DURATION` | CLI env override; values < 90 get clamped to 90. |
-| `TIMBRE_RIFFUSION_ALLOW_INFERENCE` | Disables Riffusion pipeline when set to `0`. |
 | `TIMBRE_INFERENCE_DEVICE` | Force `cpu`/`mps`/`cuda`. |
 | `TIMBRE_EXPORT_SAMPLE_RATE` / `BIT_DEPTH` / `FORMAT` | Mastering export settings. |
 | `TIMBRE_ARTIFACT_DIR` | CLI copy destination (defaults to `~/Music/Timbre`). |
@@ -159,7 +155,6 @@ Testing shortcuts:
 
 - `cargo test` (Rust planner/UI). Expects orchestrator extras to remain stable.
 - `uv run --project worker pytest` (Python planner/orchestrator/backends). Install `--extra dev` for linting, `--extra inference` for real renders.
-- `scripts/riffusion_smoke.py` for quick backend validation (respects env overrides).
 
 ---
 

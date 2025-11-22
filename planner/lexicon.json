@@ -1,0 +1,543 @@
+{
+  "version": 1,
+  "keywords": {
+    "instrument": [
+      { "term": "piano", "descriptor": "warm piano" },
+      { "term": "upright piano", "descriptor": "intimate upright piano" },
+      { "term": "keys", "descriptor": "soft keys" },
+      { "term": "synthwave", "descriptor": "retro synth layers" },
+      { "term": "synth", "descriptor": "lush synth pads" },
+      { "term": "analog", "descriptor": "analog synths" },
+      { "term": "modular", "descriptor": "modular synth textures" },
+      { "term": "arp", "descriptor": "arpeggiated synths" },
+      { "term": "guitar", "descriptor": "ambient guitar" },
+      { "term": "guitars", "descriptor": "layered guitars" },
+      { "term": "acoustic guitar", "descriptor": "acoustic guitar" },
+      { "term": "electric guitar", "descriptor": "electric guitars" },
+      { "term": "banjo", "descriptor": "twangy banjo" },
+      { "term": "mandolin", "descriptor": "sparkling mandolin" },
+      { "term": "violin", "descriptor": "expressive strings" },
+      { "term": "viola", "descriptor": "velvety viola" },
+      { "term": "cello", "descriptor": "warm cello" },
+      { "term": "strings", "descriptor": "layered strings" },
+      { "term": "string", "descriptor": "layered strings" },
+      { "term": "orchestra", "descriptor": "orchestral strings" },
+      { "term": "bass", "descriptor": "deep bass" },
+      { "term": "upright bass", "descriptor": "upright bass" },
+      { "term": "808", "descriptor": "808 bass" },
+      { "term": "drum", "descriptor": "tight drums" },
+      { "term": "drums", "descriptor": "tight drums" },
+      { "term": "drum machine", "descriptor": "drum machine groove" },
+      { "term": "percussion", "descriptor": "organic percussion" },
+      { "term": "tabla", "descriptor": "tabla rhythms" },
+      { "term": "conga", "descriptor": "conga grooves" },
+      { "term": "bongo", "descriptor": "hand drum patterns" },
+      { "term": "choir", "descriptor": "airy choir voices" },
+      { "term": "choral", "descriptor": "lush choir" },
+      { "term": "vocal", "descriptor": "ethereal vocals" },
+      { "term": "vocals", "descriptor": "expressive vocals" },
+      { "term": "singer", "descriptor": "soulful vocalist" },
+      { "term": "vocalist", "descriptor": "soaring vocals" },
+      { "term": "rap", "descriptor": "rhythmic rap vocals" },
+      { "term": "brass", "descriptor": "smooth brass" },
+      { "term": "horn", "descriptor": "bold brass horns" },
+      { "term": "sax", "descriptor": "saxophone lead" },
+      { "term": "saxophone", "descriptor": "saxophone lead" },
+      { "term": "trumpet", "descriptor": "radiant trumpet lead" },
+      { "term": "trombone", "descriptor": "velvet trombone swells" },
+      { "term": "flute", "descriptor": "breathy flute" },
+      { "term": "clarinet", "descriptor": "warm clarinet" },
+      { "term": "oboe", "descriptor": "lyrical oboe" },
+      { "term": "bassoon", "descriptor": "warm bassoon" },
+      { "term": "harp", "descriptor": "glittering harp arpeggios" },
+      { "term": "organ", "descriptor": "vintage organ" },
+      { "term": "rhodes", "descriptor": "rhodes electric piano" },
+      { "term": "vibraphone", "descriptor": "glassy vibraphone" },
+      { "term": "marimba", "descriptor": "woody marimba" },
+      { "term": "kalimba", "descriptor": "sparkling kalimba" },
+      { "term": "sitar", "descriptor": "resonant sitar" },
+      { "term": "accordion", "descriptor": "lively accordion" },
+      { "term": "harmonica", "descriptor": "bluesy harmonica" },
+      { "term": "synthpop", "descriptor": "glassy synth pop layers" },
+      { "term": "ambient", "descriptor": "atmospheric textures" },
+      { "term": "lofi", "descriptor": "dusty keys" }
+    ],
+    "rhythm": [
+      { "term": "waltz", "descriptor": "gentle 3/4 sway" },
+      { "term": "swing", "descriptor": "swinging groove" },
+      { "term": "jazz", "descriptor": "swinging groove" },
+      { "term": "hip hop", "descriptor": "laid-back hip hop beat" },
+      { "term": "boom bap", "descriptor": "boom-bap pulse" },
+      { "term": "house", "descriptor": "four-on-the-floor pulse" },
+      { "term": "techno", "descriptor": "driving techno rhythm" },
+      { "term": "trance", "descriptor": "rolling trance rhythm" },
+      { "term": "trap", "descriptor": "stuttered trap beat" },
+      { "term": "downtempo", "descriptor": "downtempo pulse" },
+      { "term": "breakbeat", "descriptor": "syncopated breakbeat" },
+      { "term": "drum and bass", "descriptor": "rapid drum and bass break" },
+      { "term": "dnb", "descriptor": "rapid drum and bass break" },
+      { "term": "bossa", "descriptor": "bossa nova sway" },
+      { "term": "reggae", "descriptor": "off-beat reggae groove" },
+      { "term": "rock", "descriptor": "driving rock beat" },
+      { "term": "metal", "descriptor": "pummelling double-kick groove" },
+      { "term": "edm", "descriptor": "steady four-on-the-floor pulse" },
+      { "term": "dance", "descriptor": "club-ready four-on-the-floor beat" },
+      { "term": "electronic", "descriptor": "mechanical electronic pulse" },
+      { "term": "folk", "descriptor": "organic strummed pulse" },
+      { "term": "latin", "descriptor": "syncopated latin groove" },
+      { "term": "ambient", "descriptor": "floating pulse" }
+    ],
+    "texture": [
+      { "term": "dream", "descriptor": "dreamy haze" },
+      { "term": "noir", "descriptor": "late-night noir mood" },
+      { "term": "dark", "descriptor": "shadowy atmosphere" },
+      { "term": "bright", "descriptor": "glowing shimmer" },
+      { "term": "glitch", "descriptor": "glitchy texture" },
+      { "term": "cinematic", "descriptor": "cinematic expanse" },
+      { "term": "epic", "descriptor": "soaring atmosphere" },
+      { "term": "mystic", "descriptor": "mystical aura" },
+      { "term": "lofi", "descriptor": "dusty vignette" },
+      { "term": "rain", "descriptor": "rain-soaked ambience" },
+      { "term": "storm", "descriptor": "electrified storm ambience" },
+      { "term": "forest", "descriptor": "woodland ambience" },
+      { "term": "ocean", "descriptor": "rolling ocean spray" },
+      { "term": "space", "descriptor": "cosmic expanse" },
+      { "term": "desert", "descriptor": "sun-baked desert shimmer" },
+      { "term": "vintage", "descriptor": "vintage tape patina" },
+      { "term": "psychedelic", "descriptor": "psychedelic kaleidoscope" }
+    ]
+  },
+  "defaults": {
+    "instrumentation": [
+      "blended instrumentation",
+      "layered synth textures",
+      "hybrid acoustic-electric palette",
+      "ensemble interplay"
+    ],
+    "texture": "immersive atmosphere"
+  },
+  "genre_profiles": [
+    {
+      "keywords": ["lofi", "lo-fi", "chillhop", "chill hop", "study beats"],
+      "instrumentation": [
+        "dusty electric piano",
+        "tape-saturated drum loop",
+        "warm bass guitar",
+        "soft nylon guitar"
+      ],
+      "rhythm": "laid-back hip hop beat",
+      "texture": "hazy lo-fi ambience",
+      "layers": {
+        "rhythm": ["dusty drum loop", "lazy snare with brushes"],
+        "bass": ["mellow sub bass", "upright bass with tape wobble"],
+        "harmony": ["noisy electric piano chords", "soft guitar voicings"],
+        "lead": ["wistful synth lead", "gentle vibraphone motifs"],
+        "textures": ["vinyl crackle", "nocturnal rain ambience"],
+        "vocals": ["hummed vocal chops"]
+      }
+    },
+    {
+      "keywords": ["jazz", "bebop", "swing", "hard bop", "cool jazz"],
+      "instrumentation": [
+        "upright bass",
+        "brush drum kit",
+        "extended jazz piano",
+        "saxophone lead"
+      ],
+      "rhythm": "swinging groove",
+      "texture": "smoky lounge atmosphere",
+      "layers": {
+        "rhythm": ["brush drum kit", "ride cymbal patterns"],
+        "bass": ["walking upright bass"],
+        "harmony": ["extended jazz piano voicings", "comping guitar chords"],
+        "lead": ["saxophone lead", "muted trumpet phrases"],
+        "textures": ["club room ambience", "late-night crowd murmur"],
+        "vocals": ["scat vocal ad-libs"]
+      }
+    },
+    {
+      "keywords": ["rock", "alt rock", "indie rock", "garage rock", "post-punk"],
+      "instrumentation": [
+        "distorted electric guitars",
+        "live drum kit",
+        "electric bass",
+        "anthemic vocals"
+      ],
+      "rhythm": "driving rock beat",
+      "texture": "amplified stage energy",
+      "layers": {
+        "rhythm": ["punchy live drums", "crashing cymbals"],
+        "bass": ["gritty electric bass"],
+        "harmony": ["crunchy rhythm guitars", "stadium power chords"],
+        "lead": ["soaring guitar lead", "anthemic vocal hooks"],
+        "textures": ["amp feedback swells", "crowd reverb wash"],
+        "vocals": ["anthemic rock vocals"]
+      }
+    },
+    {
+      "keywords": ["metal", "thrash", "doom", "heavy metal", "prog metal"],
+      "instrumentation": [
+        "double kick drums",
+        "down-tuned rhythm guitars",
+        "growling bass",
+        "aggressive vocals"
+      ],
+      "rhythm": "relentless double-kick drive",
+      "texture": "dense wall of distortion",
+      "layers": {
+        "rhythm": ["blast beat drums", "double-kick assaults"],
+        "bass": ["growling electric bass"],
+        "harmony": ["down-tuned rhythm guitars", "chugging power chords"],
+        "lead": ["shredded guitar leads", "screaming harmonised solos"],
+        "textures": ["amp roar", "crowd roar tails"],
+        "vocals": ["harsh metal vocals"]
+      }
+    },
+    {
+      "keywords": ["orchestral", "symphonic", "film score", "cinematic", "soundtrack"],
+      "instrumentation": [
+        "string ensemble",
+        "brass section",
+        "woodwind choir",
+        "concert percussion"
+      ],
+      "rhythm": "expansive cinematic pulse",
+      "texture": "lush orchestral hall",
+      "layers": {
+        "rhythm": ["gran cassa hits", "rolling orchestral percussion"],
+        "bass": ["double basses", "low brass swells"],
+        "harmony": ["legato string ensemble", "warm horn chords"],
+        "lead": ["solo violin", "trumpet fanfare"],
+        "textures": ["concert hall reverberation", "choir pads"],
+        "vocals": ["wordless choir"]
+      }
+    },
+    {
+      "keywords": ["folk", "acoustic", "bluegrass", "roots", "americana", "country"],
+      "instrumentation": [
+        "acoustic guitar",
+        "mandolin",
+        "upright bass",
+        "fiddle melodies"
+      ],
+      "rhythm": "organic strummed pulse",
+      "texture": "warm rustic atmosphere",
+      "layers": {
+        "rhythm": ["brushy folk kit", "hand clap patterns"],
+        "bass": ["plucked upright bass"],
+        "harmony": ["fingerpicked acoustic guitar", "sparkling mandolin arpeggios"],
+        "lead": ["fiddle leads", "slide guitar phrases"],
+        "textures": ["barn room reverb", "nature ambience"],
+        "vocals": ["stacked folk harmonies"]
+      }
+    },
+    {
+      "keywords": ["ambient", "soundscape", "drone", "meditation", "ethereal", "atmospheric"],
+      "instrumentation": [
+        "evolving synth pads",
+        "granular textures",
+        "soft mallet swells",
+        "choral atmospheres"
+      ],
+      "rhythm": "floating pulse",
+      "texture": "expansive ambient haze",
+      "layers": {
+        "rhythm": ["subtle percussive pulses", "soft percussion swells"],
+        "bass": ["deep sine bass swells"],
+        "harmony": ["evolving synth pads", "glacial piano chords"],
+        "lead": ["breathy vocal motifs", "glass harmonica lines"],
+        "textures": ["wind soundscape", "distant shimmer"],
+        "vocals": ["celestial vocal layers"]
+      }
+    },
+    {
+      "keywords": [
+        "electronic",
+        "edm",
+        "house",
+        "techno",
+        "trance",
+        "club",
+        "electro",
+        "synthwave",
+        "synth-pop"
+      ],
+      "instrumentation": [
+        "punchy electronic kick",
+        "rolling bass synth",
+        "arpeggiated synths",
+        "bright lead plucks"
+      ],
+      "rhythm": "four-on-the-floor pulse",
+      "texture": "neon club atmosphere",
+      "layers": {
+        "rhythm": ["four-on-the-floor kick", "syncopated hi-hats"],
+        "bass": ["rolling bass synth", "acid bassline"],
+        "harmony": ["wide pad chords", "lush supersaw stacks"],
+        "lead": ["glittering synth lead", "vocoder hooks"],
+        "textures": ["club crowd ambience", "side-chained pads"],
+        "vocals": ["processed vocal chops"]
+      }
+    },
+    {
+      "keywords": ["hip hop", "trap", "boom bap", "rap", "grime"],
+      "instrumentation": [
+        "knocking drum machine",
+        "808 bass",
+        "sampled keys",
+        "vocal chops"
+      ],
+      "rhythm": "head-nod hip hop pulse",
+      "texture": "urban night energy",
+      "layers": {
+        "rhythm": ["punchy drum machine groove", "crisp claps"],
+        "bass": ["808 bass", "subby bass drops"],
+        "harmony": ["minor key piano loops", "sampled soul chops"],
+        "lead": ["pitched vocal chops", "synth brass stabs"],
+        "textures": ["street ambience", "vinyl noise"],
+        "vocals": ["rap ad-libs"]
+      }
+    }
+  ],
+  "templates": {
+    "long": [
+      {
+        "min_duration": 150.0,
+        "sections": [
+          {
+            "role": "intro",
+            "label": "Intro",
+            "energy": "low",
+            "base_bars": 16,
+            "min_bars": 10,
+            "max_bars": 18,
+            "prompt_template": "Set the stage with {arrangement}, foreshadowing the {motif} motif over a {rhythm} pulse and {texture} atmosphere.",
+            "transition": "Invite motif"
+          },
+          {
+            "role": "motif",
+            "label": "Motif",
+            "energy": "medium",
+            "base_bars": 20,
+            "min_bars": 16,
+            "max_bars": 24,
+            "prompt_template": "State the {motif} motif in full, letting {arrangement} lock into the {rhythm} while {dynamic} blooms.",
+            "transition": "Build anticipation"
+          },
+          {
+            "role": "bridge",
+            "label": "Bridge",
+            "energy": "medium",
+            "base_bars": 12,
+            "min_bars": 8,
+            "max_bars": 16,
+            "prompt_template": "Recast the {motif} motif by thinning the layers so {arrangement} can explore contrasting colours before the chorus returns.",
+            "transition": "Spark chorus"
+          },
+          {
+            "role": "chorus",
+            "label": "Chorus",
+            "energy": "high",
+            "base_bars": 24,
+            "min_bars": 20,
+            "max_bars": 28,
+            "prompt_template": "Lift the {motif} motif into an anthemic chorus where {arrangement} drives the groove and {dynamic} peaks.",
+            "transition": "Glide to outro"
+          },
+          {
+            "role": "outro",
+            "label": "Outro",
+            "energy": "medium",
+            "base_bars": 14,
+            "min_bars": 8,
+            "max_bars": 18,
+            "prompt_template": "Close by reshaping the {motif} motif, letting {arrangement} ease the {rhythm} into a reflective {texture} fade.",
+            "transition": "Fade to silence"
+          }
+        ]
+      },
+      {
+        "min_duration": 0.0,
+        "sections": [
+          {
+            "role": "intro",
+            "label": "Intro",
+            "energy": "low",
+            "base_bars": 12,
+            "min_bars": 8,
+            "max_bars": 16,
+            "prompt_template": "Establish the world with {arrangement}, hinting at the {motif} motif over a {rhythm} pulse and {texture} backdrop.",
+            "transition": "Reveal motif"
+          },
+          {
+            "role": "motif",
+            "label": "Motif",
+            "energy": "medium",
+            "base_bars": 18,
+            "min_bars": 14,
+            "max_bars": 22,
+            "prompt_template": "Present the {motif} motif clearly, allowing {arrangement} to weave through the {rhythm} as {dynamic} intensifies.",
+            "transition": "Ignite chorus"
+          },
+          {
+            "role": "chorus",
+            "label": "Chorus",
+            "energy": "high",
+            "base_bars": 24,
+            "min_bars": 18,
+            "max_bars": 26,
+            "prompt_template": "Amplify the {motif} motif into its fiercest form, with {arrangement} pushing the {rhythm} to a triumphant crest.",
+            "transition": "Settle to outro"
+          },
+          {
+            "role": "outro",
+            "label": "Outro",
+            "energy": "medium",
+            "base_bars": 12,
+            "min_bars": 8,
+            "max_bars": 16,
+            "prompt_template": "Offer a final reflection on the {motif} motif, as {arrangement} dissolves the {rhythm} into {texture}.",
+            "transition": "Fade to silence"
+          }
+        ]
+      }
+    ],
+    "short": [
+      {
+        "min_duration": 24.0,
+        "sections": [
+          {
+            "role": "intro",
+            "label": "Arrival",
+            "energy": "low",
+            "base_bars": 4,
+            "min_bars": 3,
+            "max_bars": 6,
+            "prompt_template": "Build anticipation with {instrumentation}, using a {rhythm} pulse that teases the {motif} motif while {dynamic} simmers.",
+            "transition": "Unveil motif"
+          },
+          {
+            "role": "motif",
+            "label": "Statement",
+            "energy": "medium",
+            "base_bars": 8,
+            "min_bars": 6,
+            "max_bars": 10,
+            "prompt_template": "Deliver the core {motif} motif through {instrumentation}, keeping the {rhythm} driving as {dynamic} begins.",
+            "transition": "Build momentum"
+          },
+          {
+            "role": "development",
+            "label": "Development",
+            "energy": "high",
+            "base_bars": 8,
+            "min_bars": 6,
+            "max_bars": 10,
+            "prompt_template": "Evolve the {motif} motif with adventurous variations, letting {instrumentation} weave syncopations over the {rhythm} while {dynamic} unfolds.",
+            "transition": "Evolve harmonies"
+          },
+          {
+            "role": "resolution",
+            "label": "Resolution",
+            "energy": "medium",
+            "base_bars": 4,
+            "min_bars": 3,
+            "max_bars": 6,
+            "prompt_template": "Guide the {motif} motif toward resolution, using {instrumentation} to ease the {rhythm} while highlighting {dynamic}.",
+            "transition": "Return home"
+          },
+          {
+            "role": "outro",
+            "label": "Release",
+            "energy": "low",
+            "base_bars": 4,
+            "min_bars": 2,
+            "max_bars": 6,
+            "prompt_template": "Let the {motif} motif dissolve into ambience as {instrumentation} softens atop the {rhythm}, allowing {dynamic} to close the journey.",
+            "transition": "Fade to silence"
+          }
+        ]
+      },
+      {
+        "min_duration": 16.0,
+        "sections": [
+          {
+            "role": "intro",
+            "label": "Lead-in",
+            "energy": "low",
+            "base_bars": 4,
+            "min_bars": 2,
+            "max_bars": 6,
+            "prompt_template": "Open gently with {instrumentation}, introducing the {motif} motif against a {rhythm} pulse that hints at {prompt}.",
+            "transition": "Invite motif"
+          },
+          {
+            "role": "motif",
+            "label": "Motif A",
+            "energy": "medium",
+            "base_bars": 8,
+            "min_bars": 6,
+            "max_bars": 10,
+            "prompt_template": "Present the {motif} motif clearly, keeping {instrumentation} tight around the {rhythm} while {dynamic} grows.",
+            "transition": "Increase energy"
+          },
+          {
+            "role": "development",
+            "label": "Variation",
+            "energy": "high",
+            "base_bars": 6,
+            "min_bars": 4,
+            "max_bars": 8,
+            "prompt_template": "Develop the {motif} motif with rhythmic twists, letting {instrumentation} ride the {rhythm} as {dynamic} intensifies.",
+            "transition": "Soften textures"
+          },
+          {
+            "role": "resolution",
+            "label": "Cadence",
+            "energy": "medium",
+            "base_bars": 4,
+            "min_bars": 2,
+            "max_bars": 6,
+            "prompt_template": "Ease the energy back, guiding {instrumentation} to resolve the {motif} motif and settle the {rhythm} with {dynamic}.",
+            "transition": "Release"
+          },
+          {
+            "role": "outro",
+            "label": "Tail",
+            "energy": "low",
+            "base_bars": 2,
+            "min_bars": 1,
+            "max_bars": 4,
+            "prompt_template": "Conclude with a gentle echo of the {motif} motif, letting {instrumentation} and the {rhythm} fade as {dynamic} sighs out.",
+            "transition": "Fade"
+          }
+        ]
+      },
+      {
+        "min_duration": 0.0,
+        "sections": [
+          {
+            "role": "intro",
+            "label": "Intro",
+            "energy": "low",
+            "base_bars": 2,
+            "min_bars": 1,
+            "max_bars": 4,
+            "prompt_template": "Set a delicate entrance, introducing the {motif} motif with {instrumentation} over a {rhythm} that nods to {prompt}.",
+            "transition": "Introduce motif"
+          },
+          {
+            "role": "motif",
+            "label": "Motif",
+            "energy": "medium",
+            "base_bars": 6,
+            "min_bars": 4,
+            "max_bars": 8,
+            "prompt_template": "Deliver the {motif} motif in full, keeping {instrumentation} aligned with the {rhythm} while {dynamic} expands.",
+            "transition": "Lift energy"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import hashlib
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -78,6 +80,7 @@ class MusicGenService:
         self._handles: Dict[str, Optional[ModelHandle]] = {}
         self._lock = asyncio.Lock()
         self._device = self._select_device()
+        self._torch_dtype = self._select_dtype()
 
         self._top_k = settings.musicgen_top_k if settings is not None else None
         self._top_p = settings.musicgen_top_p if settings is not None else None
@@ -271,9 +274,16 @@ class MusicGenService:
             return None, reason
 
         try:
+            load_kwargs: Dict[str, Any] = {"low_cpu_mem_usage": True}
+            if self._torch_dtype is not None:
+                load_kwargs["dtype"] = self._torch_dtype
+
             processor = AutoProcessor.from_pretrained(resolved)
-            model = MusicgenForConditionalGeneration.from_pretrained(resolved)
-            model = model.to(self._device)
+            model = self._load_musicgen_model(resolved, load_kwargs)
+            if self._torch_dtype is not None:
+                model = model.to(self._device, dtype=self._torch_dtype)
+            else:
+                model = model.to(self._device)
             model.eval()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load MusicGen model %s", resolved)
@@ -292,6 +302,32 @@ class MusicGenService:
         async with self._lock:
             self._handles[model_id] = handle
         return handle, None
+
+    def _load_musicgen_model(
+        self,
+        model_id: str,
+        load_kwargs: Dict[str, Any],
+    ) -> MusicgenForConditionalGeneration:
+        """Load MusicGen model, falling back to legacy torch_dtype parameter if needed."""
+        assert MusicgenForConditionalGeneration is not None
+        try:
+            return MusicgenForConditionalGeneration.from_pretrained(model_id, **load_kwargs)
+        except TypeError as exc:
+            if (
+                self._torch_dtype is not None
+                and "unexpected keyword argument 'dtype'" in str(exc)
+                and "dtype" in load_kwargs
+            ):
+                fallback_kwargs = dict(load_kwargs)
+                fallback_kwargs.pop("dtype", None)
+                fallback_kwargs["torch_dtype"] = self._torch_dtype
+                logger.debug(
+                    "MusicGen backend falling back to torch_dtype for compatibility: {}", exc
+                )
+                return MusicgenForConditionalGeneration.from_pretrained(
+                    model_id, **fallback_kwargs
+                )
+            raise
 
     def _build_generation_kwargs(
         self,
@@ -344,9 +380,6 @@ class MusicGenService:
         }
 
         generator = None
-        if seed is not None:
-            generator = torch.Generator(device=self._device).manual_seed(seed)
-
         tokens = self._seconds_to_tokens(duration_seconds, handle)
         generation_kwargs, two_step_applied = self._build_generation_kwargs(
             max_new_tokens=tokens,
@@ -356,14 +389,22 @@ class MusicGenService:
             cfg_coef=cfg_coef,
             two_step_cfg=two_step_cfg,
         )
+        supports_generator = self._model_supports_generator(handle.model)
+        if seed is not None and supports_generator:
+            generator = torch.Generator(device=self._device).manual_seed(seed)
+            generation_kwargs["generator"] = generator
 
-        with torch.no_grad():
-            audio_tokens = handle.model.generate(
-                **model_inputs,
-                **conditioning_payload,
-                generator=generator,
-                **generation_kwargs,
-            )
+        seed_context = self._seed_context(seed if not supports_generator else None)
+
+        with seed_context:
+            if seed is not None and not supports_generator:
+                self._manual_seed(seed)
+            with torch.no_grad():
+                audio_tokens = handle.model.generate(
+                    **model_inputs,
+                    **conditioning_payload,
+                    **generation_kwargs,
+                )
         decode_tokens = audio_tokens
         if hasattr(audio_tokens, "device"):
             device_type = getattr(audio_tokens.device, "type", None)
@@ -461,11 +502,67 @@ class MusicGenService:
     def _select_device(self) -> str:
         if torch is None:
             return "cpu"
+
+        override: Optional[str] = None
+        if self._settings is not None and self._settings.inference_device:
+            override = self._settings.inference_device.strip().lower()
+
+        if override:
+            if override == "cpu":
+                return "cpu"
+            if override == "cuda":
+                if torch.cuda.is_available():  # pragma: no branch
+                    return "cuda"
+                logger.warning("Requested CUDA device but CUDA is unavailable; falling back to auto")
+            elif override == "mps":
+                if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                    return "mps"
+                logger.warning("Requested MPS device but MPS is unavailable; falling back to auto")
+            else:
+                logger.warning("Unknown inference device override '%s'; falling back to auto", override)
+
         if torch.cuda.is_available():  # pragma: no cover
             return "cuda"
         if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             return "mps"
         return "cpu"
+
+    def _select_dtype(self) -> Optional["torch.dtype"]:
+        if torch is None:
+            return None
+        if self._device == "cuda" and torch.cuda.is_available():  # pragma: no cover
+            return torch.float16
+        if self._device == "mps" and getattr(torch.backends, "mps", None):
+            if torch.backends.mps.is_available():  # pragma: no cover
+                return torch.float32
+        return torch.float32
+
+    def _model_supports_generator(self, model: "torch.nn.Module") -> bool:
+        if torch is None:
+            return False
+        try:
+            signature = inspect.signature(model.generate)  # type: ignore[attr-defined]
+        except (TypeError, ValueError, AttributeError):
+            return False
+        return "generator" in signature.parameters
+
+    def _seed_context(self, seed: Optional[int]):
+        if torch is None or seed is None:
+            return nullcontext()
+        if self._device == "cuda" and torch.cuda.is_available():  # pragma: no cover
+            current = torch.cuda.current_device()
+            return torch.random.fork_rng(devices=[current])
+        if self._device == "mps" and getattr(torch.backends, "mps", None):
+            if torch.backends.mps.is_available():  # pragma: no cover
+                return torch.random.fork_rng()
+        return torch.random.fork_rng()
+
+    def _manual_seed(self, seed: int) -> None:
+        if torch is None:
+            return
+        torch.manual_seed(seed)
+        if self._device == "cuda" and torch.cuda.is_available():  # pragma: no cover
+            torch.cuda.manual_seed_all(seed)
 
     def _missing_dependency_reason(self) -> str:
         if torch is None:
