@@ -15,6 +15,7 @@ from timbre_worker.app.models import (
     SectionRole,
 )
 from timbre_worker.app.settings import Settings
+from timbre_worker.services.exceptions import GenerationFailure
 from timbre_worker.services.orchestrator import ComposerOrchestrator
 from timbre_worker.services.types import BackendStatus, SectionRender
 
@@ -25,7 +26,7 @@ class PassthroughPlanner:
         return request.plan
 
 
-class DummyBackend:
+class DummyMusicGen:
     def __init__(self, name: str) -> None:
         self.name = name
         self.calls: List[str] = []
@@ -67,7 +68,7 @@ class DummyBackend:
         return SectionRender(waveform=waveform, sample_rate=sample_rate, extras=extras)
 
 
-class PlaceholderBackend(DummyBackend):
+class PlaceholderBackend(DummyMusicGen):
     async def render_section(
         self,
         request: GenerationRequest,
@@ -101,7 +102,7 @@ def build_plan(duration: float = 6.0) -> CompositionPlan:
             bars=2,
             target_seconds=duration / 2,
             energy=SectionEnergy.LOW,
-            model_id="riffusion-v1",
+            model_id="musicgen-stereo-medium",
             seed_offset=0,
             transition=None,
             orchestration=SectionOrchestration(),
@@ -143,15 +144,14 @@ def build_request(plan: CompositionPlan) -> GenerationRequest:
 @pytest.mark.asyncio
 async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
-    riffusion = DummyBackend("riffusion")
-    musicgen = DummyBackend("musicgen")
+    musicgen = DummyMusicGen("musicgen")
     settings = Settings(
         artifact_root=tmp_path / "artifacts",
         config_dir=tmp_path / "config",
     )
     settings.ensure_directories()
 
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
 
     plan = build_plan()
     request = build_request(plan)
@@ -174,12 +174,10 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
 
     backend_status = orchestrator.backend_status()
     assert backend_status.get("musicgen") is not None
-    assert backend_status.get("riffusion") is not None
 
     assert Path(artifact.artifact_path).exists()
-    assert len(progress_calls) == len(plan.sections)
-    assert progress_calls[0][2] == "s00"
-    assert progress_calls[1][2] == "s01"
+    assert len(progress_calls) == 1
+    assert progress_calls[0][2] == "s01"
     assert mix_calls, "mix callback should be invoked"
 
     extras = artifact.metadata.extras
@@ -189,72 +187,63 @@ async def test_orchestrator_combines_sections(tmp_path: Path) -> None:
     assert extras.get("format") == settings.export_format
     assert mix_info.get("sample_rate") == settings.export_sample_rate
     assert mix_calls[0] == pytest.approx(mix_info.get("duration_seconds", 0.0), rel=1e-3)
-    crossfade_total = sum(
-        entry.get("seconds", 0.0) for entry in mix_info.get("crossfades", [])
-    )
     assert extras.get("backend") == "composer"
     assert extras.get("placeholder") is False
     assert mix_info.get("target_rms", 0.0) == pytest.approx(0.2, rel=1e-3)
     section_rms = mix_info.get("section_rms")
     assert isinstance(section_rms, list)
-    assert len(section_rms) == len(plan.sections)
+    assert len(section_rms) == 1
     sections = extras.get("sections")
     assert isinstance(sections, list)
-    assert len(sections) == 2
-    assert sections[0].get("render_seconds", 0.0) >= plan.sections[0].target_seconds
-    assert sections[1].get("render_seconds", 0.0) >= plan.sections[1].target_seconds
+    assert len(sections) == 1
+    assert sections[0].get("section_id") == "s01"
+    assert sections[0].get("render_seconds", 0.0) > 0.0
     assert isinstance(sections[0].get("arrangement_text"), str)
-    phrase_total = sum(
-        section.get("phrase", {}).get("seconds", 0.0) for section in sections
-    )
-    assert phrase_total > 0.0
-    assert phrase_total - crossfade_total == pytest.approx(
-        mix_calls[0],
-        rel=1e-3,
-    )
+    assert mix_info.get("crossfades", []) == []
     motif_seed = extras.get("motif_seed")
     assert isinstance(motif_seed, dict)
     assert motif_seed.get("captured") is True
     assert motif_seed.get("section_id") == "s01"
     assert Path(motif_seed.get("path", "")).exists()
-    crossfades = mix_info.get("crossfades", [])
-    assert crossfades
-    assert crossfades[0].get("mode") in {"butt", "crossfade"}
-    conditioning_meta = crossfades[0].get("conditioning", {})
-    assert conditioning_meta.get("left_audio_conditioned") is False
-    assert conditioning_meta.get("right_audio_conditioned") is False
+    assert extras.get("full_plan") is not None
+    preview_plan = extras.get("motif_preview_plan")
+    assert isinstance(preview_plan, dict)
+    assert preview_plan.get("sections", [{}])[0].get("section_id") == "s01"
+    assert extras.get("motif_preview_seconds", 0.0) == pytest.approx(
+        mix_info.get("duration_seconds", 0.0), rel=1e-3
+    )
+    assert artifact.metadata.plan is not None
+    assert len(artifact.metadata.plan.sections) == 2
+    assert musicgen.calls == ["s01"]
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_warmup_reports_backend_status(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
-    riffusion = DummyBackend("riffusion")
-    musicgen = DummyBackend("musicgen")
+    musicgen = DummyMusicGen("musicgen")
     settings = Settings(
         artifact_root=tmp_path / "artifacts",
         config_dir=tmp_path / "config",
     )
     settings.ensure_directories()
 
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
     statuses = await orchestrator.warmup()
     assert statuses.get("musicgen") is not None
-    assert statuses.get("riffusion") is not None
-    assert orchestrator.backend_status().keys() >= {"musicgen", "riffusion"}
+    assert orchestrator.backend_status().keys() >= {"musicgen"}
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
     planner = PassthroughPlanner()
-    riffusion = PlaceholderBackend("riffusion")
-    musicgen = DummyBackend("musicgen")
+    musicgen = PlaceholderBackend("musicgen")
     settings = Settings(
         artifact_root=tmp_path / "artifacts",
         config_dir=tmp_path / "config",
     )
     settings.ensure_directories()
 
-    orchestrator = ComposerOrchestrator(settings, planner, riffusion, musicgen)
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
 
     plan = build_plan(duration=4.0)
     request = build_request(plan)
@@ -265,14 +254,32 @@ async def test_orchestrator_marks_placeholder(tmp_path: Path) -> None:
     assert extras.get("placeholder") is True
     sections = extras.get("sections")
     assert isinstance(sections, list)
-    assert any(entry.get("placeholder") for entry in sections)
+    assert len(sections) == 1
+    assert sections[0].get("placeholder") is True
     motif_seed = extras.get("motif_seed")
     assert isinstance(motif_seed, dict)
     assert motif_seed.get("captured") is True
     mix_info = extras.get("mix", {})
-    crossfades = mix_info.get("crossfades", [])
-    assert crossfades
-    assert any(
-        meta.get("left_placeholder") or meta.get("right_placeholder")
-        for meta in (entry.get("conditioning", {}) for entry in crossfades)
+    assert mix_info.get("crossfades", []) == []
+    assert extras.get("full_plan") is not None
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_unsupported_models(tmp_path: Path) -> None:
+    planner = PassthroughPlanner()
+    musicgen = DummyMusicGen("musicgen")
+    settings = Settings(
+        artifact_root=tmp_path / "artifacts",
+        config_dir=tmp_path / "config",
     )
+    settings.ensure_directories()
+
+    orchestrator = ComposerOrchestrator(settings, planner, musicgen)
+
+    plan = build_plan()
+    for section in plan.sections:
+        section.model_id = "riffusion-v1"
+    request = build_request(plan)
+
+    with pytest.raises(GenerationFailure):
+        await orchestrator.generate(job_id="unsupported", request=request)

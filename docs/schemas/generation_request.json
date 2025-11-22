@@ -25,7 +25,7 @@
     },
     "model_id": {
       "type": "string",
-      "description": "Identifier for the backend model to use (e.g. musicgen-stereo-medium, riffusion-v1)."
+      "description": "Identifier for the backend model to use (e.g. musicgen-stereo-medium)."
     },
     "cfg_scale": {
       "type": ["number", "null"],
@@ -37,23 +37,6 @@
       "type": ["string", "null"],
       "maxLength": 64,
       "description": "Optional scheduler identifier for diffusion backends."
-    },
-    "riffusion_num_inference_steps": {
-      "type": ["integer", "null"],
-      "minimum": 1,
-      "maximum": 200,
-      "description": "Override the default number of diffusion steps for Riffusion renders."
-    },
-    "riffusion_guidance_scale": {
-      "type": ["number", "null"],
-      "minimum": 0.0,
-      "maximum": 20.0,
-      "description": "Explicit guidance scale override for Riffusion."
-    },
-    "riffusion_scheduler": {
-      "type": ["string", "null"],
-      "maxLength": 64,
-      "description": "Scheduler identifier applied to the Riffusion diffusion pipeline."
     },
     "musicgen_top_k": {
       "type": ["integer", "null"],

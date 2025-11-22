@@ -10,7 +10,7 @@ Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pa
 ├─ cli/                 # Ratatui application, planner mirror, HTTP client
 ├─ worker/              # FastAPI app, composition planner, orchestrator & backends
 ├─ docs/                # Architecture notes, setup guides, testing playbooks, ADRs
-├─ scripts/             # Standalone helpers (e.g., riffusion smoke test)
+├─ scripts/             # Standalone helpers (reserved for future use)
 ├─ docs/schemas/        # JSON Schemas kept in sync with Rust/Python models
 ├─ Makefile             # Convenience entrypoints (setup, lint, test, run targets)
 └─ ROADMAP.md, ADRs     # Directional planning material
@@ -60,14 +60,6 @@ Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pa
    TIMBRE_WORKER_URL="http://192.168.1.20:8000" make cli-run
    ```
 
-4. **Smoke-test the backend**
-
-   ```bash
-   uv run --project worker python scripts/riffusion_smoke.py --prompt "dreamy lo-fi piano"
-   ```
-
----
-
 ## Runtime Overview
 
 ### Planner & Orchestrator
@@ -79,11 +71,10 @@ Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pa
   - Section orchestration layers (rhythm, bass, harmony, lead, textures, vocals) that drive richer prompts and feed the CLI status panel.
 - The orchestrator renders sections sequentially, captures motif seeds, trims/normalises loudness, then butt-joins sections with micro fades (longer crossfades only when conditioning is missing). Mix metadata includes per-section RMS, crossfade strategies, and mastering parameters.
 
-### Backends
+### Backend
 
-- **MusicGen** (transformers) renders text-to-music clips, conditioned by motif audio tails and arrangement sentences.
-- **Riffusion** remains available for diffusion-based spectrogram synthesis; when dependencies are missing we emit deterministic placeholders so the CLI flow stays testable.
-- The system can be forced into placeholder mode via `TIMBRE_RIFFUSION_ALLOW_INFERENCE=0` or `TIMBRE_INFERENCE_DEVICE=cpu` when MPS isn’t desirable.
+- **MusicGen** (transformers) renders text-to-music clips, conditioned by motif audio tails and arrangement sentences. When the checkpoint or dependencies are missing we emit deterministic placeholders so the CLI flow stays testable.
+- Force CPU/MPS/CUDA via `TIMBRE_INFERENCE_DEVICE` when you need to override torch auto-detection.
 
 ### CLI UX Highlights
 
@@ -102,7 +93,6 @@ Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pa
 | `TIMBRE_WORKER_URL` | Override CLI → worker base URL (default `http://localhost:8000`). |
 | `TIMBRE_DEFAULT_MODEL` / `TIMBRE_DEFAULT_DURATION` | CLI defaults used on startup (`musicgen-stereo-medium` / `120`). |
 | `TIMBRE_ARTIFACT_DIR` | Destination for copied artifacts (CLI). |
-| `TIMBRE_RIFFUSION_ALLOW_INFERENCE` | Set `0` to force placeholder renders. |
 | `TIMBRE_INFERENCE_DEVICE` | Force `cpu`, `mps`, or `cuda` regardless of auto-detection. |
 | `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH` | Worker mastering overrides (48 kHz / pcm24 by default). |
 
@@ -125,10 +115,6 @@ uv run --project worker pytest
 uv run --project worker ruff check
 uv run --project worker mypy
 ```
-
-`scripts/riffusion_smoke.py` remains useful to validate the worker in isolation; use `--duration` to exercise both short- and long-form planning.
-
----
 
 ## Documentation Map
 
@@ -154,4 +140,4 @@ Please keep Markdown files up to date when code changes (planner versions, mix b
 
 ## License & Usage
 
-The project is private R&D. Review upstream model licences (Meta MusicGen, Riffusion) before distributing weights or generated assets.
+The project is private R&D. Review upstream model licences (e.g., Meta MusicGen) before distributing weights or generated assets.

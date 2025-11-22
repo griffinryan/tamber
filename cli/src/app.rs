@@ -1,18 +1,25 @@
 use crate::{
     config::AppConfig,
     planner::CompositionPlanner,
-    types::{CompositionPlan, GenerationArtifact, GenerationRequest, GenerationStatus, JobState},
+    session::{clip_layer_label, ClipSlotStatus, SessionSnapshot, SessionView},
+    session_store,
+    types::{
+        ClipLayer, CompositionPlan, CompositionSection, GenerationArtifact, GenerationMode,
+        GenerationRequest, GenerationStatus, JobState, SectionEnergy, SectionOrchestration,
+        SectionRole, SessionCreateRequest, SessionSummary, ThemeDescriptor,
+    },
 };
+use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::{map::Iter, IndexMap};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
-const MAX_CHAT_ENTRIES: usize = 200;
 const MAX_STATUS_LINES: usize = 8;
 const MIN_DURATION_SECONDS: u8 = 90;
 const MAX_DURATION_SECONDS: u8 = 180;
+const MOTIF_PRESET_DURATION_SECONDS: u8 = 16;
 
 #[derive(Debug, Clone)]
 pub struct GenerationConfig {
@@ -20,6 +27,7 @@ pub struct GenerationConfig {
     pub duration_seconds: u8,
     pub cfg_scale: Option<f32>,
     pub seed: Option<u64>,
+    pub mode: GenerationMode,
 }
 
 impl GenerationConfig {
@@ -29,6 +37,7 @@ impl GenerationConfig {
             duration_seconds: config.default_duration_seconds(),
             cfg_scale: None,
             seed: None,
+            mode: GenerationMode::FullTrack,
         }
     }
 
@@ -41,32 +50,35 @@ impl GenerationConfig {
             .seed
             .map(|value| format!("Seed {value}"))
             .unwrap_or_else(|| "Seed auto".to_string());
-        format!("{} · {}s · {} · {}", self.model_id, self.duration_seconds, cfg_text, seed_text)
+        let mode_text = match self.mode {
+            GenerationMode::FullTrack => "Full".to_string(),
+            GenerationMode::Motif => "Motif".to_string(),
+            GenerationMode::Clip => "Clip".to_string(),
+        };
+        format!(
+            "{} · {}s · {} · {} · {}",
+            self.model_id, self.duration_seconds, cfg_text, seed_text, mode_text
+        )
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ChatRole {
-    User,
-    Worker,
-    System,
-}
-
-impl ChatRole {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::User => "You",
-            Self::Worker => "Worker",
-            Self::System => "System",
-        }
-    }
+#[derive(Debug, Default, Clone)]
+pub struct GenerationOverrides {
+    pub model_id: Option<String>,
+    pub duration_seconds: Option<u8>,
+    pub mode: Option<GenerationMode>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ChatEntry {
-    pub role: ChatRole,
-    pub content: String,
-    pub timestamp: DateTime<Utc>,
+pub struct InlineCommand {
+    pub overrides: GenerationOverrides,
+    pub usage_hint: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplashSelection {
+    Restore,
+    StartNew,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +180,8 @@ impl JobEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusedPane {
     StatusBar,
-    Conversation,
+    Motif,
+    SessionView,
     Jobs,
     Status,
     Prompt,
@@ -181,6 +194,15 @@ pub struct PlaybackState {
     pub duration: StdDuration,
     pub started_at: DateTime<Utc>,
     pub is_playing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipLaunchContext {
+    pub layer: ClipLayer,
+    pub scene_index: usize,
+    pub path: PathBuf,
+    pub tempo_bpm: u16,
+    pub beats_per_bar: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,47 +229,195 @@ impl Default for StatusBarState {
 }
 
 #[derive(Debug)]
+pub struct SplashAnimationState {
+    started_at: Instant,
+}
+
+impl SplashAnimationState {
+    pub fn new() -> Self {
+        Self { started_at: Instant::now() }
+    }
+
+    pub fn elapsed(&self) -> StdDuration {
+        self.started_at.elapsed()
+    }
+}
+
+impl Default for SplashAnimationState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
 pub struct AppState {
     pub input: String,
-    pub chat: Vec<ChatEntry>,
     pub jobs: IndexMap<String, JobEntry>,
     pub focused_job: Option<String>,
     pub status_lines: Vec<String>,
     pub status_bar: StatusBarState,
     pub focused_pane: FocusedPane,
-    pub chat_scroll: usize,
     pub status_scroll: usize,
-    pub chat_following: bool,
     pub status_following: bool,
     pub input_mode: InputMode,
     pub backend_status: Vec<BackendHealthStatus>,
+    pub last_submission_model_id: Option<String>,
+    pub session_view: SessionView,
+    pub session: Option<SessionSummary>,
+    restored_session_id: Option<String>,
     app_config: AppConfig,
     generation_config: GenerationConfig,
     playback: Option<PlaybackState>,
     planner: CompositionPlanner,
+    musicgen_default_model_id: Option<String>,
+    showing_splash: bool,
+    splash_selection: SplashSelection,
+    pending_snapshot: Option<SessionSnapshot>,
+    splash_animation: SplashAnimationState,
+    session_request_in_flight: bool,
+    clip_target_initialized: bool,
+    pub pending_session_seed_prompt: Option<String>,
 }
 
 impl AppState {
     pub fn new(config: AppConfig) -> Self {
-        Self {
+        let musicgen_default_model_id = config.default_model_id().to_string();
+        let snapshot_result = session_store::load_snapshot();
+        let pending_snapshot = snapshot_result.as_ref().ok().and_then(|opt| opt.clone());
+        let mut state = Self {
             input: String::new(),
-            chat: Vec::new(),
             jobs: IndexMap::new(),
             focused_job: None,
             status_lines: Vec::new(),
             status_bar: StatusBarState::default(),
             focused_pane: FocusedPane::Prompt,
-            chat_scroll: 0,
             status_scroll: 0,
-            chat_following: true,
             status_following: true,
             input_mode: InputMode::Normal,
             backend_status: Vec::new(),
+            last_submission_model_id: None,
+            session_view: SessionView::new(),
+            session: None,
+            restored_session_id: None,
             playback: None,
             generation_config: GenerationConfig::from_app_config(&config),
             app_config: config,
             planner: CompositionPlanner::new(),
+            musicgen_default_model_id: Some(musicgen_default_model_id),
+            showing_splash: true,
+            splash_selection: SplashSelection::StartNew,
+            pending_snapshot: pending_snapshot.clone(),
+            splash_animation: SplashAnimationState::default(),
+            session_request_in_flight: false,
+            clip_target_initialized: false,
+            pending_session_seed_prompt: None,
+        };
+
+        if pending_snapshot.is_some() {
+            state.splash_selection = SplashSelection::Restore;
         }
+
+        if let Err(err) = snapshot_result {
+            state.status_lines.push(format!("Failed to load session snapshot: {err}"));
+        }
+
+        state
+    }
+
+    fn rehydrate_clip_artifacts(&mut self, summary: &SessionSummary) {
+        for clip in &summary.clips {
+            let Some(layer) = clip.layer else { continue };
+            let scene_index = clip.scene_index.unwrap_or(0) as usize;
+            let local_path = self
+                .jobs
+                .get(&clip.job_id)
+                .and_then(|job| job.artifact.as_ref().map(|artifact| artifact.local_path.clone()))
+                .or_else(|| clip.artifact_path.as_ref().map(PathBuf::from));
+            if let Some(path) = local_path {
+                let slot = self.session_view.slot_mut(layer, scene_index);
+                slot.artifact = Some(path);
+            }
+        }
+    }
+
+    pub fn showing_splash(&self) -> bool {
+        self.showing_splash
+    }
+
+    pub fn session_request_pending(&self) -> bool {
+        self.session_request_in_flight
+    }
+
+    pub fn mark_session_request_pending(&mut self) {
+        self.session_request_in_flight = true;
+    }
+
+    pub fn clear_session_request_pending(&mut self) {
+        self.session_request_in_flight = false;
+    }
+
+    pub fn has_pending_snapshot(&self) -> bool {
+        self.pending_snapshot.is_some()
+    }
+
+    pub fn splash_selection(&self) -> SplashSelection {
+        self.splash_selection
+    }
+
+    pub fn splash_elapsed(&self) -> StdDuration {
+        self.splash_animation.elapsed()
+    }
+
+    pub fn select_next_splash_option(&mut self) {
+        self.splash_selection = match (self.splash_selection, self.has_pending_snapshot()) {
+            (SplashSelection::Restore, _) => SplashSelection::StartNew,
+            (SplashSelection::StartNew, true) => SplashSelection::Restore,
+            (SplashSelection::StartNew, false) => SplashSelection::StartNew,
+        };
+    }
+
+    pub fn select_previous_splash_option(&mut self) {
+        self.splash_selection = match (self.splash_selection, self.has_pending_snapshot()) {
+            (SplashSelection::StartNew, true) => SplashSelection::Restore,
+            (SplashSelection::StartNew, false) => SplashSelection::StartNew,
+            (SplashSelection::Restore, _) => SplashSelection::StartNew,
+        };
+    }
+
+    pub fn apply_pending_snapshot(&mut self) -> bool {
+        let Some(snapshot) = self.pending_snapshot.clone() else {
+            return false;
+        };
+
+        self.session_view = SessionView::new();
+        self.session_view.restore(&snapshot);
+        self.session = None;
+        self.restored_session_id = snapshot.session_id.clone();
+        self.pending_snapshot = None;
+        self.showing_splash = false;
+        self.clip_target_initialized = false;
+        self.ensure_clip_target_selected();
+        if let Some(session_id) = snapshot.session_id {
+            let label = Self::short_session_id(&session_id);
+            self.push_status_line(format!("Restored session layout for {label} (offline)"));
+        } else {
+            self.push_status_line("Restored session layout (offline)".to_string());
+        }
+        true
+    }
+
+    pub fn ensure_clip_target_selected(&mut self) {
+        if self.clip_target_initialized || self.session_view.has_active_target() {
+            return;
+        }
+        let (layer, scene) = self.session_view.focused();
+        self.session_view.set_active_target(layer, scene);
+        self.clip_target_initialized = true;
+    }
+
+    #[cfg(test)]
+    pub fn disable_splash(&mut self) {
+        self.showing_splash = false;
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -255,7 +425,6 @@ impl AppState {
             AppEvent::Info(message) => self.push_status_line(message),
             AppEvent::Error(message) => {
                 self.push_status_line(format!("Error: {message}"));
-                self.append_chat(ChatRole::System, format!("{message}"));
             }
             AppEvent::JobQueued { status, prompt, request, plan } => {
                 self.playback = None;
@@ -269,21 +438,30 @@ impl AppState {
                         artifact: None,
                     },
                 );
+                self.last_submission_model_id = Some(request.model_id.clone());
                 self.focused_job = Some(status.job_id.clone());
                 let summary = format_request_summary(&request);
                 self.push_status_line(format!("Job {} queued ({summary})", status.job_id));
-                self.append_chat(
-                    ChatRole::System,
-                    format!("Composition plan for job {}: {}", status.job_id, plan_summary(&plan)),
-                );
-                self.append_chat(
-                    ChatRole::Worker,
-                    format!("Queued job {} ({summary})", status.job_id),
-                );
+                self.push_status_line(plan_summary(&plan));
+                self.push_status_line(format!("Queued job {} ({summary})", status.job_id));
                 self.focused_pane = FocusedPane::StatusBar;
                 self.status_scroll = 0;
                 self.status_following = true;
                 self.input_mode = InputMode::Normal;
+                if matches!(request.mode, Some(GenerationMode::Clip)) {
+                    if let Some(layer) = request.clip_layer {
+                        let scene_index = request
+                            .clip_scene_index
+                            .map(|value| value as usize)
+                            .unwrap_or(self.session_view.focused().1);
+                        self.session_view.mark_pending(
+                            layer,
+                            scene_index,
+                            status.job_id.clone(),
+                            prompt.clone(),
+                        );
+                    }
+                }
             }
             AppEvent::JobUpdated { status } => {
                 if let Some(job) = self.jobs.get_mut(&status.job_id) {
@@ -294,16 +472,17 @@ impl AppState {
                                 "Job {} failed: {message}",
                                 status.job_id
                             ));
-                            self.append_chat(
-                                ChatRole::Worker,
-                                format!("Job {} failed: {message}", status.job_id),
-                            );
                         } else {
                             self.push_status_line(format!("Job {} failed", status.job_id));
-                            self.append_chat(
-                                ChatRole::Worker,
-                                format!("Job {} failed", status.job_id),
-                            );
+                        }
+                        if self.session_view.pending_scene_for_job(&status.job_id).is_some() {
+                            self.session_view.mark_failed(&status.job_id);
+                            self.session_view.clear_job(&status.job_id);
+                        }
+                    } else if status.state == JobState::Running {
+                        if self.session_view.pending_scene_for_job(&status.job_id).is_some() {
+                            self.session_view
+                                .mark_status(&status.job_id, ClipSlotStatus::Rendering);
                         }
                     }
                 }
@@ -316,9 +495,25 @@ impl AppState {
                         job.plan = plan.clone();
                     }
                     self.focused_job = Some(status.job_id.clone());
-                    let (status_line, chat_line) = completion_messages(&status, &artifact);
+                    let status_line = completion_message(&status, &artifact);
                     self.push_status_line(status_line);
-                    self.append_chat(ChatRole::Worker, chat_line);
+                }
+                if self.session_view.pending_scene_for_job(&status.job_id).is_some() {
+                    let duration = artifact.descriptor.metadata.duration_seconds as f32;
+                    let bars = artifact
+                        .descriptor
+                        .metadata
+                        .plan
+                        .as_ref()
+                        .and_then(|plan| plan.sections.first())
+                        .map(|section| section.bars);
+                    self.session_view.mark_ready(
+                        &status.job_id,
+                        &artifact.local_path,
+                        duration,
+                        bars.map(|b| b as u8),
+                    );
+                    self.session_view.clear_job(&status.job_id);
                 }
             }
             AppEvent::PlaybackStarted { job_id, path, duration } => {
@@ -349,7 +544,55 @@ impl AppState {
                 self.status_bar.last_update = Utc::now();
             }
             AppEvent::WorkerNudge { message } => {
-                self.append_chat(ChatRole::Worker, message);
+                self.push_status_line(message);
+            }
+            AppEvent::SessionStarted { summary } => {
+                let label = Self::format_session_label(&summary);
+                let tempo = summary
+                    .tempo_bpm
+                    .map(|bpm| format!("{bpm} BPM"))
+                    .unwrap_or_else(|| "tempo pending".to_string());
+                self.session = Some(summary.clone());
+                self.session_view = SessionView::new();
+                self.session_view.apply_summary(&summary);
+                self.rehydrate_clip_artifacts(&summary);
+                self.restored_session_id = Some(summary.session_id.clone());
+                self.clear_session_request_pending();
+                self.pending_session_seed_prompt = None;
+                self.clip_target_initialized = false;
+                self.ensure_clip_target_selected();
+                self.push_status_line(format!("Session {label} created ({tempo})"));
+            }
+            AppEvent::SessionUpdated { summary } => {
+                let label = Self::format_session_label(&summary);
+                if self.session.as_ref().map(|s| s.session_id.clone())
+                    != Some(summary.session_id.clone())
+                {
+                    self.session_view = SessionView::new();
+                    self.clip_target_initialized = false;
+                }
+                self.session_view.apply_summary(&summary);
+                self.rehydrate_clip_artifacts(&summary);
+                self.session = Some(summary.clone());
+                self.restored_session_id = Some(summary.session_id.clone());
+                self.clear_session_request_pending();
+                self.pending_session_seed_prompt = None;
+                self.ensure_clip_target_selected();
+                self.push_status_line(format!(
+                    "Session {label} updated ({} clips)",
+                    summary.clip_count
+                ));
+            }
+            AppEvent::SessionRequestFailed { message } => {
+                self.clear_session_request_pending();
+                self.pending_session_seed_prompt = None;
+                self.push_status_line(message);
+            }
+            AppEvent::ClipPlaying { layer, scene_index } => {
+                self.session_view.set_playing(layer, scene_index);
+            }
+            AppEvent::ClipStopped { layer } => {
+                self.session_view.clear_playing(layer);
             }
         }
     }
@@ -363,16 +606,20 @@ impl AppState {
             statuses.sort_by(|a, b| a.name.cmp(&b.name));
             self.backend_status = statuses;
         }
-    }
 
-    pub fn append_chat(&mut self, role: ChatRole, content: String) {
-        self.chat.push(ChatEntry { role, content, timestamp: Utc::now() });
-        if self.chat.len() > MAX_CHAT_ENTRIES {
-            let overflow = self.chat.len() - MAX_CHAT_ENTRIES;
-            self.chat.drain(0..overflow);
+        if let Some(default_musicgen) =
+            payload.get("musicgen_default_model_id").and_then(Value::as_str)
+        {
+            self.musicgen_default_model_id = Some(default_musicgen.trim().to_string());
         }
-        if self.chat_following {
-            self.chat_scroll = 0;
+
+        if let Some(default_model) = payload.get("default_model_id").and_then(Value::as_str) {
+            if self.generation_config.model_id == self.app_config.default_model_id() {
+                self.generation_config.model_id = default_model.trim().to_string();
+            }
+            if self.musicgen_default_model_id.is_none() {
+                self.musicgen_default_model_id = Some(default_model.trim().to_string());
+            }
         }
     }
 
@@ -392,25 +639,195 @@ impl AppState {
     }
 
     pub fn config_summary(&self) -> String {
-        self.generation_config.summary()
+        let base = self.generation_config.summary();
+        if let Some(session) = &self.session {
+            let short_id = Self::format_session_label(session);
+            let tempo = session
+                .tempo_bpm
+                .map(|bpm| format!("{bpm} BPM"))
+                .unwrap_or_else(|| "tempo pending".to_string());
+            format!("{base} · Session {short_id} ({tempo})")
+        } else {
+            base
+        }
     }
 
+    pub(crate) fn format_session_label(summary: &SessionSummary) -> String {
+        Self::short_session_id(&summary.session_id)
+    }
+
+    fn short_session_id(session_id: &str) -> String {
+        let trimmed = session_id.trim_start_matches("session-");
+        let short: String = trimmed.chars().take(8).collect();
+        if short.is_empty() {
+            session_id.to_string()
+        } else {
+            short
+        }
+    }
+
+    pub fn current_session_id(&self) -> Option<String> {
+        self.session.as_ref().map(|summary| summary.session_id.clone())
+    }
+
+    pub fn motif_ready(&self) -> bool {
+        self.session.as_ref().map(|summary| summary.seed_plan.is_some()).unwrap_or(false)
+    }
+
+    pub fn active_clip_target(&self) -> Option<(ClipLayer, usize)> {
+        self.session_view.active_target()
+    }
+
+    pub fn toggle_active_clip_target(&mut self) -> bool {
+        let (layer, scene_index) = self.session_view.focused();
+        self.session_view.toggle_active_target(layer, scene_index)
+    }
+
+    pub fn prompt_panel_title(&self) -> String {
+        if let Some(session) = &self.session {
+            let label = Self::format_session_label(session);
+            let (layer, scene_index) =
+                self.active_clip_target().unwrap_or_else(|| self.session_view.focused());
+            let scene_name = self.session_view.scene_name(scene_index);
+            let layer_label = clip_layer_label(layer);
+            let target_text = if self.active_clip_target().is_some() {
+                format!("{scene_name} · {layer_label} (active)")
+            } else {
+                format!("{scene_name} · {layer_label}")
+            };
+            format!(
+                "Prompt · Session {label} · {target_text} · Model {}",
+                self.generation_config.model_id
+            )
+        } else {
+            format!("Prompt · Model {}", self.generation_config.model_id)
+        }
+    }
+
+    pub fn last_submission_model(&self) -> Option<&str> {
+        self.last_submission_model_id.as_deref()
+    }
+
+    pub fn default_model_for(&self, alias: &str) -> Option<String> {
+        if alias == "musicgen" {
+            return Some(Self::sanitized_model(&self.musicgen_default_model_id, || {
+                self.app_config.default_model_id().to_string()
+            }));
+        }
+        None
+    }
+
+    pub fn inline_command_for(&self, alias: &str) -> Option<InlineCommand> {
+        match alias {
+            "musicgen" => {
+                let model = Self::sanitized_model(&self.musicgen_default_model_id, || {
+                    self.app_config.default_model_id().to_string()
+                });
+                Some(InlineCommand {
+                    overrides: GenerationOverrides {
+                        model_id: Some(model),
+                        ..GenerationOverrides::default()
+                    },
+                    usage_hint: "Usage: /musicgen <prompt>",
+                })
+            }
+            "small" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-small".to_string()),
+                    ..GenerationOverrides::default()
+                },
+                usage_hint: "Usage: /small <prompt>",
+            }),
+            "medium" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-medium".to_string()),
+                    ..GenerationOverrides::default()
+                },
+                usage_hint: "Usage: /medium <prompt>",
+            }),
+            "large" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-large".to_string()),
+                    ..GenerationOverrides::default()
+                },
+                usage_hint: "Usage: /large <prompt>",
+            }),
+            "motif" => Some(InlineCommand {
+                overrides: GenerationOverrides {
+                    model_id: Some("musicgen-stereo-medium".to_string()),
+                    duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
+                    mode: Some(GenerationMode::Motif),
+                },
+                usage_hint: "Usage: /motif <prompt>",
+            }),
+            _ => None,
+        }
+    }
+
+    fn sanitized_model(candidate: &Option<String>, fallback: impl FnOnce() -> String) -> String {
+        candidate
+            .as_ref()
+            .and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .unwrap_or_else(fallback)
+    }
+
+    #[allow(dead_code)]
     pub fn build_generation_payload(&self, prompt: &str) -> (GenerationRequest, CompositionPlan) {
-        let plan = self.planner.build_plan(
-            prompt,
-            self.generation_config.duration_seconds,
-            self.generation_config.seed,
-        );
+        self.build_generation_payload_with_overrides(prompt, None)
+    }
+
+    pub fn build_session_seed_payload(
+        &self,
+        prompt: &str,
+    ) -> Result<(GenerationRequest, CompositionPlan), String> {
+        if prompt.trim().is_empty() {
+            return Err("Session prompt cannot be empty.".to_string());
+        }
+        let mut overrides = GenerationOverrides::default();
+        overrides.duration_seconds = Some(MOTIF_PRESET_DURATION_SECONDS);
+        overrides.mode = Some(GenerationMode::Motif);
+        Ok(self.build_generation_payload_with_overrides(prompt, Some(&overrides)))
+    }
+
+    fn effective_model_id(&self, overrides: Option<&GenerationOverrides>) -> String {
+        overrides
+            .and_then(|opts| opts.model_id.as_ref())
+            .cloned()
+            .unwrap_or_else(|| self.generation_config.model_id.clone())
+    }
+
+    pub fn build_generation_payload_with_overrides(
+        &self,
+        prompt: &str,
+        overrides: Option<&GenerationOverrides>,
+    ) -> (GenerationRequest, CompositionPlan) {
+        let duration_seconds = overrides
+            .and_then(|opts| opts.duration_seconds)
+            .unwrap_or(self.generation_config.duration_seconds);
+        let model_id = self.effective_model_id(overrides);
+        let mode = overrides.and_then(|opts| opts.mode).unwrap_or(self.generation_config.mode);
+
+        let plan =
+            self.planner.build_plan(prompt, duration_seconds, self.generation_config.seed, mode);
         let request = GenerationRequest {
             prompt: prompt.to_string(),
             seed: self.generation_config.seed,
-            duration_seconds: self.generation_config.duration_seconds,
-            model_id: self.generation_config.model_id.clone(),
+            duration_seconds,
+            model_id,
+            session_id: self.current_session_id(),
+            clip_layer: None,
+            clip_scene_index: None,
+            clip_bars: None,
+            mode: Some(mode),
             cfg_scale: self.generation_config.cfg_scale,
             scheduler: None,
-            riffusion_num_inference_steps: None,
-            riffusion_guidance_scale: None,
-            riffusion_scheduler: None,
             musicgen_top_k: None,
             musicgen_top_p: None,
             musicgen_temperature: None,
@@ -422,6 +839,136 @@ impl AppState {
             plan: Some(plan.clone()),
         };
         (request, plan)
+    }
+
+    pub fn build_clip_payload_for(
+        &self,
+        layer: ClipLayer,
+        scene_index: usize,
+        prompt_override: Option<&str>,
+        overrides: Option<&GenerationOverrides>,
+    ) -> Result<(GenerationRequest, CompositionPlan, String), String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "No active session. Use /session start first.".to_string())?;
+        if session.seed_plan.is_none() {
+            return Err("Motif not ready yet. Generate a motif before queuing clips.".to_string());
+        }
+        if !self.session_view.scenes().iter().any(|scene| scene.index == scene_index) {
+            return Err("Select a valid scene before submitting a clip.".to_string());
+        }
+
+        let bars: u8 = 4;
+        let tempo = session.tempo_bpm.unwrap_or(100);
+        let time_signature = session.time_signature.clone().unwrap_or_else(|| "4/4".to_string());
+        let beats = beats_per_bar(&time_signature);
+        let seconds_per_bar = (60.0_f32 / tempo.max(1) as f32) * beats.max(1.0);
+        let total_seconds = (bars as f32 * seconds_per_bar).max(1.0);
+
+        let explicit_prompt = prompt_override.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+        let clip_prompt = explicit_prompt.unwrap_or_else(|| {
+            session
+                .seed_prompt
+                .clone()
+                .or_else(|| session.theme.as_ref().map(|theme| theme.motif.clone()))
+                .unwrap_or_else(|| "session clip".to_string())
+        });
+
+        let descriptor = session.theme.clone().unwrap_or_else(|| ThemeDescriptor {
+            motif: clip_prompt.clone(),
+            instrumentation: Vec::new(),
+            rhythm: "steady pulse".to_string(),
+            dynamic_curve: Vec::new(),
+            texture: None,
+        });
+
+        let section_prompt = clip_prompt_text(&clip_prompt, &descriptor, layer);
+        let display_label = clip_layer_label(layer);
+        let layer_key = display_label.to_ascii_lowercase();
+
+        let section = CompositionSection {
+            section_id: "c00".to_string(),
+            role: SectionRole::Development,
+            label: format!("{} clip", display_label),
+            prompt: section_prompt,
+            bars,
+            target_seconds: total_seconds,
+            energy: clip_energy(layer),
+            model_id: None,
+            seed_offset: Some(0),
+            transition: None,
+            motif_directive: Some(clip_directive(layer)),
+            variation_axes: vec!["layer".to_string(), layer_key.clone()],
+            cadence_hint: None,
+            orchestration: clip_orchestration(layer, session.theme.as_ref()),
+        };
+
+        let key = session.key.clone().unwrap_or_else(|| "C major".to_string());
+        let plan = CompositionPlan {
+            version: "v4".to_string(),
+            tempo_bpm: tempo,
+            time_signature: time_signature.clone(),
+            key,
+            total_bars: bars as u16,
+            total_duration_seconds: total_seconds,
+            theme: Some(descriptor.clone()),
+            sections: vec![section],
+        };
+
+        let duration_seconds = overrides
+            .and_then(|opts| opts.duration_seconds)
+            .unwrap_or_else(|| total_seconds.round().clamp(1.0, MAX_DURATION_SECONDS as f32) as u8);
+        let model_id = self.effective_model_id(overrides);
+        let request = GenerationRequest {
+            prompt: clip_prompt.clone(),
+            seed: self.generation_config.seed,
+            duration_seconds,
+            model_id,
+            session_id: self.current_session_id(),
+            clip_layer: Some(layer),
+            clip_scene_index: Some(scene_index as u16),
+            clip_bars: Some(bars),
+            mode: Some(GenerationMode::Clip),
+            cfg_scale: self.generation_config.cfg_scale,
+            scheduler: None,
+            musicgen_top_k: None,
+            musicgen_top_p: None,
+            musicgen_temperature: None,
+            musicgen_cfg_coef: None,
+            musicgen_two_step_cfg: None,
+            output_sample_rate: None,
+            output_bit_depth: None,
+            output_format: None,
+            plan: Some(plan.clone()),
+        };
+
+        Ok((request, plan, clip_prompt))
+    }
+
+    pub fn build_motif_payload_with_overrides(
+        &self,
+        prompt: &str,
+        overrides: Option<&GenerationOverrides>,
+    ) -> Result<(GenerationRequest, CompositionPlan), String> {
+        if prompt.trim().is_empty() {
+            return Err("Motif prompt cannot be empty.".to_string());
+        }
+        if self.session.is_none() {
+            return Err("No active session. Use /session start first.".to_string());
+        }
+        let mut merged = overrides.cloned().unwrap_or_default();
+        merged.duration_seconds = Some(MOTIF_PRESET_DURATION_SECONDS);
+        merged.mode = Some(GenerationMode::Motif);
+        Ok(self.build_generation_payload_with_overrides(prompt, Some(&merged)))
     }
 
     pub fn handle_command(&mut self, input: &str) -> Result<String, String> {
@@ -448,6 +995,13 @@ impl AppState {
                 }
                 self.generation_config.duration_seconds = value;
                 Ok(format!("Duration set to {value}s"))
+            }
+            "musicgen" => {
+                let model = self
+                    .default_model_for("musicgen")
+                    .unwrap_or_else(|| self.generation_config.model_id.clone());
+                self.generation_config.model_id = model.clone();
+                Ok(format!("Model set to {model}"))
             }
             "model" => {
                 let model = rest.join(" ").trim().to_string();
@@ -497,7 +1051,7 @@ impl AppState {
             "show" => Ok(format!("Current config: {}", self.config_summary())),
             "help" => Ok(
                 format!(
-                    "Commands: /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /cfg <scale|off>, /seed <value|off>, /show, /reset"
+                    "Commands: /session <prompt>, /duration <{MIN_DURATION_SECONDS}-{MAX_DURATION_SECONDS}>, /model <id>, /musicgen, /cfg <scale|off>, /seed <value|off>, /clip <layer> [prompt], /rhythm|/bass|/harmony|/lead|/textures|/vocals [prompt], /show, /reset · inline prompts: /motif <prompt>, /small|/medium|/large <prompt>"
                 ),
             ),
             other => Err(format!("Unknown command `{other}`")),
@@ -544,10 +1098,66 @@ impl AppState {
             .map(|(_, key, value)| (key, value))
     }
 
+    pub fn clip_launch_context(&self) -> Option<ClipLaunchContext> {
+        let session = self.session.as_ref()?;
+        let tempo_bpm = session.tempo_bpm? as u16;
+        let time_signature = session.time_signature.clone().unwrap_or_else(|| "4/4".to_string());
+        let beats = beats_per_bar(&time_signature);
+        let (layer, scene_index) = self.session_view.focused();
+        let slot = self.session_view.slot(layer, scene_index);
+        if !matches!(slot.status, ClipSlotStatus::Ready) {
+            return None;
+        }
+        let artifact = slot.artifact.as_ref()?;
+        Some(ClipLaunchContext {
+            layer,
+            scene_index,
+            path: artifact.clone(),
+            tempo_bpm,
+            beats_per_bar: beats,
+        })
+    }
+
+    pub fn focused_clip_layer(&self) -> ClipLayer {
+        self.session_view.focused().0
+    }
+
+    pub fn reset_session_state(&mut self) {
+        self.session = None;
+        self.restored_session_id = None;
+        self.session_view = SessionView::new();
+        self.jobs.clear();
+        self.focused_job = None;
+        self.playback = None;
+        self.pending_snapshot = None;
+        self.showing_splash = false;
+        self.splash_selection = SplashSelection::StartNew;
+        self.session_request_in_flight = false;
+        self.clip_target_initialized = false;
+        self.pending_session_seed_prompt = None;
+    }
+
+    pub fn save_session_snapshot(&self) -> Result<()> {
+        if self.showing_splash {
+            if let Some(snapshot) = &self.pending_snapshot {
+                return session_store::save_snapshot(snapshot);
+            }
+            return Ok(());
+        }
+        let session_id = self
+            .session
+            .as_ref()
+            .map(|summary| summary.session_id.clone())
+            .or_else(|| self.restored_session_id.clone());
+        let snapshot = self.session_view.snapshot(session_id);
+        session_store::save_snapshot(&snapshot)
+    }
+
     pub fn focus_next(&mut self) {
         self.focused_pane = match self.focused_pane {
-            FocusedPane::StatusBar => FocusedPane::Conversation,
-            FocusedPane::Conversation => FocusedPane::Jobs,
+            FocusedPane::StatusBar => FocusedPane::Motif,
+            FocusedPane::Motif => FocusedPane::SessionView,
+            FocusedPane::SessionView => FocusedPane::Jobs,
             FocusedPane::Jobs => FocusedPane::Status,
             FocusedPane::Status => FocusedPane::Prompt,
             FocusedPane::Prompt => FocusedPane::StatusBar,
@@ -557,18 +1167,12 @@ impl AppState {
     pub fn focus_previous(&mut self) {
         self.focused_pane = match self.focused_pane {
             FocusedPane::StatusBar => FocusedPane::Prompt,
-            FocusedPane::Conversation => FocusedPane::StatusBar,
-            FocusedPane::Jobs => FocusedPane::Conversation,
+            FocusedPane::Motif => FocusedPane::StatusBar,
+            FocusedPane::SessionView => FocusedPane::Motif,
+            FocusedPane::Jobs => FocusedPane::SessionView,
             FocusedPane::Status => FocusedPane::Jobs,
             FocusedPane::Prompt => FocusedPane::Status,
         };
-    }
-
-    pub fn increment_chat_scroll(&mut self, delta: isize) {
-        let current = self.chat_scroll as isize;
-        let next = (current + delta).max(0);
-        self.chat_scroll = next as usize;
-        self.chat_following = self.chat_scroll == 0;
     }
 
     pub fn increment_status_scroll(&mut self, delta: isize) {
@@ -637,13 +1241,60 @@ pub enum AppEvent {
     WorkerNudge {
         message: String,
     },
+    SessionStarted {
+        summary: SessionSummary,
+    },
+    SessionUpdated {
+        summary: SessionSummary,
+    },
+    SessionRequestFailed {
+        message: String,
+    },
+    ClipPlaying {
+        layer: ClipLayer,
+        scene_index: usize,
+    },
+    ClipStopped {
+        layer: ClipLayer,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum AppCommand {
-    SubmitPrompt { prompt: String, request: GenerationRequest, plan: CompositionPlan },
-    PlayJob { job_id: String },
+    SubmitPrompt {
+        prompt: String,
+        request: GenerationRequest,
+        plan: CompositionPlan,
+    },
+    SubmitClip {
+        prompt: String,
+        layer: ClipLayer,
+        request: GenerationRequest,
+        plan: CompositionPlan,
+    },
+    PlayJob {
+        job_id: String,
+    },
     StopPlayback,
+    LaunchClip {
+        layer: ClipLayer,
+        scene_index: usize,
+        path: PathBuf,
+        tempo_bpm: u16,
+        beats_per_bar: f32,
+    },
+    StopClip {
+        layer: ClipLayer,
+    },
+    StopAllClips,
+    CreateSession {
+        payload: SessionCreateRequest,
+        seed_prompt: Option<String>,
+        seed_request: Option<(GenerationRequest, CompositionPlan)>,
+    },
+    FetchSession {
+        session_id: String,
+    },
 }
 
 pub fn format_request_summary(request: &GenerationRequest) -> String {
@@ -662,14 +1313,31 @@ pub fn format_request_summary(request: &GenerationRequest) -> String {
         parts.push(format!("seed {}", seed));
     }
 
+    if let Some(session_id) = &request.session_id {
+        let label = AppState::short_session_id(session_id);
+        parts.push(format!("session {label}"));
+    }
+
+    if let Some(layer) = request.clip_layer {
+        let label = clip_layer_label(layer).to_ascii_lowercase();
+        parts.push(format!("layer {label}"));
+    }
+    if let Some(bars) = request.clip_bars {
+        parts.push(format!("bars {}", bars));
+    }
+
     if let Some(plan) = &request.plan {
         parts.push(format!("plan {} sections", plan.sections.len()));
+    }
+
+    if matches!(request.mode, Some(GenerationMode::Motif)) {
+        parts.push("mode motif".to_string());
     }
 
     parts.join(", ")
 }
 
-fn completion_messages(status: &GenerationStatus, artifact: &LocalArtifact) -> (String, String) {
+fn completion_message(status: &GenerationStatus, artifact: &LocalArtifact) -> String {
     let metadata = &artifact.descriptor.metadata;
     let extras = metadata.extras.as_object();
 
@@ -715,10 +1383,7 @@ fn completion_messages(status: &GenerationStatus, artifact: &LocalArtifact) -> (
     }
 
     let detail = parts.join(", ");
-    let status_line = format!("Job {} completed ({detail})", status.job_id);
-    let chat_line =
-        format!("Job {} completed ({detail}) → {}", status.job_id, artifact.local_path.display());
-    (status_line, chat_line)
+    format!("Job {} completed ({detail}) → {}", status.job_id, artifact.local_path.display())
 }
 
 fn plan_summary(plan: &CompositionPlan) -> String {
@@ -745,13 +1410,132 @@ fn plan_summary(plan: &CompositionPlan) -> String {
     parts.join(" | ")
 }
 
+fn beats_per_bar(signature: &str) -> f32 {
+    let mut parts = signature.split('/');
+    let numerator = parts.next().and_then(|s| s.parse::<f32>().ok()).unwrap_or(4.0);
+    let denominator = parts.next().and_then(|s| s.parse::<f32>().ok()).unwrap_or(4.0);
+    if denominator <= 0.0 {
+        return numerator;
+    }
+    numerator * (4.0 / denominator)
+}
+
+fn clip_prompt_text(prompt: &str, descriptor: &ThemeDescriptor, layer: ClipLayer) -> String {
+    let layer_desc = match layer {
+        ClipLayer::Rhythm => {
+            "Focus on tight percussion and groove-locked drums with tasteful syncopation."
+        }
+        ClipLayer::Bass => {
+            "Deliver a supportive bassline that locks to the kick and outlines the harmony."
+        }
+        ClipLayer::Harmony => {
+            "Layer warm harmonic stabs or pads that reinforce the progression without overcrowding."
+        }
+        ClipLayer::Lead => {
+            "Craft a memorable lead motif that plays call-and-response with the established theme."
+        }
+        ClipLayer::Textures => "Add evolving textures and atmosphere to widen the stereo field.",
+        ClipLayer::Vocals => "Improvise expressive wordless vocals floating above the arrangement.",
+    };
+    let motif = descriptor.motif.as_str();
+    format!(
+        "{} {} Reinforce the motif \"{}\" with seamless looping.",
+        prompt.trim(),
+        layer_desc,
+        motif
+    )
+}
+
+fn clip_energy(layer: ClipLayer) -> SectionEnergy {
+    match layer {
+        ClipLayer::Rhythm | ClipLayer::Lead => SectionEnergy::High,
+        ClipLayer::Harmony | ClipLayer::Bass => SectionEnergy::Medium,
+        ClipLayer::Textures | ClipLayer::Vocals => SectionEnergy::Low,
+    }
+}
+
+fn clip_directive(layer: ClipLayer) -> String {
+    match layer {
+        ClipLayer::Rhythm => "drive motif groove".to_string(),
+        ClipLayer::Bass => "anchor harmonic floor".to_string(),
+        ClipLayer::Harmony => "reinforce progression".to_string(),
+        ClipLayer::Lead => "embellish motif".to_string(),
+        ClipLayer::Textures => "expand atmosphere".to_string(),
+        ClipLayer::Vocals => "float vocalise".to_string(),
+    }
+}
+
+fn clip_orchestration(layer: ClipLayer, theme: Option<&ThemeDescriptor>) -> SectionOrchestration {
+    let mut orchestration = SectionOrchestration::default();
+    let instrumentation = theme.map(|t| t.instrumentation.clone()).unwrap_or_default();
+    match layer {
+        ClipLayer::Rhythm => {
+            orchestration.rhythm = if instrumentation.is_empty() {
+                vec!["tight kit".to_string(), "syncopated percussion".to_string()]
+            } else {
+                instrumentation
+            };
+        }
+        ClipLayer::Bass => {
+            orchestration.bass = if instrumentation.is_empty() {
+                vec!["electric bass".to_string(), "synth low-end".to_string()]
+            } else {
+                instrumentation
+            };
+        }
+        ClipLayer::Harmony => {
+            orchestration.harmony = if instrumentation.is_empty() {
+                vec!["chord stabs".to_string(), "lush pads".to_string()]
+            } else {
+                instrumentation
+            };
+        }
+        ClipLayer::Lead => {
+            orchestration.lead = if instrumentation.is_empty() {
+                vec!["expressive lead".to_string(), "hook synth".to_string()]
+            } else {
+                instrumentation
+            };
+        }
+        ClipLayer::Textures => {
+            orchestration.textures = if instrumentation.is_empty() {
+                vec!["ambient wash".to_string(), "granular shimmer".to_string()]
+            } else {
+                instrumentation
+            };
+        }
+        ClipLayer::Vocals => {
+            orchestration.vocals = if instrumentation.is_empty() {
+                vec!["wordless vocal".to_string(), "airy choir".to_string()]
+            } else {
+                instrumentation
+            };
+        }
+    }
+    orchestration
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AppConfig;
-    use crate::types::GenerationMetadata;
+    use crate::types::{
+        ClipLayer, CompositionPlan, CompositionSection, GenerationMetadata, GenerationMode,
+        SectionEnergy, SectionOrchestration, SectionRole, SessionClipSummary, SessionSummary,
+    };
+    use crate::{
+        config::AppConfig,
+        session::{ClipSlotStatus, SceneSnapshot, SessionSnapshot},
+    };
     use chrono::Utc;
     use serde_json::json;
+    use std::path::Path;
+
+    fn app_state_without_splash() -> AppState {
+        let mut state = AppState::new(AppConfig::default());
+        state.disable_splash();
+        state.pending_snapshot = None;
+        state
+    }
 
     #[test]
     fn completion_messages_real_pipeline() {
@@ -766,12 +1550,12 @@ mod tests {
         let metadata = GenerationMetadata {
             prompt: "dreamy pianos".into(),
             seed: Some(42),
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             duration_seconds: 8,
             extras: json!({
-                "backend": "riffusion",
+                "backend": "musicgen",
                 "placeholder": false,
-                "guidance_scale": 7.0,
+                "guidance_scale": 3.0,
                 "sample_rate": 44100,
                 "prompt_hash": "abc123ef"
             }),
@@ -787,12 +1571,12 @@ mod tests {
             local_path: PathBuf::from("/tmp/job123/job123.wav"),
         };
 
-        let (status_line, chat_line) = completion_messages(&status, &artifact);
-        assert!(status_line.contains("riffusion"));
-        assert!(status_line.contains("8s"));
-        assert!(status_line.contains("44100 Hz"));
-        assert!(status_line.contains("hash abc123ef"));
-        assert!(chat_line.contains("→ /tmp/job123/job123.wav"));
+        let line = completion_message(&status, &artifact);
+        assert!(line.contains("musicgen"));
+        assert!(line.contains("8s"));
+        assert!(line.contains("44100 Hz"));
+        assert!(line.contains("hash abc123ef"));
+        assert!(line.contains("→ /tmp/job123/job123.wav"));
     }
 
     #[test]
@@ -808,10 +1592,10 @@ mod tests {
         let metadata = GenerationMetadata {
             prompt: "stormy guitars".into(),
             seed: None,
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             duration_seconds: 6,
             extras: json!({
-                "backend": "riffusion",
+                "backend": "musicgen",
                 "placeholder": true,
                 "placeholder_reason": "pipeline_unavailable",
                 "prompt_hash": "deadbeef"
@@ -828,11 +1612,11 @@ mod tests {
             local_path: PathBuf::from("/tmp/job456/job456.wav"),
         };
 
-        let (status_line, chat_line) = completion_messages(&status, &artifact);
-        assert!(status_line.contains("placeholder via riffusion"));
-        assert!(status_line.contains("reason: pipeline_unavailable"));
-        assert!(!status_line.contains("Hz"));
-        assert!(chat_line.contains("hash deadbeef"));
+        let line = completion_message(&status, &artifact);
+        assert!(line.contains("placeholder via musicgen"));
+        assert!(line.contains("reason: pipeline_unavailable"));
+        assert!(!line.contains("Hz"));
+        assert!(line.contains("hash deadbeef"));
     }
 
     #[test]
@@ -848,10 +1632,10 @@ mod tests {
         let metadata = GenerationMetadata {
             prompt: "seeded run".into(),
             seed: Some(7),
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
             duration_seconds: 5,
             extras: json!({
-                "backend": "riffusion",
+                "backend": "musicgen",
                 "placeholder": false,
                 "guidance_scale": 4.0,
                 "sample_rate": 44100,
@@ -870,9 +1654,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/job789/job789.wav"),
         };
 
-        let (status_line, chat_line) = completion_messages(&status, &artifact);
-        assert!(status_line.contains("seed 7"));
-        assert!(chat_line.contains("seed 7"));
+        let line = completion_message(&status, &artifact);
+        assert!(line.contains("seed 7"));
     }
 
     #[test]
@@ -881,12 +1664,14 @@ mod tests {
             prompt: "test".into(),
             seed: Some(99),
             duration_seconds: 12,
-            model_id: "riffusion-v1".into(),
+            model_id: "musicgen-stereo-medium".into(),
+            session_id: None,
+            clip_layer: None,
+            clip_scene_index: None,
+            clip_bars: None,
+            mode: Some(GenerationMode::FullTrack),
             cfg_scale: Some(5.5),
             scheduler: None,
-            riffusion_num_inference_steps: None,
-            riffusion_guidance_scale: None,
-            riffusion_scheduler: None,
             musicgen_top_k: None,
             musicgen_top_p: None,
             musicgen_temperature: None,
@@ -898,15 +1683,383 @@ mod tests {
             plan: None,
         };
         let summary = format_request_summary(&request);
-        assert!(summary.contains("riffusion-v1"));
+        assert!(summary.contains("musicgen-stereo-medium"));
         assert!(summary.contains("12s"));
         assert!(summary.contains("cfg 5.5"));
         assert!(summary.contains("seed 99"));
     }
 
+    fn sample_plan() -> CompositionPlan {
+        CompositionPlan {
+            version: "v4".to_string(),
+            tempo_bpm: 120,
+            time_signature: "4/4".to_string(),
+            key: "C major".to_string(),
+            total_bars: 4,
+            total_duration_seconds: 8.0,
+            theme: None,
+            sections: vec![CompositionSection {
+                section_id: "s00".to_string(),
+                role: SectionRole::Motif,
+                label: "Motif".to_string(),
+                prompt: "motif".to_string(),
+                bars: 4,
+                target_seconds: 8.0,
+                energy: SectionEnergy::Medium,
+                model_id: None,
+                seed_offset: None,
+                transition: None,
+                motif_directive: None,
+                variation_axes: Vec::new(),
+                cadence_hint: None,
+                orchestration: SectionOrchestration::default(),
+            }],
+        }
+    }
+
+    fn session_summary_with_plan(plan: Option<CompositionPlan>) -> SessionSummary {
+        SessionSummary {
+            session_id: "session-test".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            name: None,
+            tempo_bpm: Some(120),
+            key: Some("C major".to_string()),
+            time_signature: Some("4/4".to_string()),
+            seed_job_id: None,
+            seed_prompt: Some("motif seed".to_string()),
+            seed_plan: plan,
+            theme: None,
+            motif: None,
+            clip_count: 0,
+            clips: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn apply_pending_snapshot_restores_layout() {
+        let mut state = app_state_without_splash();
+        state.showing_splash = true;
+        state.pending_snapshot = Some(SessionSnapshot {
+            session_id: Some("session-abc123".to_string()),
+            scenes: vec![SceneSnapshot { index: 0, name: "Intro".to_string() }],
+            focused_layer: ClipLayer::Lead,
+            focused_scene: 0,
+            active_layer: Some(ClipLayer::Lead),
+            active_scene: Some(0),
+        });
+
+        state.status_lines.clear();
+        assert!(state.apply_pending_snapshot());
+        assert!(!state.showing_splash());
+        assert_eq!(state.restored_session_id, Some("session-abc123".to_string()));
+        assert_eq!(state.session_view.focused(), (ClipLayer::Lead, 0));
+        assert!(state
+            .status_lines
+            .last()
+            .expect("expected status line")
+            .contains("Restored session layout"));
+    }
+
+    #[test]
+    fn reset_session_state_clears_session_context() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        state.session = Some(session_summary_with_plan(Some(plan.clone())));
+        state.restored_session_id = Some("session-old".to_string());
+
+        let request = GenerationRequest {
+            prompt: "inspired groove".to_string(),
+            seed: None,
+            duration_seconds: 12,
+            model_id: "musicgen-stereo-medium".to_string(),
+            session_id: Some("session-old".to_string()),
+            clip_layer: None,
+            clip_scene_index: None,
+            clip_bars: None,
+            mode: Some(GenerationMode::FullTrack),
+            cfg_scale: Some(5.5),
+            scheduler: None,
+            musicgen_top_k: None,
+            musicgen_top_p: None,
+            musicgen_temperature: None,
+            musicgen_cfg_coef: None,
+            musicgen_two_step_cfg: None,
+            output_sample_rate: None,
+            output_bit_depth: None,
+            output_format: None,
+            plan: Some(plan.clone()),
+        };
+        let status = GenerationStatus {
+            job_id: "job-123".to_string(),
+            state: JobState::Queued,
+            progress: 0.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        state.jobs.insert(
+            status.job_id.clone(),
+            JobEntry {
+                prompt: "inspired groove".to_string(),
+                request,
+                status: status.clone(),
+                plan,
+                artifact: None,
+            },
+        );
+        state.focused_job = Some(status.job_id.clone());
+        state.playback = Some(PlaybackState {
+            job_id: status.job_id.clone(),
+            path: PathBuf::from("clip.wav"),
+            duration: StdDuration::from_secs(12),
+            started_at: Utc::now(),
+            is_playing: true,
+        });
+
+        state.reset_session_state();
+
+        assert!(state.session.is_none());
+        assert!(state.restored_session_id.is_none());
+        assert!(state.jobs.is_empty());
+        assert!(state.focused_job.is_none());
+        assert!(state.playback.is_none());
+        assert_eq!(state.session_view.focused(), (ClipLayer::Rhythm, 0));
+        assert!(!state.showing_splash());
+    }
+
+    #[test]
+    fn toggle_active_clip_target_stays_selected_once_active() {
+        let mut state = app_state_without_splash();
+        if let Some((layer, scene)) = state.active_clip_target() {
+            // Clear any persisted selection from a prior CLI snapshot on disk.
+            assert!(!state.session_view.toggle_active_target(layer, scene));
+        }
+        let initial_target = state.session_view.focused();
+        assert!(state.active_clip_target().is_none());
+        assert!(state.toggle_active_clip_target());
+        assert_eq!(state.active_clip_target(), Some(initial_target));
+        assert!(!state.toggle_active_clip_target());
+        assert_eq!(state.active_clip_target(), None);
+    }
+
+    #[test]
+    fn session_start_auto_selects_clip_target_once() {
+        let mut state = app_state_without_splash();
+        let summary = session_summary_with_plan(Some(sample_plan()));
+        state.handle_event(AppEvent::SessionStarted { summary: summary.clone() });
+        let initial_target = state.active_clip_target().expect("target should be auto selected");
+        assert_eq!(initial_target, state.session_view.focused());
+
+        assert!(!state.session_view.toggle_active_target(initial_target.0, initial_target.1));
+        assert!(state.active_clip_target().is_none());
+
+        state.handle_event(AppEvent::SessionUpdated { summary });
+        assert!(state.active_clip_target().is_none());
+    }
+
+    #[test]
+    fn build_clip_payload_rejects_missing_motif() {
+        let mut state = app_state_without_splash();
+        state.session = Some(session_summary_with_plan(None));
+        let error = state
+            .build_clip_payload_for(ClipLayer::Bass, 0, Some("groovy bass"), None)
+            .unwrap_err();
+        assert!(error.contains("Motif not ready"), "expected motif readiness error, got {error}");
+    }
+
+    #[test]
+    fn build_clip_payload_targets_selected_layer() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        state.session = Some(session_summary_with_plan(Some(plan.clone())));
+        let overrides = GenerationOverrides {
+            model_id: Some("musicgen-stereo-small".to_string()),
+            ..GenerationOverrides::default()
+        };
+        let (request, built_plan, used_prompt) = state
+            .build_clip_payload_for(ClipLayer::Lead, 0, Some("lead line"), Some(&overrides))
+            .unwrap();
+        assert_eq!(request.clip_layer, Some(ClipLayer::Lead));
+        assert_eq!(request.clip_scene_index, Some(0));
+        assert_eq!(request.mode, Some(GenerationMode::Clip));
+        assert_eq!(used_prompt, "lead line");
+        assert_eq!(built_plan.sections.len(), 1);
+        assert!(built_plan.sections[0].variation_axes.contains(&"lead".to_string()));
+        assert!(plan.sections[0].variation_axes.is_empty());
+        assert_eq!(request.model_id, "musicgen-stereo-small");
+    }
+
+    #[test]
+    fn motif_payload_respects_model_overrides() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        state.session = Some(session_summary_with_plan(Some(plan)));
+        let overrides = GenerationOverrides {
+            model_id: Some("musicgen-stereo-small".to_string()),
+            ..GenerationOverrides::default()
+        };
+        let (request, built_plan) =
+            state.build_motif_payload_with_overrides("motif focus", Some(&overrides)).unwrap();
+        assert_eq!(request.mode, Some(GenerationMode::Motif));
+        assert_eq!(request.model_id, "musicgen-stereo-small");
+        assert_eq!(built_plan.sections.len(), 1);
+    }
+
+    #[test]
+    fn clip_job_queue_marks_slot_pending() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        let summary = session_summary_with_plan(Some(plan));
+        state.session = Some(summary.clone());
+        state.session_view.apply_summary(&summary);
+
+        let (request, built_plan, prompt) =
+            state.build_clip_payload_for(ClipLayer::Lead, 1, Some("lead layer"), None).unwrap();
+        let status = GenerationStatus {
+            job_id: "job-clip-1".into(),
+            state: JobState::Queued,
+            progress: 0.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        state.handle_event(AppEvent::JobQueued {
+            status: status.clone(),
+            prompt: prompt.clone(),
+            request: request.clone(),
+            plan: built_plan.clone(),
+        });
+
+        let slot = state.session_view.slot(ClipLayer::Lead, 1);
+        assert_eq!(slot.status, ClipSlotStatus::Pending);
+        assert_eq!(slot.prompt.as_deref(), Some("lead layer"));
+        assert_eq!(slot.job_id.as_deref(), Some("job-clip-1"));
+        assert_eq!(
+            state.session_view.pending_scene_for_job("job-clip-1"),
+            Some((ClipLayer::Lead, 1))
+        );
+    }
+
+    #[test]
+    fn clip_job_completion_marks_slot_ready() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        let summary = session_summary_with_plan(Some(plan.clone()));
+        state.session = Some(summary.clone());
+        state.session_view.apply_summary(&summary);
+
+        let (request, built_plan, prompt) =
+            state.build_clip_payload_for(ClipLayer::Bass, 2, Some("bass groove"), None).unwrap();
+        let queued_status = GenerationStatus {
+            job_id: "job-clip-2".into(),
+            state: JobState::Queued,
+            progress: 0.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+        state.handle_event(AppEvent::JobQueued {
+            status: queued_status.clone(),
+            prompt: prompt.clone(),
+            request: request.clone(),
+            plan: built_plan.clone(),
+        });
+
+        let artifact_plan =
+            CompositionPlan { sections: built_plan.sections.clone(), ..built_plan.clone() };
+        let metadata = GenerationMetadata {
+            prompt: prompt.clone(),
+            seed: Some(7),
+            model_id: request.model_id.clone(),
+            duration_seconds: 12,
+            extras: json!({ "backend": "musicgen", "placeholder": false }),
+            plan: Some(artifact_plan.clone()),
+        };
+        let artifact = LocalArtifact {
+            descriptor: GenerationArtifact {
+                job_id: "job-clip-2".into(),
+                artifact_path: "/tmp/job-clip-2.wav".into(),
+                metadata,
+            },
+            local_path: PathBuf::from("/tmp/job-clip-2/job-clip-2.wav"),
+        };
+        let completed_status =
+            GenerationStatus { state: JobState::Succeeded, progress: 1.0, ..queued_status.clone() };
+
+        state.handle_event(AppEvent::JobCompleted {
+            status: completed_status,
+            artifact: artifact.clone(),
+        });
+
+        let slot = state.session_view.slot(ClipLayer::Bass, 2);
+        assert_eq!(slot.status, ClipSlotStatus::Ready);
+        assert_eq!(slot.artifact.as_deref(), Some(Path::new("/tmp/job-clip-2/job-clip-2.wav")));
+        assert_eq!(slot.duration_seconds, Some(12.0));
+        assert_eq!(slot.bars, artifact_plan.sections.first().map(|section| section.bars as u8));
+        assert!(state.session_view.pending_scene_for_job("job-clip-2").is_none());
+    }
+
+    #[test]
+    fn session_updates_prefer_local_clip_paths() {
+        let mut state = app_state_without_splash();
+        let plan = sample_plan();
+        let mut summary = session_summary_with_plan(Some(plan.clone()));
+        summary.clips.push(SessionClipSummary {
+            job_id: "job-clip-local".to_string(),
+            prompt: "acid bass".to_string(),
+            state: JobState::Succeeded,
+            duration_seconds: Some(8.0),
+            artifact_path: Some("/remote/session-clip.wav".to_string()),
+            layer: Some(ClipLayer::Bass),
+            scene_index: Some(0),
+            bars: Some(4),
+        });
+        summary.clip_count = summary.clips.len();
+        state.session = Some(summary.clone());
+        state.session_view.apply_summary(&summary);
+
+        let (request, built_plan, prompt) =
+            state.build_clip_payload_for(ClipLayer::Bass, 0, Some("acid bass"), None).unwrap();
+        let status = GenerationStatus {
+            job_id: "job-clip-local".into(),
+            state: JobState::Succeeded,
+            progress: 1.0,
+            message: None,
+            updated_at: Utc::now(),
+        };
+
+        let metadata = GenerationMetadata {
+            prompt: prompt.clone(),
+            seed: request.seed,
+            model_id: request.model_id.clone(),
+            duration_seconds: request.duration_seconds,
+            extras: json!({ "clip": { "session_id": "session-test", "layer": "bass" } }),
+            plan: Some(built_plan.clone()),
+        };
+
+        let artifact = LocalArtifact {
+            descriptor: GenerationArtifact {
+                job_id: "job-clip-local".into(),
+                artifact_path: "/remote/session-clip.wav".into(),
+                metadata,
+            },
+            local_path: PathBuf::from("/local/session-clip.wav"),
+        };
+
+        state.jobs.insert(
+            "job-clip-local".into(),
+            JobEntry { prompt, request, status, plan: built_plan, artifact: Some(artifact) },
+        );
+
+        state.handle_event(AppEvent::SessionUpdated { summary: summary.clone() });
+
+        let slot = state.session_view.slot(ClipLayer::Bass, 0);
+        assert_eq!(slot.artifact.as_deref(), Some(Path::new("/local/session-clip.wav")));
+    }
+
     #[test]
     fn handle_command_updates_duration() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let result = state.handle_command("/duration 120");
         assert!(result.is_ok());
         assert_eq!(state.generation_config.duration_seconds, 120);
@@ -914,14 +2067,14 @@ mod tests {
 
     #[test]
     fn handle_command_rejects_invalid_cfg() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let result = state.handle_command("/cfg 80");
         assert!(result.is_err());
     }
 
     #[test]
     fn build_request_reflects_generation_config() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let _ = state.handle_command("/duration 120");
         let _ = state.handle_command("/cfg 6.5");
         let _ = state.handle_command("/seed 77");
@@ -930,13 +2083,32 @@ mod tests {
         assert_eq!(request.cfg_scale, Some(6.5));
         assert_eq!(request.seed, Some(77));
         assert_eq!(request.model_id, "musicgen-stereo-medium");
+        assert_eq!(request.mode, Some(GenerationMode::FullTrack));
         assert!(request.plan.is_some());
         assert_eq!(plan.sections.len(), request.plan.as_ref().unwrap().sections.len());
     }
 
     #[test]
+    fn build_generation_payload_supports_motif_override() {
+        let state = app_state_without_splash();
+        let overrides = GenerationOverrides {
+            model_id: Some("musicgen-stereo-medium".to_string()),
+            duration_seconds: Some(MOTIF_PRESET_DURATION_SECONDS),
+            mode: Some(GenerationMode::Motif),
+        };
+        let (request, plan) =
+            state.build_generation_payload_with_overrides("motif spotlight", Some(&overrides));
+        assert_eq!(request.mode, Some(GenerationMode::Motif));
+        assert_eq!(request.duration_seconds, MOTIF_PRESET_DURATION_SECONDS);
+        assert_eq!(plan.sections.len(), 1);
+        assert!(matches!(plan.sections[0].role, SectionRole::Motif));
+        let summary = format_request_summary(&request);
+        assert!(summary.contains("mode motif"));
+    }
+
+    #[test]
     fn ingest_health_payload_populates_backend_status() {
-        let mut state = AppState::new(AppConfig::default());
+        let mut state = app_state_without_splash();
         let payload = json!({
             "backend_status": {
                 "musicgen": {

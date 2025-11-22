@@ -1,9 +1,15 @@
+mod splash;
+
 use crate::{
     app::{
-        format_request_summary, AppCommand, AppEvent, AppState, ChatRole, FocusedPane, InputMode,
-        JobEntry,
+        format_request_summary, AppCommand, AppEvent, AppState, FocusedPane, GenerationOverrides,
+        InputMode, JobEntry, SplashSelection,
     },
-    types::{CompositionSection, JobState, SectionEnergy, SectionOrchestration},
+    session::{clip_layer_label, ClipSlotStatus, SessionScene, LAYER_ORDER, MAX_SCENES},
+    types::{
+        ClipLayer, CompositionSection, GenerationMode, JobState, SectionEnergy,
+        SectionOrchestration, SessionCreateRequest,
+    },
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -12,7 +18,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Wrap},
     Terminal,
 };
 use serde::Deserialize;
@@ -30,7 +36,12 @@ pub fn run<B: ratatui::backend::Backend>(
         drain_events(app, event_rx);
         terminal.draw(|frame| draw_ui(frame, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
+        let poll_duration = if app.showing_splash() {
+            Duration::from_millis(16)
+        } else {
+            Duration::from_millis(100)
+        };
+        if event::poll(poll_duration)? {
             if let Event::Key(key) = event::read()? {
                 if handle_key(app, &command_tx, key)? {
                     break;
@@ -53,6 +64,11 @@ fn drain_events(app: &mut AppState, event_rx: &mut UnboundedReceiver<AppEvent>) 
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
+    if app.showing_splash() {
+        splash::render(frame, app);
+        return;
+    }
+
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
@@ -67,11 +83,12 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
 
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(3)])
+        .constraints([Constraint::Length(5), Constraint::Min(8), Constraint::Length(3)])
         .split(body[1]);
 
-    render_chat(frame, left[0], app);
-    render_prompt(frame, left[1], app);
+    render_motif(frame, left[0], app);
+    render_session_view(frame, left[1], app);
+    render_prompt(frame, left[2], app);
 
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -87,52 +104,238 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &AppState) {
     render_status(frame, right[2], app);
 }
 
-fn render_chat(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
+fn request_new_session(
+    app: &mut AppState,
+    command_tx: &UnboundedSender<AppCommand>,
+    prompt: Option<String>,
+) {
+    app.reset_session_state();
+    if let Err(err) = crate::session_store::clear_snapshot() {
+        app.push_status_line(format!("Failed to clear session snapshot: {err}"));
+    } else {
+        app.push_status_line("Cleared saved session snapshot.".to_string());
+    }
+    let payload =
+        SessionCreateRequest { prompt: prompt.clone(), ..SessionCreateRequest::default() };
+    let seed_request = prompt.as_ref().and_then(|text| app.build_session_seed_payload(text).ok());
+    app.pending_session_seed_prompt = prompt.clone();
+    app.mark_session_request_pending();
+    if command_tx
+        .send(AppCommand::CreateSession { payload, seed_prompt: prompt, seed_request })
+        .is_err()
+    {
+        app.clear_session_request_pending();
+        let message = "Failed to request session creation; worker channel closed".to_string();
+        app.push_status_line(message);
+    } else {
+        app.push_status_line("Requesting fresh session from worker…".to_string());
+    }
+}
+
+fn render_motif(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
+    let mut block = Block::default().title("Motif").borders(Borders::ALL);
+    if app.focused_pane == FocusedPane::Motif {
+        block = block.border_style(pane_border(app, FocusedPane::Motif));
+    }
+
     let mut lines: Vec<Line> = Vec::new();
-
-    for entry in &app.chat {
-        let prefix = format!("[{}]", entry.role.label());
-        let ts = entry.timestamp.format("%H:%M:%S").to_string();
-        lines.push(Line::from(vec![
-            Span::styled(ts, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
-            Span::raw(" "),
-            Span::styled(prefix, chat_style(&entry.role)),
-        ]));
-
-        for line in entry.content.lines() {
+    match &app.session {
+        None => {
             lines.push(Line::from(vec![Span::styled(
-                format!("  {line}"),
-                Style::default().fg(Color::White),
+                "No active session — run /session <prompt> to begin.",
+                Style::default().fg(Color::DarkGray),
             )]));
         }
-
-        lines.push(Line::from(Span::raw("")));
+        Some(session) => {
+            if let Some(plan) = &session.seed_plan {
+                lines.push(Line::from(vec![Span::styled(
+                    "Motif ready",
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                )]));
+                let motif_text = session
+                    .seed_prompt
+                    .as_deref()
+                    .or_else(|| plan.theme.as_ref().map(|theme| theme.motif.as_str()))
+                    .unwrap_or("Captured motif");
+                lines.push(Line::from(vec![Span::styled(
+                    format!("\"{motif_text}\""),
+                    Style::default().fg(Color::LightCyan),
+                )]));
+                let tempo = session
+                    .tempo_bpm
+                    .map(|bpm| format!("{bpm} BPM"))
+                    .unwrap_or_else(|| "tempo pending".to_string());
+                let key = session.key.as_deref().unwrap_or("key pending");
+                let time_signature =
+                    session.time_signature.as_deref().unwrap_or(plan.time_signature.as_str());
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{tempo} · {key} · {time_signature}"),
+                    Style::default().fg(Color::Gray),
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    "Select a layer (Insert → Enter) before submitting a clip prompt.",
+                    Style::default().fg(Color::DarkGray),
+                )]));
+            } else {
+                let job_status = session
+                    .seed_job_id
+                    .as_ref()
+                    .and_then(|job_id| app.jobs.get(job_id).map(|job| job.status.state.clone()));
+                let status_text = match job_status {
+                    Some(JobState::Queued) => "Motif queued — waiting for worker…",
+                    Some(JobState::Running) => "Motif rendering — stay tuned…",
+                    Some(JobState::Failed) => "Motif failed — submit a new motif prompt.",
+                    Some(JobState::Succeeded) => "Motif finalising…",
+                    None => "Motif missing — submit a prompt to seed the session.",
+                };
+                lines.push(Line::from(vec![Span::styled(
+                    status_text,
+                    Style::default().fg(Color::Yellow),
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    "The first prompt you submit will capture the motif (≈16s).",
+                    Style::default().fg(Color::DarkGray),
+                )]));
+            }
+        }
     }
 
     if lines.is_empty() {
-        lines.push(Line::from("No messages yet."));
+        lines.push(Line::from(""));
     }
 
-    let mut block = Block::default().title("Conversation").borders(Borders::ALL);
-    if app.focused_pane == FocusedPane::Conversation {
-        block = block.border_style(pane_border(app, FocusedPane::Conversation));
-    }
-
-    let total_lines = lines.len();
-    let height = area.height as usize;
-    let max_offset = total_lines.saturating_sub(height);
-    let desired = if app.chat_following {
-        max_offset
-    } else {
-        max_offset.saturating_sub(app.chat_scroll.min(max_offset))
-    };
-    let paragraph =
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }).scroll((desired as u16, 0));
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }
 
+fn render_session_view(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
+    let scenes = app.session_view.scenes();
+    let mut header_cells: Vec<Cell> = Vec::new();
+    header_cells.push(Cell::from(Span::styled(
+        "Layer",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    if scenes.is_empty() {
+        header_cells.push(Cell::from("Scene 1"));
+    } else {
+        for scene in scenes {
+            header_cells.push(Cell::from(scene.name.clone()));
+        }
+    }
+
+    let header = Row::new(header_cells).height(1).bottom_margin(0);
+
+    let (focused_layer, focused_scene) = app.session_view.focused();
+    let active_target = app.session_view.active_target();
+    let active_layer = active_target.map(|(layer, _)| layer);
+
+    let mut rows: Vec<Row> = Vec::new();
+    let display_scenes = if scenes.is_empty() {
+        vec![SessionScene { index: 0, name: "Scene 1".to_string() }]
+    } else {
+        scenes.to_vec()
+    };
+
+    for layer in LAYER_ORDER {
+        let mut cells: Vec<Cell> = Vec::new();
+        let layer_label = clip_layer_label(layer);
+        let mut label_style = Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD);
+        let is_active_layer = active_layer == Some(layer);
+        if is_active_layer {
+            label_style = label_style.fg(Color::Yellow);
+        }
+        if focused_layer == layer {
+            label_style = label_style.add_modifier(Modifier::REVERSED);
+        }
+        let marker_style = if is_active_layer {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let marker = if is_active_layer { "[x]" } else { "[ ]" };
+        let label_line = Line::from(vec![
+            Span::styled(marker, marker_style),
+            Span::raw(" "),
+            Span::styled(layer_label, label_style),
+        ]);
+        cells.push(Cell::from(label_line));
+
+        for scene in &display_scenes {
+            let slot = app.session_view.slot(layer, scene.index);
+            let mut spans: Vec<Span> = Vec::new();
+            let playing = app.session_view.layer_playing(layer) == Some(scene.index);
+            if playing {
+                spans.push(Span::styled(
+                    "▶ ",
+                    Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+                ));
+            }
+            let primary_text = slot
+                .prompt
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(|text| truncate_text(text, 18))
+                .unwrap_or_else(|| "—".to_string());
+            let mut cell_style = match slot.status {
+                ClipSlotStatus::Empty => Style::default().fg(Color::DarkGray),
+                ClipSlotStatus::Pending => Style::default().fg(Color::Blue),
+                ClipSlotStatus::Rendering => Style::default().fg(Color::LightBlue),
+                ClipSlotStatus::Ready => Style::default().fg(Color::Green),
+                ClipSlotStatus::Failed => Style::default().fg(Color::Red),
+            };
+            if active_target == Some((layer, scene.index)) {
+                cell_style = cell_style
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED);
+            } else if focused_layer == layer && focused_scene == scene.index {
+                cell_style = cell_style.add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(primary_text, cell_style));
+
+            let status_text = match slot.status {
+                ClipSlotStatus::Empty => "".to_string(),
+                ClipSlotStatus::Pending => "(queued)".to_string(),
+                ClipSlotStatus::Rendering => "(rendering)".to_string(),
+                ClipSlotStatus::Ready => {
+                    let bars = slot.bars.map(|b| format!("{b} bars")).unwrap_or_default();
+                    bars
+                }
+                ClipSlotStatus::Failed => "(failed)".to_string(),
+            };
+            let mut lines = vec![Line::from(spans)];
+            if !status_text.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    status_text,
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                )));
+            }
+            cells.push(Cell::from(lines));
+        }
+
+        rows.push(Row::new(cells).height(2));
+    }
+
+    let mut block = Block::default().title("Session").borders(Borders::ALL);
+    if app.focused_pane == FocusedPane::SessionView {
+        block = block.border_style(pane_border(app, FocusedPane::SessionView));
+    }
+
+    let widths: Vec<Constraint> = std::iter::once(Constraint::Length(12))
+        .chain(
+            std::iter::repeat(Constraint::Ratio(1, (display_scenes.len().max(1)) as u32))
+                .take(display_scenes.len()),
+        )
+        .collect();
+
+    let table = Table::new(rows, widths).header(header).block(block).column_spacing(1);
+
+    frame.render_widget(table, area);
+}
+
 fn render_prompt(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
-    let mut block = Block::default().title("Prompt").borders(Borders::ALL);
+    let prompt_title = app.prompt_panel_title();
+    let mut block = Block::default().title(prompt_title).borders(Borders::ALL);
     if app.focused_pane == FocusedPane::Prompt {
         block = block.border_style(pane_border(app, FocusedPane::Prompt));
     } else {
@@ -349,6 +552,30 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &AppState) {
     }
 
     lines.push(Line::from(vec![Span::raw(format!("Config: {}", app.config_summary()))]));
+    if let Some(session) = &app.session {
+        let label = AppState::format_session_label(session);
+        let tempo = session
+            .tempo_bpm
+            .map(|bpm| format!("{bpm} BPM"))
+            .unwrap_or_else(|| "tempo pending".to_string());
+        let key = session.key.as_deref().unwrap_or("key pending");
+        lines.push(Line::from(vec![Span::styled(
+            format!("Session {label} · {tempo} · {key} · {} clips", session.clip_count),
+            Style::default().fg(Color::LightCyan),
+        )]));
+        if let Some(seed_prompt) = &session.seed_prompt {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  Seed prompt: {}", truncate_text(seed_prompt, 60)),
+                Style::default().fg(Color::Gray),
+            )]));
+        }
+    }
+    if let Some(model) = app.last_submission_model() {
+        lines.push(Line::from(vec![Span::styled(
+            format!("Last render: {model}"),
+            Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+        )]));
+    }
     if app.status_lines.is_empty() {
         lines.push(Line::from(vec![Span::raw("No activity yet.")]))
     } else {
@@ -443,30 +670,25 @@ fn handle_key(
     command_tx: &UnboundedSender<AppCommand>,
     key: crossterm::event::KeyEvent,
 ) -> Result<bool> {
+    if app.showing_splash() {
+        return handle_splash_key(app, command_tx, key);
+    }
+
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
-        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('q') if matches!(app.input_mode, InputMode::Normal) => return Ok(true),
         KeyCode::Char('s') if matches!(app.focused_pane, FocusedPane::Status) => {
             let _ = command_tx.send(AppCommand::StopPlayback);
         }
-        KeyCode::Char('i') => {
-            if app.input_mode != InputMode::Insert {
-                app.input_mode = InputMode::Insert;
-                if matches!(app.focused_pane, FocusedPane::Conversation) {
-                    app.chat_following = false;
-                }
-                if matches!(app.focused_pane, FocusedPane::Status) {
-                    app.status_following = false;
-                }
+        KeyCode::Char('i') if matches!(app.input_mode, InputMode::Normal) => {
+            app.input_mode = InputMode::Insert;
+            if matches!(app.focused_pane, FocusedPane::Status) {
+                app.status_following = false;
             }
         }
         KeyCode::Esc => {
             if app.input_mode == InputMode::Insert {
                 app.input_mode = InputMode::Normal;
-            }
-            if matches!(app.focused_pane, FocusedPane::Conversation) {
-                app.chat_scroll = 0;
-                app.chat_following = true;
             }
             if matches!(app.focused_pane, FocusedPane::Status) {
                 app.status_scroll = 0;
@@ -488,56 +710,69 @@ fn handle_key(
         KeyCode::Up => {
             if matches!(app.input_mode, InputMode::Insert) {
                 match app.focused_pane {
-                    FocusedPane::Conversation => app.increment_chat_scroll(1),
+                    FocusedPane::SessionView => app.session_view.focus_prev_layer(),
                     FocusedPane::Status => app.increment_status_scroll(1),
                     FocusedPane::Jobs => app.select_previous_job(),
                     _ => {}
                 }
             } else {
                 match app.focused_pane {
-                    FocusedPane::Prompt => app.focused_pane = FocusedPane::Conversation,
-                    FocusedPane::Conversation => app.focused_pane = FocusedPane::StatusBar,
+                    FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
                     FocusedPane::Status => app.focused_pane = FocusedPane::Jobs,
-                    FocusedPane::Jobs => app.focused_pane = FocusedPane::StatusBar,
-                    _ => {}
+                    FocusedPane::Jobs => app.focused_pane = FocusedPane::SessionView,
+                    FocusedPane::SessionView => app.focused_pane = FocusedPane::Motif,
+                    FocusedPane::Motif => app.focused_pane = FocusedPane::StatusBar,
+                    FocusedPane::StatusBar => {}
                 }
             }
         }
         KeyCode::Down => {
             if matches!(app.input_mode, InputMode::Insert) {
                 match app.focused_pane {
-                    FocusedPane::Conversation => app.increment_chat_scroll(-1),
+                    FocusedPane::SessionView => app.session_view.focus_next_layer(),
                     FocusedPane::Status => app.increment_status_scroll(-1),
                     FocusedPane::Jobs => app.select_next_job(),
                     _ => {}
                 }
             } else {
                 match app.focused_pane {
-                    FocusedPane::StatusBar => app.focused_pane = FocusedPane::Conversation,
-                    FocusedPane::Conversation => app.focused_pane = FocusedPane::Prompt,
-                    FocusedPane::Jobs => app.focused_pane = FocusedPane::Status,
-                    _ => {}
+                    FocusedPane::StatusBar => app.focused_pane = FocusedPane::Motif,
+                    FocusedPane::Motif => app.focused_pane = FocusedPane::SessionView,
+                    FocusedPane::SessionView => app.focused_pane = FocusedPane::Prompt,
+                    FocusedPane::Prompt => app.focused_pane = FocusedPane::Status,
+                    FocusedPane::Status => app.focused_pane = FocusedPane::Jobs,
+                    FocusedPane::Jobs => {}
                 }
             }
         }
-        KeyCode::Left if matches!(app.input_mode, InputMode::Normal) => {
-            app.focused_pane = match app.focused_pane {
-                FocusedPane::Prompt => FocusedPane::Jobs,
-                FocusedPane::Conversation => FocusedPane::Status,
-                FocusedPane::Status => FocusedPane::Conversation,
-                FocusedPane::Jobs => FocusedPane::Status,
-                FocusedPane::StatusBar => FocusedPane::Status,
-            };
+        KeyCode::Left
+            if matches!(app.input_mode, InputMode::Insert)
+                && matches!(app.focused_pane, FocusedPane::SessionView) =>
+        {
+            app.session_view.focus_prev_scene();
         }
-        KeyCode::Right if matches!(app.input_mode, InputMode::Normal) => {
-            app.focused_pane = match app.focused_pane {
-                FocusedPane::Prompt => FocusedPane::Jobs,
-                FocusedPane::Conversation => FocusedPane::Status,
-                FocusedPane::Status => FocusedPane::Conversation,
-                FocusedPane::Jobs => FocusedPane::Prompt,
-                FocusedPane::StatusBar => FocusedPane::Status,
-            };
+        KeyCode::Left if matches!(app.input_mode, InputMode::Normal) => match app.focused_pane {
+            FocusedPane::SessionView => app.focused_pane = FocusedPane::Status,
+            FocusedPane::Prompt => app.focused_pane = FocusedPane::Jobs,
+            FocusedPane::Status => app.focused_pane = FocusedPane::SessionView,
+            FocusedPane::Jobs => app.focused_pane = FocusedPane::Status,
+            FocusedPane::StatusBar => app.focused_pane = FocusedPane::Status,
+            FocusedPane::Motif => app.focused_pane = FocusedPane::StatusBar,
+        },
+        KeyCode::Right
+            if matches!(app.input_mode, InputMode::Insert)
+                && matches!(app.focused_pane, FocusedPane::SessionView) =>
+        {
+            app.session_view.focus_next_scene();
         }
+        KeyCode::Right if matches!(app.input_mode, InputMode::Normal) => match app.focused_pane {
+            FocusedPane::SessionView => app.focused_pane = FocusedPane::Prompt,
+            FocusedPane::Prompt => app.focused_pane = FocusedPane::Jobs,
+            FocusedPane::Status => app.focused_pane = FocusedPane::Prompt,
+            FocusedPane::Jobs => app.focused_pane = FocusedPane::Status,
+            FocusedPane::StatusBar => app.focused_pane = FocusedPane::Status,
+            FocusedPane::Motif => app.focused_pane = FocusedPane::SessionView,
+        },
         KeyCode::Tab if matches!(app.input_mode, InputMode::Normal) => app.focus_next(),
         KeyCode::BackTab if matches!(app.input_mode, InputMode::Normal) => app.focus_previous(),
         KeyCode::Backspace
@@ -545,6 +780,36 @@ fn handle_key(
                 && matches!(app.input_mode, InputMode::Insert) =>
         {
             app.input.pop();
+        }
+        KeyCode::Enter
+            if matches!(app.input_mode, InputMode::Insert)
+                && matches!(app.focused_pane, FocusedPane::SessionView) =>
+        {
+            let activated = app.toggle_active_clip_target();
+            let (layer, scene_index) = app.session_view.focused();
+            let layer_label = clip_layer_label(layer);
+            let scene_name = app.session_view.scene_name(scene_index);
+            if activated {
+                app.push_status_line(format!("Selected {layer_label} · {scene_name}"));
+            } else {
+                app.push_status_line(format!("Deselected {layer_label} · {scene_name}"));
+            }
+        }
+        KeyCode::Enter
+            if matches!(app.input_mode, InputMode::Normal)
+                && matches!(app.focused_pane, FocusedPane::SessionView) =>
+        {
+            if let Some(context) = app.clip_launch_context() {
+                let _ = command_tx.send(AppCommand::LaunchClip {
+                    layer: context.layer,
+                    scene_index: context.scene_index,
+                    path: context.path,
+                    tempo_bpm: context.tempo_bpm,
+                    beats_per_bar: context.beats_per_bar,
+                });
+            } else {
+                app.push_status_line("Clip not ready yet".to_string());
+            }
         }
         KeyCode::Enter
             if matches!(app.focused_pane, FocusedPane::Prompt)
@@ -556,33 +821,130 @@ fn handle_key(
                 return Ok(false);
             }
 
-            if line.starts_with('/') {
-                match app.handle_command(&line) {
-                    Ok(message) => {
-                        app.push_status_line(message.clone());
-                        app.append_chat(ChatRole::System, message);
-                    }
-                    Err(err) => {
-                        let message = format!("Command error: {err}");
-                        app.push_status_line(message.clone());
-                        app.append_chat(ChatRole::System, message);
-                    }
+            let mut prompt_text = line.clone();
+            let mut inline_overrides: Option<GenerationOverrides> = None;
+
+            if let Some(stripped) = line.strip_prefix('/') {
+                let trimmed = stripped.trim_start();
+                if trimmed.is_empty() {
+                    dispatch_app_command(app, &command_tx, &line);
+                    app.input.clear();
+                    return Ok(false);
                 }
+
+                if let Some(command_token) = trimmed.split_whitespace().next() {
+                    let command_lower = command_token.to_ascii_lowercase();
+                    let rest = trimmed[command_token.len()..].trim_start();
+
+                    if let Some(inline) = app.inline_command_for(&command_lower) {
+                        if rest.is_empty() {
+                            let message = inline.usage_hint.to_string();
+                            app.push_status_line(message);
+                            app.input.clear();
+                            return Ok(false);
+                        }
+                        inline_overrides = Some(inline.overrides);
+                        prompt_text = rest.to_string();
+                    } else {
+                        dispatch_app_command(app, &command_tx, &line);
+                        app.input.clear();
+                        return Ok(false);
+                    }
+                } else {
+                    app.input.clear();
+                    return Ok(false);
+                }
+            }
+
+            if prompt_text.is_empty() {
                 app.input.clear();
                 return Ok(false);
             }
 
-            let prompt = line;
-            let (request, plan) = app.build_generation_payload(&prompt);
-            app.append_chat(ChatRole::User, prompt.clone());
-            if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {
-                app.push_status_line("Failed to submit prompt; worker channel closed".into());
+            let prompt = prompt_text;
+            let overrides_ref = inline_overrides.as_ref();
+            let override_mode = overrides_ref.and_then(|opts| opts.mode);
+
+            if app.session_request_pending() {
+                app.push_status_line(
+                    "Session is provisioning; wait for it to finish before submitting prompts."
+                        .into(),
+                );
+            } else if app.session.is_some()
+                && !matches!(override_mode, Some(GenerationMode::Motif | GenerationMode::FullTrack))
+            {
+                if !app.motif_ready() {
+                    match app.build_motif_payload_with_overrides(&prompt, overrides_ref) {
+                        Ok((request, plan)) => {
+                            app.push_status_line("Queued motif seed (~16s)".to_string());
+                            if command_tx
+                                .send(AppCommand::SubmitPrompt { prompt, request, plan })
+                                .is_err()
+                            {
+                                app.push_status_line(
+                                    "Failed to submit motif; worker channel closed".into(),
+                                );
+                            }
+                        }
+                        Err(err) => app.push_status_line(err),
+                    }
+                } else {
+                    let (layer, scene_index) =
+                        app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
+                    match app.build_clip_payload_for(
+                        layer,
+                        scene_index,
+                        Some(prompt.as_str()),
+                        overrides_ref,
+                    ) {
+                        Ok((request, plan, clip_prompt)) => {
+                            let label = clip_layer_label(layer);
+                            let scene_name = app.session_view.scene_name(scene_index);
+                            if command_tx
+                                .send(AppCommand::SubmitClip {
+                                    prompt: clip_prompt,
+                                    layer,
+                                    request,
+                                    plan,
+                                })
+                                .is_ok()
+                            {
+                                app.push_status_line(format!("Queued {label} clip · {scene_name}"));
+                            } else {
+                                app.push_status_line(
+                                    "Failed to submit clip; worker channel closed".into(),
+                                );
+                            }
+                        }
+                        Err(err) => app.push_status_line(err),
+                    }
+                }
+            } else {
+                let (request, plan) =
+                    app.build_generation_payload_with_overrides(&prompt, overrides_ref);
+                if matches!(override_mode, Some(GenerationMode::Motif)) {
+                    app.push_status_line("Queued motif preview (~16s)".to_string());
+                }
+                if command_tx.send(AppCommand::SubmitPrompt { prompt, request, plan }).is_err() {
+                    app.push_status_line("Failed to submit prompt; worker channel closed".into());
+                }
             }
+
             app.input.clear();
             app.focused_pane = FocusedPane::StatusBar;
             app.status_scroll = 0;
             app.status_following = true;
             app.input_mode = InputMode::Normal;
+        }
+        KeyCode::Char(' ')
+            if matches!(app.input_mode, InputMode::Normal)
+                && matches!(app.focused_pane, FocusedPane::SessionView) =>
+        {
+            let layer = app.focused_clip_layer();
+            let _ = command_tx.send(AppCommand::StopClip { layer });
+        }
+        KeyCode::Char('x') if matches!(app.input_mode, InputMode::Normal) => {
+            let _ = command_tx.send(AppCommand::StopAllClips);
         }
         KeyCode::Char(c)
             if matches!(app.focused_pane, FocusedPane::Prompt)
@@ -598,11 +960,217 @@ fn handle_key(
     Ok(false)
 }
 
-fn chat_style(role: &ChatRole) -> Style {
-    match role {
-        ChatRole::User => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ChatRole::Worker => Style::default().fg(Color::Green),
-        ChatRole::System => Style::default().fg(Color::Yellow),
+fn handle_splash_key(
+    app: &mut AppState,
+    command_tx: &UnboundedSender<AppCommand>,
+    key: crossterm::event::KeyEvent,
+) -> Result<bool> {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Up => app.select_previous_splash_option(),
+        KeyCode::Down => app.select_next_splash_option(),
+        KeyCode::Left => app.select_previous_splash_option(),
+        KeyCode::Right => app.select_next_splash_option(),
+        KeyCode::Enter => match app.splash_selection() {
+            SplashSelection::Restore => {
+                if !app.has_pending_snapshot() || !app.apply_pending_snapshot() {
+                    app.select_next_splash_option();
+                }
+            }
+            SplashSelection::StartNew => {
+                request_new_session(app, command_tx, None);
+            }
+        },
+        _ => {}
+    }
+
+    Ok(false)
+}
+
+fn dispatch_app_command(
+    app: &mut AppState,
+    command_tx: &UnboundedSender<AppCommand>,
+    command_line: &str,
+) {
+    let trimmed = command_line.trim();
+    if trimmed.starts_with('/') {
+        let mut tokens = trimmed.trim_start_matches('/').split_whitespace();
+        if let Some(first) = tokens.next() {
+            if let Some(layer) = parse_clip_layer(first) {
+                app.session_view.focus_layer(layer);
+                let prompt_tail = tokens.collect::<Vec<_>>().join(" ");
+                let prompt_override = if prompt_tail.is_empty() { None } else { Some(prompt_tail) };
+                let (_, scene_index) =
+                    app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
+                match app.build_clip_payload_for(
+                    layer,
+                    scene_index,
+                    prompt_override.as_deref(),
+                    None,
+                ) {
+                    Ok((request, plan, prompt_text)) => {
+                        let label = clip_layer_label(layer);
+                        if command_tx
+                            .send(AppCommand::SubmitClip {
+                                prompt: prompt_text,
+                                layer,
+                                request,
+                                plan,
+                            })
+                            .is_err()
+                        {
+                            let message =
+                                "Failed to submit clip request; worker channel closed".to_string();
+                            app.push_status_line(message);
+                        } else {
+                            let scene_name = app.session_view.scene_name(scene_index);
+                            app.push_status_line(format!("Queued clip for {label} · {scene_name}"));
+                        }
+                    }
+                    Err(err) => {
+                        app.push_status_line(err);
+                    }
+                }
+                return;
+            }
+        }
+    }
+    if trimmed.starts_with("/clip") {
+        let mut parts = trimmed.split_whitespace();
+        let _ = parts.next();
+        let Some(layer_token) = parts.next() else {
+            let message = "Usage: /clip <layer> [prompt]".to_string();
+            app.push_status_line(message);
+            return;
+        };
+        let Some(layer) = parse_clip_layer(layer_token) else {
+            let message = format!(
+                "Unknown clip layer `{}`. Use rhythm, bass, harmony, lead, textures, or vocals.",
+                layer_token
+            );
+            app.push_status_line(message);
+            return;
+        };
+        app.session_view.focus_layer(layer);
+        let prompt_tail = parts.collect::<Vec<_>>().join(" ");
+        let prompt_override = if prompt_tail.is_empty() { None } else { Some(prompt_tail) };
+        let (_, scene_index) =
+            app.active_clip_target().unwrap_or_else(|| app.session_view.focused());
+        match app.build_clip_payload_for(layer, scene_index, prompt_override.as_deref(), None) {
+            Ok((request, plan, prompt_text)) => {
+                let label = clip_layer_label(layer);
+                if command_tx
+                    .send(AppCommand::SubmitClip { prompt: prompt_text, layer, request, plan })
+                    .is_err()
+                {
+                    let message =
+                        "Failed to submit clip request; worker channel closed".to_string();
+                    app.push_status_line(message);
+                } else {
+                    let scene_name = app.session_view.scene_name(scene_index);
+                    app.push_status_line(format!("Queued clip for {label} · {scene_name}"));
+                }
+            }
+            Err(err) => {
+                app.push_status_line(err);
+            }
+        }
+        return;
+    }
+    if trimmed.starts_with("/scene") {
+        let mut parts = trimmed.split_whitespace();
+        let _ = parts.next();
+        match parts.next() {
+            Some("add") => {
+                let name = parts.collect::<Vec<_>>().join(" ");
+                if let Some(new_index) = app.session_view.add_scene_after_focus() {
+                    if !name.trim().is_empty() {
+                        app.session_view.rename_scene(new_index, name.clone());
+                    }
+                    app.session_view.focus_scene(new_index);
+                    let scene_name = app.session_view.scene_name(new_index);
+                    app.push_status_line(format!("Added {scene_name}"));
+                } else {
+                    app.push_status_line(format!(
+                        "Scene limit reached ({MAX_SCENES}). Rename existing scenes instead."
+                    ));
+                }
+            }
+            Some("rename") => {
+                let scene_index = app.session_view.focused().1;
+                let new_name = parts.collect::<Vec<_>>().join(" ");
+                if new_name.trim().is_empty() {
+                    app.push_status_line("Usage: /scene rename <name>".to_string());
+                } else {
+                    app.session_view.rename_scene(scene_index, new_name.clone());
+                    app.push_status_line(format!(
+                        "Scene {} renamed",
+                        app.session_view.scene_name(scene_index)
+                    ));
+                }
+            }
+            Some(other) => {
+                let message = format!("Unknown scene command `{other}`");
+                app.push_status_line(message);
+            }
+            None => {
+                let message =
+                    "Usage: /scene rename <name> (three scene columns available)".to_string();
+                app.push_status_line(message);
+            }
+        }
+        return;
+    }
+    if trimmed == "/session-new" {
+        request_new_session(app, command_tx, None);
+        return;
+    }
+    if trimmed.starts_with("/session") {
+        let rest = trimmed.trim_start_matches("/session").trim();
+        if rest.eq_ignore_ascii_case("status") {
+            if let Some(session_id) = app.current_session_id() {
+                if command_tx
+                    .send(AppCommand::FetchSession { session_id: session_id.clone() })
+                    .is_err()
+                {
+                    let message =
+                        "Failed to refresh session status; worker channel closed".to_string();
+                    app.push_status_line(message);
+                } else {
+                    app.push_status_line("Refreshing session status…".to_string());
+                }
+            } else {
+                let message = "No active session. Use /session <prompt> to start.".to_string();
+                app.push_status_line(message);
+            }
+        } else {
+            let prompt = if rest.is_empty() { None } else { Some(rest.to_string()) };
+            request_new_session(app, command_tx, prompt);
+        }
+        return;
+    }
+
+    match app.handle_command(command_line) {
+        Ok(message) => {
+            app.push_status_line(message);
+        }
+        Err(err) => {
+            let message = format!("Command error: {err}");
+            app.push_status_line(message);
+        }
+    }
+}
+
+fn parse_clip_layer(token: &str) -> Option<ClipLayer> {
+    match token.to_ascii_lowercase().as_str() {
+        "rhythm" => Some(ClipLayer::Rhythm),
+        "bass" => Some(ClipLayer::Bass),
+        "harmony" => Some(ClipLayer::Harmony),
+        "lead" => Some(ClipLayer::Lead),
+        "textures" => Some(ClipLayer::Textures),
+        "vocals" => Some(ClipLayer::Vocals),
+        _ => None,
     }
 }
 
