@@ -6,6 +6,8 @@ UV_RUN := $(UV) run --project worker
 IOS_SIMULATOR ?= iPhone 17
 XCODE_DEVELOPER ?= $(shell xcode-select -p 2>/dev/null)
 XCODE_APP ?= /Applications/Xcode.app/Contents/Developer
+IOS_TEAM_ID ?= $(TIMBRE_IOS_TEAM_ID)
+IOS_CODE_SIGN_FLAGS := DEVELOPMENT_TEAM="$(IOS_TEAM_ID)" CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
 $(UV_CACHE_DIR):
 	mkdir -p $(UV_CACHE_DIR)
@@ -49,13 +51,13 @@ test:
 ios-run:
 	$(MAKE) ensure-ios-simulator
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl boot "$(IOS_SIMULATOR)" || true
-	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData build
+	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData $(IOS_CODE_SIGN_FLAGS) build
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl install "$(IOS_SIMULATOR)" ios/DerivedData/Build/Products/Debug-iphonesimulator/TimbreMobile.app
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl launch "$(IOS_SIMULATOR)" com.timbre.mobile || true
 
 ios-test:
 	$(MAKE) ensure-ios-simulator
-	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData test
+	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData $(IOS_CODE_SIGN_FLAGS) test
 
 ensure-xcode:
 	@if [ -z "$(XCODE_DEVELOPER)" ] || echo "$(XCODE_DEVELOPER)" | grep -q "CommandLineTools"; then \

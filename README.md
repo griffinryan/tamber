@@ -162,6 +162,10 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 
 # If xcodebuild says “Supported platforms … is empty”, install an iOS runtime:
 DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer" xcodebuild -downloadPlatform iOS
+
+# Signing: simulator builds disable code signing by default. If you need signing
+# (e.g., device builds), export your team ID:
+TIMBRE_IOS_TEAM_ID=ABCDE12345 make ios-run
 ```
 
 What it does:
