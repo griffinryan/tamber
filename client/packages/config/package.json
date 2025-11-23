@@ -1,0 +1,15 @@
+{
+  "name": "@timbre/config",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/defaults.ts",
+  "types": "src/defaults.ts",
+  "scripts": {
+    "lint": "echo \"TODO: lint\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "echo \"TODO: tests\""
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

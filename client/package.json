@@ -1,0 +1,18 @@
+{
+  "name": "@timbre/client",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "yarn install --check-files",
+    "dev:desktop": "yarn workspace @timbre/desktop dev",
+    "build:desktop": "yarn workspace @timbre/desktop build",
+    "lint": "yarn workspaces run lint",
+    "typecheck": "yarn workspaces run typecheck",
+    "test": "yarn workspaces run test"
+  },
+  "packageManager": "yarn@1.22.22"
+}

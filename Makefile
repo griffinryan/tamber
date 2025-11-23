@@ -1,4 +1,4 @@
-.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt ios-run ios-test ensure-xcode ensure-ios-simulator
+.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt ios-run ios-test ensure-xcode ensure-ios-simulator client-setup client-run-desktop client-test
 
 UV_CACHE_DIR := .uv/cache
 UV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv
@@ -47,6 +47,15 @@ test:
 	cargo test
 	$(MAKE) $(UV_CACHE_DIR)
 	$(UV_RUN) pytest
+
+client-setup:
+	cd client && yarn install --check-files
+
+client-run-desktop:
+	cd client && yarn dev:desktop
+
+client-test:
+	cd client && yarn test
 
 ios-run:
 	$(MAKE) ensure-ios-simulator

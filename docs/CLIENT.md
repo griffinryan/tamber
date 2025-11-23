@@ -70,7 +70,7 @@ client/
 - How much of the CLI prompt parsing can we reuse as a shared package to avoid drift?
 
 ## Immediate next steps
-- Lock styling kit choice (Tamagui vs Restyle) to keep cross-platform theming crisp and performant.
-- Create `client/` scaffold with yarn workspaces and a minimal “hello worker” screen hitting `/status`.
-- Add Makefile targets and CI job entries marked experimental.
+- Styling kit locked: **Tamagui** with custom tokens and Alagard heading font; extend `packages/ui` with shared primitives (cards, rails, inputs).
+- Flesh out Electron shell around the desktop scaffold (`make client-run-desktop`) and add a worker status + prompt stub screen.
+- Add CI job entries marked experimental.
 - Mark `docs/MOBILE.md` as superseded once RN client is underway; keep Swift project only as reference until parity.
