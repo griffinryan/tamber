@@ -4,6 +4,7 @@
 # Extras
 .DS_Store
 goal.txt
+build/
 
 # Python
 __pycache__/

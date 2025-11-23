@@ -1,9 +1,9 @@
-.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt ios-run ios-test ensure-xcode
+.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt ios-run ios-test ensure-xcode ensure-ios-simulator
 
 UV_CACHE_DIR := .uv/cache
 UV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv
 UV_RUN := $(UV) run --project worker
-IOS_SIMULATOR ?= iPhone 15
+IOS_SIMULATOR ?= iPhone 17
 XCODE_DEVELOPER ?= $(shell xcode-select -p 2>/dev/null)
 XCODE_APP ?= /Applications/Xcode.app/Contents/Developer
 
@@ -47,14 +47,14 @@ test:
 	$(UV_RUN) pytest
 
 ios-run:
-	$(MAKE) ensure-xcode
+	$(MAKE) ensure-ios-simulator
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl boot "$(IOS_SIMULATOR)" || true
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData build
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl install "$(IOS_SIMULATOR)" ios/DerivedData/Build/Products/Debug-iphonesimulator/TimbreMobile.app
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl launch "$(IOS_SIMULATOR)" com.timbre.mobile || true
 
 ios-test:
-	$(MAKE) ensure-xcode
+	$(MAKE) ensure-ios-simulator
 	DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData test
 
 ensure-xcode:
@@ -62,5 +62,29 @@ ensure-xcode:
 		echo "xcodebuild is pointing at Command Line Tools. Switch to full Xcode with:"; \
 		echo "  sudo xcode-select --switch \"$(XCODE_APP)\""; \
 		echo "or override with: XCODE_DEVELOPER=\"/path/to/Xcode.app/Contents/Developer\" make ios-test"; \
+		exit 1; \
+	fi
+
+ensure-ios-simulator:
+	$(MAKE) ensure-xcode
+	@set -e; \
+	AVAILABLE_OUTPUT=$$(DEVELOPER_DIR="$(XCODE_DEVELOPER)" xcrun simctl list devices available 2>&1); \
+	STATUS=$$?; \
+	if [ "$$STATUS" -ne 0 ]; then \
+		echo "xcrun simctl failed (likely no iOS Simulator runtime installed). Install one with:"; \
+		echo "  DEVELOPER_DIR=\"$(XCODE_DEVELOPER)\" xcodebuild -downloadPlatform iOS"; \
+		echo "Raw simctl output:"; \
+		echo "$$AVAILABLE_OUTPUT"; \
+		exit "$$STATUS"; \
+	fi; \
+	if [ -z "$$AVAILABLE_OUTPUT" ]; then \
+		echo "No iOS simulator runtimes are installed. Install one with:"; \
+		echo "  DEVELOPER_DIR=\"$(XCODE_DEVELOPER)\" xcodebuild -downloadPlatform iOS"; \
+		exit 1; \
+	fi; \
+	if ! echo "$$AVAILABLE_OUTPUT" | grep -q "$(IOS_SIMULATOR) ("; then \
+		echo "Simulator '$(IOS_SIMULATOR)' was not found. Available devices:"; \
+		echo "$$AVAILABLE_OUTPUT"; \
+		echo "Set IOS_SIMULATOR to one of the above (e.g., IOS_SIMULATOR=\"iPhone 16 Pro\") or install a new runtime in Xcode."; \
 		exit 1; \
 	fi

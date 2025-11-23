@@ -159,6 +159,9 @@ IOS_SIMULATOR="iPhone 15 Pro" WORKER_URL="http://192.168.1.20:8000" make ios-run
 
 # If you see xcode-select complaining about CommandLineTools:
 sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+# If xcodebuild says “Supported platforms … is empty”, install an iOS runtime:
+DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer" xcodebuild -downloadPlatform iOS
 ```
 
 What it does:
