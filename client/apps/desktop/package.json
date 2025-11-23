@@ -4,11 +4,11 @@
   "private": true,
   "main": "src/main.tsx",
   "scripts": {
-    "dev": "cross-env NODE_OPTIONS=--experimental-import-meta-resolve vite",
+    "dev": "vite",
     "dev:electron": "concurrently \"yarn dev\" \"wait-on http://localhost:5173\" \"yarn electron:start\"",
     "electron:start": "yarn compile:electron && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron dist-electron/main.js",
     "compile:electron": "tsc -p electron/tsconfig.json",
-    "build": "cross-env NODE_OPTIONS=--experimental-import-meta-resolve vite build",
+    "build": "vite build",
     "build:desktop": "yarn compile:electron && yarn build && electron-builder --dir",
     "preview": "vite preview",
     "lint": "echo \"TODO: lint\"",
