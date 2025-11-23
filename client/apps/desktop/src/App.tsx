@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Button, H4, Paragraph, Separator, Text, Theme, XStack, YStack } from 'tamagui';
+import { Button } from '@tamagui/button';
+import { Theme, TamaguiProvider } from '@tamagui/core';
+import { Text } from '@tamagui/text';
+import { XStack, YStack } from '@tamagui/stacks';
 import { resolveWorkerUrl } from '@timbre/config';
 import { GlassCard, InputField, Pill, StatusCard } from '@timbre/ui';
 import { parsePrompt, useWorkerStatus } from '@timbre/state';
-import { TamaguiProvider } from 'tamagui';
-import config from '../../tamagui.config';
+import config from '../../tamagui.config.ts';
 
 type StatusShape = {
   status?: string;
@@ -59,13 +61,13 @@ const App: React.FC = () => {
             <Text color="$textMuted" letterSpacing={2} fontSize={12} textTransform="uppercase">
               React Native Web + Electron
             </Text>
-            <H4 color="$text" fontFamily="$heading" fontSize={32} letterSpacing={0.6}>
+            <Text color="$text" fontFamily="$heading" fontSize={32} letterSpacing={0.6}>
               Timbre Client
-            </H4>
-            <Paragraph color="$textMuted" maxWidth={720}>
+            </Text>
+            <Text color="$textMuted" maxWidth={720}>
               Liquid-glass scaffold for the cross-platform client. Desktop today, iOS/Android next.
               Point `VITE_WORKER_URL` to your running worker.
-            </Paragraph>
+            </Text>
           </YStack>
 
           <XStack gap="$4" flexWrap="wrap">
@@ -110,7 +112,7 @@ const App: React.FC = () => {
                   Jobs
                 </Text>
                 {jobs.length === 0 ? (
-                  <Paragraph color="$textMuted">No jobs yet. Submit one to see it here.</Paragraph>
+                  <Text color="$textMuted">No jobs yet. Submit one to see it here.</Text>
                 ) : (
                   jobs.map((job) => (
                     <YStack key={job.id} padding="$3" borderRadius="$3" backgroundColor="rgba(255,255,255,0.02)" gap="$2">
@@ -122,7 +124,7 @@ const App: React.FC = () => {
                           {job.status}
                         </Pill>
                       </XStack>
-                      <Paragraph color="$textMuted">{job.prompt}</Paragraph>
+                      <Text color="$textMuted">{job.prompt}</Text>
                     </YStack>
                   ))
                 )}
@@ -131,16 +133,16 @@ const App: React.FC = () => {
                 <Text color="$text" fontFamily="$heading" fontSize={18}>
                   Palette & mood
                 </Text>
-                <Paragraph color="$textMuted">
+                <Text color="$textMuted">
                   Matte midnight base with neon edges and soft glass panels. The heading uses
                   <Text fontFamily="$heading"> Alagard </Text>
                   to echo the CLI character while staying sharp.
-                </Paragraph>
-                <Separator marginVertical="$2" borderColor="$border" />
-                <Paragraph color="$textMuted">
+                </Text>
+                <YStack height={1} backgroundColor="$border" />
+                <Text color="$textMuted">
                   This bundle will ship via Electron for desktop distribution, then ride the same code
                   to iOS/Android with platform shims for audio and filesystem.
-                </Paragraph>
+                </Text>
               </GlassCard>
               <GlassCard>
                 <Text color="$text" fontFamily="$heading" fontSize={18}>
@@ -166,10 +168,10 @@ const App: React.FC = () => {
                 >
                   Save override
                 </Button>
-                <Paragraph color="$textMuted">
+                <Text color="$textMuted">
                   Overrides VITE_WORKER_URL/TIMBRE_WORKER_URL locally. Restart Electron after changing
                   to ensure the preload layer picks up new values when we add native calls.
-                </Paragraph>
+                </Text>
               </GlassCard>
             </YStack>
           </XStack>

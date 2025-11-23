@@ -1,5 +1,6 @@
 import React from 'react';
-import { Circle, Text, XStack, YStack } from 'tamagui';
+import { Text } from '@tamagui/text';
+import { XStack, YStack } from '@tamagui/stacks';
 
 type Props = {
   status?: string;
@@ -25,7 +26,15 @@ export const StatusCard: React.FC<Props> = ({ status, error, baseUrl }) => {
       shadowRadius={32}
     >
       <XStack ai="center" gap="$2">
-        <Circle size={12} backgroundColor={glow} shadowColor={glow} shadowRadius={18} shadowOffset={{ width: 0, height: 0 }} />
+        <YStack
+          width={12}
+          height={12}
+          borderRadius={6}
+          backgroundColor={glow}
+          shadowColor={glow}
+          shadowRadius={18}
+          shadowOffset={{ width: 0, height: 0 }}
+        />
         <Text color="$textMuted" fontSize={12} textTransform="uppercase" letterSpacing={0.4}>
           {subtitle}
         </Text>

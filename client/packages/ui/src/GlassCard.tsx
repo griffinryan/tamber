@@ -1,6 +1,6 @@
 import React from 'react';
-import { LinearGradient } from 'tamagui/linear-gradient';
-import { YStack } from 'tamagui';
+import { LinearGradient } from '@tamagui/linear-gradient';
+import { YStack } from '@tamagui/stacks';
 
 type Props = {
   children: React.ReactNode;

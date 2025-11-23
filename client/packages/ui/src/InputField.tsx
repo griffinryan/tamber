@@ -1,6 +1,7 @@
 import React from 'react';
 import { Input } from '@tamagui/input';
-import { Text, XStack } from 'tamagui';
+import { Text } from '@tamagui/text';
+import { XStack } from '@tamagui/stacks';
 
 type Props = {
   value: string;

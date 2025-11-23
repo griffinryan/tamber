@@ -1,5 +1,6 @@
 import React from 'react';
-import { Text, XStack } from 'tamagui';
+import { Text } from '@tamagui/text';
+import { XStack } from '@tamagui/stacks';
 
 type Variant = 'info' | 'success' | 'warn' | 'danger';
 

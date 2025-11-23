@@ -22,6 +22,7 @@ export default defineConfig({
       '@timbre/api': resolvePackage('api'),
       '@timbre/config': resolvePackage('config'),
       '@timbre/ui': resolvePackage('ui'),
+      '@timbre/state': resolvePackage('state'),
     },
   },
   define: {
