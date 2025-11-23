@@ -24,6 +24,8 @@
     "@tamagui/stacks": "^1.98.3",
     "@tamagui/text": "^1.98.3",
     "@tamagui/theme": "^1.98.3",
+    "@tamagui/input": "^1.98.3",
+    "@tamagui/linear-gradient": "^1.98.3",
     "typescript": "^5.3.3"
   }
 }

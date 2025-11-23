@@ -1,0 +1,20 @@
+{
+  "name": "@timbre/state",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "echo \"TODO: lint\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "echo \"TODO: tests\""
+  },
+  "dependencies": {
+    "@timbre/api": "0.0.1",
+    "@timbre/config": "0.0.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

@@ -52,7 +52,7 @@ client/
 
 ## Migration roadmap
 1) **Toolchain locked**: yarn workspaces + bare React Native (not Expo) to keep native module flexibility, with React Native Web and Electron for desktop. Use Tamagui or Restyle as the cross-platform styling layer to keep the UI expressive and performant.
-2) **Scaffold `client/`**: initialize workspace, add `apps/native` and `apps/desktop` skeletons, set up TypeScript, lint, format, Jest. Add Makefile targets and CI job placeholders.
+2) **Scaffold `client/`**: initialize workspace, add `apps/native` and `apps/desktop` skeletons, set up TypeScript, lint, format, Jest. Add Makefile targets and CI job placeholders. (Done: desktop scaffold + Tamagui, Electron dev shell.)
 3) **API client + schemas**: generate TypeScript types from worker schemas/OpenAPI; wire a minimal `WorkerClient` (submit, status, artifact). Add contract tests against a local worker stub.
 4) **Prompt parser**: port slash commands (`/duration`, `/model`, `/cfg`, `/seed`, `/motif`, `/small|/medium|/large`) with identical validation to CLI. Add tests mirroring CLI cases.
 5) **Core UI + state**: implement prompt composer, job rail/status, artifact view. Use shared UI package to keep desktop/mobile identical aside from layout breakpoints.
@@ -70,7 +70,13 @@ client/
 - How much of the CLI prompt parsing can we reuse as a shared package to avoid drift?
 
 ## Immediate next steps
-- Styling kit locked: **Tamagui** with custom tokens and Alagard heading font; extend `packages/ui` with shared primitives (cards, rails, inputs).
-- Flesh out Electron shell around the desktop scaffold (`make client-run-desktop`) and add a worker status + prompt stub screen.
+- Styling kit locked: **Tamagui** with custom tokens and Alagard heading font; extend `packages/ui` with shared primitives (cards, rails, inputs). (In progress: glass card, pill, input, status card.)
+- Electron dev shell is wired (`make client-run-desktop` runs Vite + Electron). Next: add preload IPC for filesystem and artifact saves; wire electron-builder outputs for signed artifacts.
+- Flesh out worker integration beyond `/status`: submit/poll/artifact, prompt parser tests, job list tied to real data.
 - Add CI job entries marked experimental.
 - Mark `docs/MOBILE.md` as superseded once RN client is underway; keep Swift project only as reference until parity.
+
+## Dev commands (current)
+- `make client-setup`: install JS deps.
+- `VITE_WORKER_URL=http://localhost:8000 make client-run-desktop`: start Vite + Electron shell with Tamagui UI.
+- `make client-build-desktop`: compile electron main/preload, build Vite bundle, and run electron-builder (dir target for now).

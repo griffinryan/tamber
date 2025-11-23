@@ -9,7 +9,8 @@
   "scripts": {
     "setup": "yarn install --check-files",
     "dev:desktop": "yarn workspace @timbre/desktop dev",
-    "build:desktop": "yarn workspace @timbre/desktop build",
+    "dev:desktop:electron": "yarn workspace @timbre/desktop dev:electron",
+    "build:desktop": "yarn workspace @timbre/desktop build:desktop",
     "lint": "yarn workspaces run lint",
     "typecheck": "yarn workspaces run typecheck",
     "test": "yarn workspaces run test"

@@ -1,0 +1,20 @@
+appId: com.timbre.desktop
+productName: TimbreClient
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+directories:
+  buildResources: electron/resources
+extraMetadata:
+  main: dist-electron/main.js
+mac:
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage

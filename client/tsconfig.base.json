@@ -15,7 +15,8 @@
     "paths": {
       "@timbre/api": ["packages/api/src"],
       "@timbre/config": ["packages/config/src"],
-      "@timbre/ui": ["packages/ui/src"]
+      "@timbre/ui": ["packages/ui/src"],
+      "@timbre/state": ["packages/state/src"]
     }
   }
 }

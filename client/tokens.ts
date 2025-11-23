@@ -10,6 +10,9 @@ export const tokens = createTokens({
     textMuted: '#9aa8d8',
     border: 'rgba(255, 255, 255, 0.08)',
     glow: '#4bd6ff',
+    success: '#7df2a4',
+    warn: '#ffdb7f',
+    danger: '#ff8fb1'
   },
   radius: {
     0: 0,
