@@ -1,0 +1,324 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		7C1FILEA29B8F3B400001100 /* TimbreMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILER29B8F3B400001000 /* TimbreMobileApp.swift */; };
+		7C1FILEB29B8F3B400001101 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILEQ29B8F3B400001007 /* AppEnvironment.swift */; };
+		7C1FILEC29B8F3B400001102 /* LandingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILES29B8F3B400001009 /* LandingView.swift */; };
+		7C1FILED29B8F3B400001103 /* AnimatedNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILET29B8F3B40000100A /* AnimatedNoteView.swift */; };
+		7C1FILEE29B8F3B400001104 /* GlassPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILEU29B8F3B40000100B /* GlassPanel.swift */; };
+		7C1FILEF29B8F3B400001105 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILEV29B8F3B40000100C /* DesignTokens.swift */; };
+		7C1FILEG29B8F3B400001106 /* WorkerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILEW29B8F3B40000100D /* WorkerClient.swift */; };
+		7C1FILEH29B8F3B400001107 /* JobModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1FILEX29B8F3B40000100E /* JobModels.swift */; };
+		7C1FILEI29B8F3B400001108 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7C1FILEY29B8F3B40000100F /* Assets.xcassets */; };
+		7C1FILEK29B8F3B40000110A /* alagard.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 7C1FILEA29B8F3B400001011 /* alagard.ttf */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		7C1FILER29B8F3B400001000 /* TimbreMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimbreMobileApp.swift; sourceTree = "<group>"; };
+		7C1FILEQ29B8F3B400001007 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
+		7C1FILES29B8F3B400001009 /* LandingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandingView.swift; sourceTree = "<group>"; };
+		7C1FILET29B8F3B40000100A /* AnimatedNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedNoteView.swift; sourceTree = "<group>"; };
+		7C1FILEU29B8F3B40000100B /* GlassPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassPanel.swift; sourceTree = "<group>"; };
+		7C1FILEV29B8F3B40000100C /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
+		7C1FILEW29B8F3B40000100D /* WorkerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerClient.swift; sourceTree = "<group>"; };
+		7C1FILEX29B8F3B40000100E /* JobModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobModels.swift; sourceTree = "<group>"; };
+		7C1FILEY29B8F3B40000100F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7C1FILEZ29B8F3B400001010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		7C1FILEA29B8F3B400001011 /* alagard.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = alagard.ttf; sourceTree = "<group>"; };
+		7C1PRODUCT29B8F3B400001012 /* TimbreMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TimbreMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7C1FRAME29B8F3B400001013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		7C1MAIN29B8F3B400001014 = {
+			isa = PBXGroup;
+			children = (
+				7C1SRCG29B8F3B400001015 /* Sources */,
+				7C1RESG29B8F3B400001016 /* Resources */,
+				7C1PRODUCTG29B8F3B400001017 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		7C1SRCG29B8F3B400001015 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				7C1APPG29B8F3B400001018 /* AppMain */,
+				7C1FEATG29B8F3B400001019 /* Features */,
+				7C1DESIGNG29B8F3B40000101A /* DesignSystem */,
+				7C1NETWORKG29B8F3B40000101B /* Networking */,
+				7C1MODELG29B8F3B40000101C /* Models */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		7C1APPG29B8F3B400001018 /* AppMain */ = {
+			isa = PBXGroup;
+			children = (
+				7C1FILER29B8F3B400001000 /* TimbreMobileApp.swift */,
+				7C1FILEQ29B8F3B400001007 /* AppEnvironment.swift */,
+			);
+			path = AppMain;
+			sourceTree = "<group>";
+		};
+		7C1FEATG29B8F3B400001019 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				7C1FILES29B8F3B400001009 /* LandingView.swift */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		7C1DESIGNG29B8F3B40000101A /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				7C1FILET29B8F3B40000100A /* AnimatedNoteView.swift */,
+				7C1FILEU29B8F3B40000100B /* GlassPanel.swift */,
+				7C1FILEV29B8F3B40000100C /* DesignTokens.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+		7C1NETWORKG29B8F3B40000101B /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				7C1FILEW29B8F3B40000100D /* WorkerClient.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		7C1MODELG29B8F3B40000101C /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				7C1FILEX29B8F3B40000100E /* JobModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		7C1RESG29B8F3B400001016 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				7C1FILEY29B8F3B40000100F /* Assets.xcassets */,
+				7C1FILEZ29B8F3B400001010 /* Info.plist */,
+				7C1FILEA29B8F3B400001011 /* alagard.ttf */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		7C1PRODUCTG29B8F3B400001017 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7C1PRODUCT29B8F3B400001012 /* TimbreMobile.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7C1TARGET29B8F3B400001020 /* TimbreMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7C1CONFIGLISTTARG29B8F3B400001021 /* Build configuration list for PBXNativeTarget "TimbreMobile" */;
+			buildPhases = (
+				7C1SOURCES29B8F3B400001022 /* Sources */,
+				7C1FRAME29B8F3B400001013 /* Frameworks */,
+				7C1RESOURCES29B8F3B400001023 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TimbreMobile;
+			productName = TimbreMobile;
+			productReference = 7C1PRODUCT29B8F3B400001012 /* TimbreMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7C1PROJECT29B8F3B400001024 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1530;
+				LastUpgradeCheck = 1530;
+				TargetAttributes = {
+					7C1TARGET29B8F3B400001020 = {
+						CreatedOnToolsVersion = 15.3;
+					};
+				};
+			};
+			buildConfigurationList = 7C1CONFIGLISTPROJ29B8F3B400001025 /* Build configuration list for PBXProject "TimbreMobile" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 7C1MAIN29B8F3B400001014;
+			productRefGroup = 7C1PRODUCTG29B8F3B400001017 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7C1TARGET29B8F3B400001020 /* TimbreMobile */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7C1RESOURCES29B8F3B400001023 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7C1FILEI29B8F3B400001108 /* Assets.xcassets in Resources */,
+				7C1FILEK29B8F3B40000110A /* alagard.ttf in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7C1SOURCES29B8F3B400001022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7C1FILEA29B8F3B400001100 /* TimbreMobileApp.swift in Sources */,
+				7C1FILEB29B8F3B400001101 /* AppEnvironment.swift in Sources */,
+				7C1FILEC29B8F3B400001102 /* LandingView.swift in Sources */,
+				7C1FILED29B8F3B400001103 /* AnimatedNoteView.swift in Sources */,
+				7C1FILEE29B8F3B400001104 /* GlassPanel.swift in Sources */,
+				7C1FILEF29B8F3B400001105 /* DesignTokens.swift in Sources */,
+				7C1FILEG29B8F3B400001106 /* WorkerClient.swift in Sources */,
+				7C1FILEH29B8F3B400001107 /* JobModels.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		7C1CONFPROJDEBUG29B8F3B400001026 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Resources/Preview Content\"";
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = "Resources/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timbre.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7C1CONFPROJREL29B8F3B400001027 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Resources/Preview Content\"";
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = "Resources/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.timbre.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		7C1CONFDEBUGTARG29B8F3B400001028 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				INFOPLIST_FILE = "Resources/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.timbre.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7C1CONFRELTARG29B8F3B400001029 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				INFOPLIST_FILE = "Resources/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.timbre.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7C1CONFIGLISTPROJ29B8F3B400001025 /* Build configuration list for PBXProject "TimbreMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C1CONFPROJDEBUG29B8F3B400001026 /* Debug */,
+				7C1CONFPROJREL29B8F3B400001027 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7C1CONFIGLISTTARG29B8F3B400001021 /* Build configuration list for PBXNativeTarget "TimbreMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C1CONFDEBUGTARG29B8F3B400001028 /* Debug */,
+				7C1CONFRELTARG29B8F3B400001029 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 7C1PROJECT29B8F3B400001024 /* Project object */;
+}

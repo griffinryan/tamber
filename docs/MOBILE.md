@@ -60,6 +60,12 @@ This document outlines how to add an iOS app (new `ios/` directory) that talks t
   - Accepts an optional `WORKER_URL` env var to override the base URL for local testing.
 - CI-friendly `make ios-test` for unit/snapshot suites.
 
+### Current scaffold
+- `ios/` contains a SwiftUI app skeleton (TimbreMobile.xcodeproj) with a landing screen, animated note, slash-command parser, and worker client stubs.
+- `make ios-run` boots a simulator, builds, installs, and launches the app (defaults to `iPhone 15`); override with `IOS_SIMULATOR="iPhone 15 Pro"` and `WORKER_URL` for remote/local worker.
+- `make ios-test` runs the Xcode test action on the simulator destination.
+- Public font `alagard.ttf` is bundled and used for hero typography; add additional weights under `ios/Resources/Fonts/` and Info.plist `UIAppFonts` if needed.
+
 ## Worker Integration Details
 - Requests mirror CLI settings:
   - Prompt text plus inline flags: `/duration 120`, `/model musicgen-stereo-medium`, `/cfg 6.5|off`, `/seed 42`, `/motif <prompt>`, `/small|/medium|/large`.

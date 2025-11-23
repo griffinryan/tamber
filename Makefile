@@ -1,8 +1,9 @@
-.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt
+.PHONY: setup setup-musicgen worker-serve cli-run lint test fmt ios-run ios-test
 
 UV_CACHE_DIR := .uv/cache
 UV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv
 UV_RUN := $(UV) run --project worker
+IOS_SIMULATOR ?= iPhone 15
 
 $(UV_CACHE_DIR):
 	mkdir -p $(UV_CACHE_DIR)
@@ -42,3 +43,12 @@ test:
 	cargo test
 	$(MAKE) $(UV_CACHE_DIR)
 	$(UV_RUN) pytest
+
+ios-run:
+	xcrun simctl boot "$(IOS_SIMULATOR)" || true
+	xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData build
+	xcrun simctl install "$(IOS_SIMULATOR)" ios/DerivedData/Build/Products/Debug-iphonesimulator/TimbreMobile.app
+	xcrun simctl launch "$(IOS_SIMULATOR)" com.timbre.mobile || true
+
+ios-test:
+	xcodebuild -project ios/TimbreMobile.xcodeproj -scheme TimbreMobile -destination 'platform=iOS Simulator,name=$(IOS_SIMULATOR)' -configuration Debug -derivedDataPath ios/DerivedData test
