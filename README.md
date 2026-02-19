@@ -1,189 +1,141 @@
 # Timbre
 
-Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pairs with a FastAPI (Python) worker to plan, render, and stitch multi-section audio clips. The stack targets Apple Silicon for Phase 0, but the codebase is organised so additional clients and backends can slot in without rewriting the core flow.
+**A terminal-first text-to-music studio.**  
+Compose multi-section tracks from prompts with a Rust TUI frontend and a Python inference backend.
 
 ![Timbre demo](public/tamber.gif)
 
----
+[Quick Start](#quick-start) | [Tech Stack](#tech-stack) | [System Flow](#system-flow) | [Documentation](#documentation)
 
-## Repository At A Glance
+## Why Timbre
 
+Timbre is built for fast idea-to-audio iteration. You can sketch structure, guide instrumentation, and render complete arrangements from one interactive terminal workflow while the backend handles planning, generation, and mastering.
+
+## Tech Stack
+
+| Layer | Tools |
+| --- | --- |
+| Terminal UI | [Rust](https://www.rust-lang.org/), [Ratatui](https://github.com/ratatui/ratatui), [crossterm](https://github.com/crossterm-rs/crossterm) |
+| API + orchestration | [FastAPI](https://github.com/fastapi/fastapi), [Uvicorn](https://github.com/encode/uvicorn), [Pydantic](https://github.com/pydantic/pydantic) |
+| Music inference | [PyTorch](https://github.com/pytorch/pytorch), [Transformers](https://github.com/huggingface/transformers), [MusicGen](https://github.com/facebookresearch/audiocraft) |
+| Tooling | [uv](https://github.com/astral-sh/uv), [pytest](https://github.com/pytest-dev/pytest), [Ruff](https://github.com/astral-sh/ruff), [mypy](https://github.com/python/mypy) |
+
+## System Flow
+
+```text
+Prompt + controls (CLI)
+        |
+        v
+Ratatui client (Rust)
+        |
+        v
+FastAPI worker (planner + orchestrator)
+        |
+        v
+MusicGen section renders
+        |
+        v
+Mix + normalize + export artifacts
 ```
-├─ cli/                 # Ratatui application, planner mirror, HTTP client
-├─ worker/              # FastAPI app, composition planner, orchestrator & backends
-├─ docs/                # Architecture notes, setup guides, testing playbooks, ADRs
-├─ scripts/             # Standalone helpers (reserved for future use)
-├─ docs/schemas/        # JSON Schemas kept in sync with Rust/Python models
-├─ Makefile             # Convenience entrypoints (setup, lint, test, run targets)
-└─ ROADMAP.md, ADRs     # Directional planning material
-```
 
----
+Key behavior:
+- Planner v3 generates section-aware `CompositionPlan` outputs for short and long form tracks.
+- Orchestrator renders sections sequentially, carries motif context, and joins with controlled fades.
+- CLI status mirrors backend progress and supports live slash-command tuning (`/duration`, `/model`, `/cfg`, `/seed`, `/reset`).
 
 ## Quick Start
 
-1. **Clone & bootstrap**
+1. Clone and bootstrap:
+```bash
+git clone <repo-url>
+cd tamber
+make setup
+```
 
-   ```bash
-   git clone <repo-url>
-   cd tamber
-   make setup          # cargo fetch + uv sync (runtime deps only)
-   ```
+2. (Optional) install extras:
+```bash
+uv sync --project worker --extra dev
+uv sync --project worker --extra inference
+```
 
-   If `uv` chooses an unsupported interpreter, pin Python 3.11 first:
+3. Run worker + terminal client:
+```bash
+# Terminal 1
+make worker-serve
 
-   ```bash
-   uv python pin 3.11
-   ```
+# Terminal 2
+make cli-run
+```
 
-2. **Add extras (optional)**
+4. Point the CLI at a different worker if needed:
+```bash
+TIMBRE_WORKER_URL="http://192.168.1.20:8000" make cli-run
+```
 
-   ```bash
-   # Tooling and lint/test extras
-   uv sync --project worker --extra dev
+## Configuration
 
-   # Full inference stack: torch, diffusers, transformers, torchaudio
-   uv sync --project worker --extra inference   # same as `make setup-musicgen`
-   ```
-
-3. **Run the services**
-
-   ```bash
-   # Terminal 1 – worker with auto-reload (FastAPI + Uvicorn)
-   make worker-serve
-
-   # Terminal 2 – Ratatui CLI
-   make cli-run
-   ```
-
-   The CLI defaults to `http://localhost:8000`. Point to another machine with
-
-   ```bash
-   TIMBRE_WORKER_URL="http://192.168.1.20:8000" make cli-run
-   ```
-
-## Runtime Overview
-
-### Planner & Orchestrator
-
-- Planner **v3** emits a `CompositionPlan` with:
-  - Long-form templates (intro → motif → chorus → outro with optional bridge) above 90 s.
-  - Short-form templates (intro → motif → resolve) for quick clips and unit tests.
-  - Theme metadata: motif phrase, instrumentation palette, rhythm tag, dynamic curve, texture.
-  - Section orchestration layers (rhythm, bass, harmony, lead, textures, vocals) that drive richer prompts and feed the CLI status panel.
-- The orchestrator renders sections sequentially, captures motif seeds, trims/normalises loudness, then butt-joins sections with micro fades (longer crossfades only when conditioning is missing). Mix metadata includes per-section RMS, crossfade strategies, and mastering parameters.
-
-### Backend
-
-- **MusicGen** (transformers) renders text-to-music clips, conditioned by motif audio tails and arrangement sentences. When the checkpoint or dependencies are missing we emit deterministic placeholders so the CLI flow stays testable.
-- Force CPU/MPS/CUDA via `TIMBRE_INFERENCE_DEVICE` when you need to override torch auto-detection.
-
-### CLI UX Highlights
-
-- Slash commands let you tweak generations in place:
-  - `/duration 120` (range 90–180 in the UI) keeps the worker in long-form mode.
-  - `/model musicgen-stereo-medium`, `/cfg 6.5`, `/seed 42`, `/reset`, etc.
-- The status pane mirrors the worker planner, listing sections with roles, bar counts, target seconds, backend, placeholder flags, and active render indicator.
-- Completed jobs copy exports to `~/Music/Timbre/<job_id>/`, alongside `metadata.json` (plan + mix info) and optional motif stems.
-
----
-
-## Configuration Reference
-
-| Variable | Description |
+| Variable | Purpose |
 | --- | --- |
-| `TIMBRE_WORKER_URL` | Override CLI → worker base URL (default `http://localhost:8000`). |
-| `TIMBRE_DEFAULT_MODEL` / `TIMBRE_DEFAULT_DURATION` | CLI defaults used on startup (`musicgen-stereo-medium` / `120`). |
-| `TIMBRE_ARTIFACT_DIR` | Destination for copied artifacts (CLI). |
-| `TIMBRE_INFERENCE_DEVICE` | Force `cpu`, `mps`, or `cuda` regardless of auto-detection. |
-| `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH` | Worker mastering overrides (48 kHz / pcm24 by default). |
+| `TIMBRE_WORKER_URL` | CLI base URL for the worker (`http://localhost:8000` by default) |
+| `TIMBRE_DEFAULT_MODEL` / `TIMBRE_DEFAULT_DURATION` | Startup defaults in the CLI |
+| `TIMBRE_ARTIFACT_DIR` | Output destination for copied artifacts |
+| `TIMBRE_INFERENCE_DEVICE` | Force `cpu`, `mps`, or `cuda` |
+| `TIMBRE_EXPORT_SAMPLE_RATE`, `TIMBRE_EXPORT_BIT_DEPTH` | Worker mastering overrides |
 
-See `worker/src/timbre_worker/app/settings.py` and `cli/src/config.rs` for the full settings surface.
+Implementation details live in `worker/src/timbre_worker/app/settings.py` and `cli/src/config.rs`.
 
----
-
-## Testing & Tooling
+## Testing
 
 ```bash
-# Combined check
-make test            # cargo test + pytest (needs inference extras for live audio)
+make test
+make lint
 
-# Lint pass
-make lint            # cargo fmt --check, cargo clippy, ruff, mypy
-
-# Targeted commands
-cargo test           # Rust unit tests
+cargo test
 uv run --project worker pytest
 uv run --project worker ruff check
 uv run --project worker mypy
 ```
 
-## Documentation Map
+## Repository Layout
 
-- `docs/architecture.md` – system topology, planner/orchestrator internals, metadata contracts.
-- `docs/COMPOSITION.md` – in-depth composition + mixing pipeline notes (planner v3).
-- `docs/setup.md` – environment prerequisites, dependency layers, optional GPU considerations.
-- `docs/testing/e2e.md` – manual validation checklist for CLI ↔ worker flows.
-- `docs/adrs/` – decision history.
-- `docs/schemas/README.md` – JSON schema guidance.
-
-Please keep Markdown files up to date when code changes (planner versions, mix behaviour, slash commands, configuration).
-
----
-
-## Contributing
-
-1. Branch off, run `make lint` + `make test` before pushing.
-2. Update documentation and schemas alongside behavioural changes.
-3. Record significant architectural shifts in a new ADR.
-4. Use conventional, scoped commit subjects (`cli:`, `worker:`) to match existing history.
-
----
-
-## License & Usage
-
-The project is private R&D. Review upstream model licences (e.g., Meta MusicGen) before distributing weights or generated assets.
-
----
-
-## iOS Client (experimental)
-
-We ship a SwiftUI client scaffold under `ios/` that mirrors the CLI flow with a glassmorphic landing screen and the bundled `alagard` display font.
-
-### Run in the Simulator
-
-```bash
-# Defaults: simulator "iPhone 15", worker at http://localhost:8000
-make ios-run
-
-# Override simulator and worker URL (e.g., when your worker runs remotely)
-IOS_SIMULATOR="iPhone 15 Pro" WORKER_URL="http://192.168.1.20:8000" make ios-run
-
-# If you see xcode-select complaining about CommandLineTools:
-sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-
-# If xcodebuild says “Supported platforms … is empty”, install an iOS runtime:
-DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer" xcodebuild -downloadPlatform iOS
-
-# Signing: simulator builds disable code signing by default. If you need signing
-# (e.g., device builds), export your team ID:
-TIMBRE_IOS_TEAM_ID=ABCDE12345 make ios-run
+```text
+cli/            Ratatui application and HTTP client
+worker/         FastAPI app, planner, orchestrator, backend adapters
+docs/           Architecture, setup, testing playbooks, ADRs
+docs/schemas/   JSON schemas synced with Rust/Python models
+ios/            Experimental SwiftUI client
 ```
 
-What it does:
-- Boots the named simulator (ignoring “already booted” errors).
-- Builds the SwiftUI app via `xcodebuild` and installs it to the simulator.
-- Launches bundle id `com.timbre.mobile`.
+## Documentation
 
-### Tests
+- `docs/architecture.md` — system topology and execution pipeline
+- `docs/COMPOSITION.md` — composition + mix pipeline details
+- `docs/setup.md` — environment and dependency setup
+- `docs/testing/e2e.md` — end-to-end validation checklist
+- `docs/adrs/` — architecture decision records
+- `docs/schemas/README.md` — schema workflow guidance
+
+## iOS Client (Experimental)
+
+A SwiftUI client scaffold ships in `ios/` and mirrors core generation flows.
 
 ```bash
+make ios-run
 make ios-test
 ```
 
-Runs the Xcode test action against the simulator destination in Debug. Add unit/snapshot tests under `ios/Tests/` as the app grows.
+Optional overrides:
+- `IOS_SIMULATOR="iPhone 15 Pro"`
+- `WORKER_URL="http://192.168.1.20:8000"`
+- `TIMBRE_IOS_TEAM_ID=ABCDE12345`
 
-### Notes for Swift/iOS newcomers
-- The app uses SwiftPM (no CocoaPods). Open `ios/TimbreMobile.xcodeproj` in Xcode if you prefer the IDE.
-- `WORKER_URL` controls the worker base URL (default `http://localhost:8000`); simulator can reach your host via this address when the worker runs locally.
-- The landing hero uses the bundled `public/fonts/alagard.ttf_` (copied to `ios/Resources/Fonts/alagard.ttf`) for display typography. Register new fonts by adding them to `ios/Resources/Fonts/` and `UIAppFonts` in `ios/Resources/Info.plist`.
+## Contributing
+
+1. Create a branch and keep changes scoped (`cli:`, `worker:`, `docs:`).
+2. Run `make lint` and `make test` before pushing.
+3. Update docs/schemas for behavior changes.
+4. Add an ADR for significant architectural decisions.
+
+## License & Usage
+
+This repository is private R&D. Confirm upstream model/license terms before redistributing weights or generated assets.
