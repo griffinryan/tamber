@@ -4,6 +4,7 @@
 # Extras
 .DS_Store
 goal.txt
+build/
 
 # Python
 __pycache__/
@@ -12,6 +13,16 @@ __pycache__/
 worker/.uv/
 uv.lock
 .python-version
+
+# iOS / Xcode
+ios/DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+**/xcuserdata/
+**/project.xcworkspace/
 
 # General
 .DS_Store

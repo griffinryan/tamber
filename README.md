@@ -141,3 +141,47 @@ Please keep Markdown files up to date when code changes (planner versions, mix b
 ## License & Usage
 
 The project is private R&D. Review upstream model licences (e.g., Meta MusicGen) before distributing weights or generated assets.
+
+---
+
+## iOS Client (experimental)
+
+We ship a SwiftUI client scaffold under `ios/` that mirrors the CLI flow with a glassmorphic landing screen and the bundled `alagard` display font.
+
+### Run in the Simulator
+
+```bash
+# Defaults: simulator "iPhone 15", worker at http://localhost:8000
+make ios-run
+
+# Override simulator and worker URL (e.g., when your worker runs remotely)
+IOS_SIMULATOR="iPhone 15 Pro" WORKER_URL="http://192.168.1.20:8000" make ios-run
+
+# If you see xcode-select complaining about CommandLineTools:
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+# If xcodebuild says “Supported platforms … is empty”, install an iOS runtime:
+DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer" xcodebuild -downloadPlatform iOS
+
+# Signing: simulator builds disable code signing by default. If you need signing
+# (e.g., device builds), export your team ID:
+TIMBRE_IOS_TEAM_ID=ABCDE12345 make ios-run
+```
+
+What it does:
+- Boots the named simulator (ignoring “already booted” errors).
+- Builds the SwiftUI app via `xcodebuild` and installs it to the simulator.
+- Launches bundle id `com.timbre.mobile`.
+
+### Tests
+
+```bash
+make ios-test
+```
+
+Runs the Xcode test action against the simulator destination in Debug. Add unit/snapshot tests under `ios/Tests/` as the app grows.
+
+### Notes for Swift/iOS newcomers
+- The app uses SwiftPM (no CocoaPods). Open `ios/TimbreMobile.xcodeproj` in Xcode if you prefer the IDE.
+- `WORKER_URL` controls the worker base URL (default `http://localhost:8000`); simulator can reach your host via this address when the worker runs locally.
+- The landing hero uses the bundled `public/fonts/alagard.ttf_` (copied to `ios/Resources/Fonts/alagard.ttf`) for display typography. Register new fonts by adding them to `ios/Resources/Fonts/` and `UIAppFonts` in `ios/Resources/Info.plist`.
