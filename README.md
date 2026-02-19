@@ -2,6 +2,8 @@
 
 Timbre is a hybrid text-to-music playground: a Ratatui (Rust) terminal client pairs with a FastAPI (Python) worker to plan, render, and stitch multi-section audio clips. The stack targets Apple Silicon for Phase 0, but the codebase is organised so additional clients and backends can slot in without rewriting the core flow.
 
+![Timbre demo](public/tamber.gif)
+
 ---
 
 ## Repository At A Glance
